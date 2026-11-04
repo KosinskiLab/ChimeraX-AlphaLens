@@ -33,11 +33,16 @@ in the same way. To remove the bundle, run `toolshed uninstall DistoPAE`.
 
     git clone https://github.com/KosinskiLab/chimerax-distopae.git
 
-Then, in the ChimeraX command line:
+Then, in the ChimeraX command line, change to the checkout first:
 
-    devel install /path/to/chimerax-distopae      # install from the checkout
-    devel build /path/to/chimerax-distopae        # or only build the wheel into dist/
-    devel clean /path/to/chimerax-distopae        # remove build files
+    cd /path/to/chimerax-distopae
+    devel install .        # install from the checkout
+    devel build .          # or only build the wheel into dist/
+    devel clean .          # remove build files
+
+ChimeraX builds a `pyproject.toml` bundle from its current directory, whatever path is given to
+`devel`: without the `cd`, `devel install` fails with "package directory 'src' does not exist"
+(seen in ChimeraX 1.10).
 
 ## Quick start
 

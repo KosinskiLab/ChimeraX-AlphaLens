@@ -44,6 +44,12 @@ if (( pickles )); then
 fi
 filters+=(--exclude='*')
 
+# --info=progress2 needs GNU rsync 3.1+; macOS ships openrsync, which only has --progress.
+progress=(--progress)
+if rsync --info=progress2 --version >/dev/null 2>&1; then
+    progress=(--info=progress2)
+fi
+
 mkdir -p "$dest/$name"
-rsync -a --info=progress2 --prune-empty-dirs "${filters[@]}" "$src/" "$dest/$name/"
+rsync -a "${progress[@]}" --prune-empty-dirs "${filters[@]}" "$src/" "$dest/$name/"
 echo "In ChimeraX:  distopae open $dest/$name"
