@@ -5,12 +5,26 @@ ChimeraX's built-in AlphaFold error plot, it shows the PAE matrix with a pLDDT t
 computed from the predicted distogram, shows which contacts are reproduced across seeds or models,
 draws the predicted contacts on the structure and exports them to CSV.
 
+<p align="center"><img src="docs/images/contacts.png" width="640"
+  alt="DistoPAE plot in the contact view, with red dots on the inter-chain contacts"></p>
+
+*The contact view for an AlphaFold2 prediction of E. coli succinyl-CoA synthetase, SucC–SucD
+(UniProt P0A836, P0AGE9). Red dots mark the inter-chain pairs with P ≥ 0.5. The ringed one was
+clicked; its values are in the line under the slider.*
+
 | View | Matrix | Colors (dark = confident) |
 |---|---|---|
 | PAE | predicted aligned error (Å) | 0–30 Å |
 | Contacts < 8 Å | P(d < 8 Å) from the distogram, or AF3 `contact_probs` if there is no distogram | √P scale, so weak contacts show |
 | Spread σ / H | standard deviation (Å) or entropy (bits) of the predicted distance distribution | 0 to the 99th percentile of the model |
 | Agreement | number of AF3 seeds or AF2 models in which the pair has P ≥ the slider threshold | 0 to the number of seeds or models |
+
+<p align="center"><img src="docs/images/views.png" width="760"
+  alt="The PAE, contact, spread and agreement views of one prediction"></p>
+
+*The four views of the same prediction. In the spread view, grey marks pairs whose distance is
+mostly beyond the last distogram bin. The agreement view counts the five AlphaFold2 models in which
+each pair has P ≥ 0.5.*
 
 ## Install
 
@@ -33,11 +47,16 @@ in the same way. To remove the bundle, run `toolshed uninstall DistoPAE`.
 
     git clone https://github.com/KosinskiLab/chimerax-distopae.git
 
-Then, in the ChimeraX command line:
+Then, in the ChimeraX command line, change to the checkout first:
 
-    devel install /path/to/chimerax-distopae      # install from the checkout
-    devel build /path/to/chimerax-distopae        # or only build the wheel into dist/
-    devel clean /path/to/chimerax-distopae        # remove build files
+    cd /path/to/chimerax-distopae
+    devel install .        # install from the checkout
+    devel build .          # or only build the wheel into dist/
+    devel clean .          # remove build files
+
+ChimeraX builds a `pyproject.toml` bundle from its current directory, whatever path is given to
+`devel`: without the `cd`, `devel install` fails with "package directory 'src' does not exist"
+(seen in ChimeraX 1.10).
 
 ## Quick start
 
@@ -123,6 +142,17 @@ reaches the slider threshold:
   otherwise the `contact_probs` of one of its samples.
 * **AlphaFold2:** one run per model (`model_1` … `model_5`, and every prediction per model). The
   result pickles must have kept the distogram (see [Getting a distogram](#getting-a-distogram)).
+
+The seeds' or models' files must be present, not only the top model's: for AF3, the
+`seed-*_sample-*` folders (or `seed-*_distogram`). `scripts/fetch_pred.sh` copies them. If they are
+missing, the tab stays grey and its tooltip says how many seeds have files.
+
+<p align="center"><img src="docs/images/agreement.png" width="640"
+  alt="Agreement view in which the inter-chain contacts appear in only one of five models"></p>
+
+*E. coli AccB–AccC (UniProt P0ABD8, P24182): no inter-chain pair reaches P ≥ 0.5 in all five
+AlphaFold2 models. The hovered pair, in the line under the slider, has P 0.94 in one model and at
+most 0.15 in the other four.*
 
 The runs are read the first time the view is shown, in the background; five AF3 seeds of a
 1,200-residue complex take a few seconds. Hovering shows the count and P in each run, for example

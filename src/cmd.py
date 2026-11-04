@@ -134,9 +134,10 @@ def save_contacts_csv(session, pae, path, min_prob, region=None):
     path = os.path.expanduser(path)
     n = write_contacts_csv(pae, path, min_prob, region=region, agreement=pae.agreement)
     agr = pae.agreement
-    extra = f', with P in each of {agr.n} {agr.kind}s' if agr is not None else ''
+    where = f' in the shown model or any of the {agr.n} {agr.kind}s' if agr is not None else ''
+    extra = f', with P in each {agr.kind}' if agr is not None else ''
     session.logger.info(f'DistoPAE {pae.structure}: saved {n} contacts with P ≥ {min_prob:g}'
-                        f'{region_text(pae, region)}{extra} to {path}')
+                        f'{where}{region_text(pae, region)}{extra} to {path}')
     return n
 
 
@@ -150,7 +151,8 @@ def _check_agreement_runs(structure):
     runs = data.agreement_runs(spath) if spath else []
     if len(runs) < 2:
         raise UserError(f'Mode "agreement" needs at least two seeds (AlphaFold3) or models '
-                        f'(AlphaFold2) of this prediction; found {len(runs)} for {structure}')
+                        f'(AlphaFold2) of this prediction; {structure}: '
+                        f'{data.agreement_shortfall(spath, runs)}')
     return runs
 
 
