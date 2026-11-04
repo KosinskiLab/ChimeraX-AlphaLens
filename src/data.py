@@ -408,6 +408,22 @@ def distogram_metrics(values, edges, are_logits=True, cutoff=8.0, chunk=32):
     return out
 
 
+def distogram_contact(values, edges, are_logits=True, cutoff=8.0, chunk=32):
+    """P(d < cutoff) only, computed as in distogram_metrics."""
+    n = values.shape[0]
+    nbelow = int(np.searchsorted(edges, cutoff, side='right'))
+    out = np.empty((n, n), np.float32)
+    for i0 in range(0, n, chunk):
+        i1 = min(n, i0 + chunk)
+        x = np.array(values[i0:i1], dtype=np.float32)
+        if are_logits:
+            x -= x.max(axis=-1, keepdims=True)
+            np.exp(x, out=x)
+        x /= x.sum(axis=-1, keepdims=True)
+        out[i0:i1] = x[..., :nbelow].sum(axis=-1)
+    return out
+
+
 def load_distogram_metrics(path, cutoff=8.0):
     values, edges, are_logits = read_distogram(path)
     m = distogram_metrics(values, edges, are_logits, cutoff=cutoff)
@@ -460,3 +476,82 @@ def prediction_models(structure_path):
             models.append({'label': f'#{k + 1}  seed {seed} sample {sample}  score {score:.3f}',
                            'path': p if os.path.exists(p) else None, 'score': score})
     return models
+
+
+# -----------------------------------------------------------------------------
+# Independent runs of a prediction (for the agreement view)
+# -----------------------------------------------------------------------------
+
+def agreement_runs(structure_path):
+    """
+    Independent runs of the prediction a structure file belongs to, best first: one per
+    AlphaFold3 seed (the samples of a seed share one distogram and the same contact_probs)
+    or one per AlphaFold2 model. Each run is a dict with 'label', 'kind' ('seed' or 'model'),
+    'source' ('distogram' or 'contact_probs') and 'path'. AlphaFold2 result pickles are
+    listed whether or not they kept the distogram; run_contact_probs() finds out.
+    """
+    path = os.path.abspath(structure_path)
+    d = os.path.dirname(path)
+    if re.match(r'seed-(-?\d+)_sample-(\d+)$', os.path.basename(d)):
+        d = os.path.dirname(d)
+    runs = []
+
+    if os.path.exists(os.path.join(d, 'ranking_debug.json')):         # AlphaFold2
+        names = _af2_ranking_order(d) or []
+        for name, label in zip(names, _af2_run_labels(names)):
+            pkl = _first_existing(os.path.join(d, f'result_{name}{s}') for s in PICKLE_SUFFIXES)
+            if pkl:
+                runs.append({'label': label, 'kind': 'model', 'source': 'distogram',
+                             'path': pkl})
+        return runs
+
+    shown = find_prediction_files(path)                                # AlphaFold3
+    m = re.match(r'seed-(-?\d+)_sample-\d+$', shown.model_name or '') if shown.kind == 'af3' else None
+    shown_seed = m.group(1) if m else None
+    done = set()
+    for seed, sample, _ in _af3_ranked_samples(d):
+        if seed in done:
+            continue
+        hits = sorted(glob.glob(os.path.join(d, f'seed-{seed}_distogram', '*.npz')))
+        if hits:
+            source, p = 'distogram', hits[0]
+        elif seed == shown_seed and shown.pae_path:
+            source, p = 'contact_probs', shown.pae_path      # Already read for the plot
+        else:
+            p = _first_existing(os.path.join(d, f'seed-{seed}_sample-{sample}', f'confidences{s}')
+                                for s in JSON_SUFFIXES)
+            if p is None:
+                continue                # Try the next sample of this seed
+            source = 'contact_probs'
+        done.add(seed)
+        runs.append({'label': f'seed {seed}', 'kind': 'seed', 'source': source, 'path': p})
+    return runs
+
+
+def _af2_run_labels(names):
+    """'model 3', or 'model 3 pred 1' when there are several predictions per model."""
+    parsed = [re.match(r'model_(\d+)(?:_[a-z]+(?:_v\d+)?)?(?:_pred_(\d+))?$', n) for n in names]
+    if not names or not all(parsed):
+        return list(names)
+    if len({p.group(2) for p in parsed}) <= 1:
+        labels = [f'model {p.group(1)}' for p in parsed]
+    else:
+        labels = [f'model {p.group(1)} pred {p.group(2) or 0}' for p in parsed]
+    return labels if len(set(labels)) == len(labels) else list(names)
+
+
+def run_contact_probs(run, cutoff=8.0):
+    """P(d < cutoff) (N x N, float32) of one run from agreement_runs()."""
+    path = run['path']
+    if run['source'] == 'distogram':
+        if path.endswith(PICKLE_SUFFIXES) and not pickle_has_distogram(path):
+            raise ValueError(f'{os.path.basename(path)} has no distogram')
+        values, edges, are_logits = read_distogram(path)
+        return distogram_contact(values, edges, are_logits, cutoff=cutoff)
+    if abs(cutoff - 8.0) > 1e-6:
+        raise ValueError('AlphaFold3 contact_probs are fixed at 8 Å; another cutoff needs '
+                         'the distogram')
+    cp = read_pae(path)[1]
+    if cp is None:
+        raise ValueError(f'{os.path.basename(path)} has no contact_probs')
+    return cp

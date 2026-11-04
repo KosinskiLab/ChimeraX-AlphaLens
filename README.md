@@ -1,14 +1,16 @@
 # ChimeraX-DistoPAE
 
 A [ChimeraX](https://www.cgl.ucsf.edu/chimerax/) plot for AlphaFold2 and AlphaFold3 predictions. Like
-ChimeraX's built-in AlphaFold error plot, it shows the PAE matrix with a pLDDT track. It adds two
-views computed from the predicted distogram, and it draws the predicted contacts on the structure.
+ChimeraX's built-in AlphaFold error plot, it shows the PAE matrix with a pLDDT track. It adds views
+computed from the predicted distogram, shows which contacts are reproduced across seeds or models,
+draws the predicted contacts on the structure and exports them to CSV.
 
 | View | Matrix | Colors (dark = confident) |
 |---|---|---|
 | PAE | predicted aligned error (Å) | 0–30 Å |
 | Contacts < 8 Å | P(d < 8 Å) from the distogram, or AF3 `contact_probs` if there is no distogram | √P scale, so weak contacts show |
 | Spread σ / H | standard deviation (Å) or entropy (bits) of the predicted distance distribution | 0 to the 99th percentile of the model |
+| Agreement | number of AF3 seeds or AF2 models in which the pair has P ≥ the slider threshold | 0 to the number of seeds or models |
 
 ## Install
 
@@ -83,8 +85,8 @@ the distogram in the background.
 * **Contact dots:** in the contact view, inter-chain pairs above the slider threshold (long-range
   pairs for a single chain) are drawn as red dots that stay visible at any zoom: light red < 0.5,
   red 0.5–0.8, dark red ≥ 0.8. Right-click to turn them off or show them in every view.
-* **Contacts P ≥ slider:** one threshold (0.05–1, default 0.2) for the dots and the 3D lines.
-  "hide in matrix too" also blanks matrix pixels below it.
+* **Contacts P ≥ slider:** one threshold (0.05–1, default 0.2) for the dots, the 3D lines, the
+  agreement view and the CSV export. "hide in matrix too" also blanks matrix pixels below it.
 * **Click a dot:** draws that contact on the structure as a thick red line, labels both residues
   and shows their side chains. The log gives P, both PAE values, the expected distance (with a
   distogram) and the CA–CA distance in the model. Clicking another dot replaces it.
@@ -102,7 +104,7 @@ the distogram in the background.
   is in the right-click menu.
 * **Right-click menu:** contact color scale (√P, linear, or bands at 0.05 / 0.2 / 0.5 / 0.8),
   spread as standard deviation or entropy, color the plot from the structure, chain divider
-  lines, pLDDT track, and Save image.
+  lines, pLDDT track, Log agreement table, and Save image.
 
 With more than one chain, the log gets an interface table per chain pair: maximum P, number of
 residue pairs with P > 0.5, and minimum PAE.
@@ -110,23 +112,67 @@ residue pairs with P > 0.5, and minimum PAE.
 The data are also attached as `structure.alphafold_pae`, so ChimeraX's own commands, such as
 `alphafold pae #1 colorDomains true` and `alphafold contacts`, work on the same model.
 
+## Agreement between seeds and models
+
+A contact predicted by one seed but not by the others is weak evidence. The **Agreement** view
+counts, for every residue pair, the independent runs of the prediction in which P(d < 8 Å)
+reaches the slider threshold:
+
+* **AlphaFold3:** one run per seed. The samples of a seed share one distogram and the same
+  `contact_probs`, so they are not independent. The seed's distogram is used if it was saved,
+  otherwise the `contact_probs` of one of its samples.
+* **AlphaFold2:** one run per model (`model_1` … `model_5`, and every prediction per model). The
+  result pickles must have kept the distogram (see [Getting a distogram](#getting-a-distogram)).
+
+The runs are read the first time the view is shown, in the background; five AF3 seeds of a
+1,200-residue complex take a few seconds. Hovering shows the count and P in each run, for example
+`2 of 5 seeds (P 0.91 0.12 0.88 0.05 0.07)`. Moving the slider recounts.
+
+With more than one chain, the log gets a table per chain pair: the mean of the 10 highest
+inter-chain P in each seed or model, and the number of seeds or models with a residue pair at
+P ≥ the threshold. Right-click > Log agreement table logs it again for the current threshold.
+The agreement data are kept when you switch to another model of the same prediction.
+
+## Export to CSV
+
+**Export CSV** saves the contacts with P ≥ the slider threshold: inter-chain pairs (long-range
+pairs for a single chain), only those inside the dragged box if there is one. With the agreement
+loaded, a pair is included if it reaches the threshold in any seed or model. One row per residue
+pair, most reproduced and most probable first:
+
+| Column | Content |
+|---|---|
+| `chain_1`, `residue_1`, `name_1`, `atom_1` (and `_2`) | the two residues; `atom` only for ligand atoms in AF3 |
+| `p_contact` | P(d < 8 Å) in the shown model |
+| `pae_1_2`, `pae_2_1` | PAE in both directions (Å) |
+| `expected_distance` | mean of the predicted distance distribution (Å; needs a distogram; capped by the last bin at 21.7 Å) |
+| `model_distance` | distance in the shown model between CA atoms (C4′ for nucleotides, the atom itself for ligands) (Å) |
+| `seeds_with_p_ge_0.20`, `seeds` | with the agreement loaded: in how many of how many seeds (or `models`) the pair reaches the threshold |
+| `p_seed_<S>` / `p_model_<N>` | P in each seed or model |
+
 ## Commands
 
-    distopae [#model] [paeFile file] [distogram file] [mode pae|contact|std|entropy]
-             [cutoff 8] [contacts true|false] [minProb 0.5]
+    distopae [#model] [paeFile file] [distogram file] [mode pae|contact|std|entropy|agreement]
+             [cutoff 8] [contacts true|false] [minProb 0.5] [saveContacts file.csv]
              [palette name] [range low,high] [dividerLines true|false] [wait true|false]
     distopae open path [rank N] [same options except paeFile]
 
 | Option | Meaning |
 |---|---|
 | `paeFile`, `distogram` | files with non-standard names; otherwise they are found next to the structure |
-| `mode` | view to show |
+| `mode` | view to show; `agreement` reads every seed or model first and logs the agreement table |
 | `cutoff` | contact distance in Å (default 8); needs a distogram, because AF3 `contact_probs` are fixed at 8 Å |
 | `contacts`, `minProb` | draw or remove the contacts with P ≥ minProb on the structure (default 0.5; also moves the slider) |
+| `saveContacts` | write the contacts to a CSV file as Export CSV does, with P ≥ minProb if given, otherwise the slider threshold (0.2 without a plot) |
 | `palette`, `range` | PAE color map, as in `alphafold pae` |
 | `dividerLines` | chain divider lines on the plot |
-| `wait` | load the distogram before the command returns, for scripts |
+| `wait` | load the distogram (and the agreement data) before the command returns, for scripts |
 | `rank` | 0 = top model; AF2 `ranked_N`, AF3 N-th best sample |
+
+For example, without a window (`ChimeraX --nogui`), this logs the agreement table and writes the
+contacts reached in any seed, with P per seed:
+
+    distopae open /path/to/prediction_dir mode agreement saveContacts ~/contacts.csv
 
 ## Recognised layouts
 
@@ -156,7 +202,19 @@ large; without them the AF2 plot shows PAE only.
 
 * The plot is not saved in ChimeraX sessions; run `distopae` again after restoring a session.
 * AF3 `contact_probs` are fixed at 8 Å; another `cutoff` needs the distogram.
-* ColabFold layouts are untested.
+* The agreement view keeps N × N values per seed or model in memory (2 bytes each) and refuses
+  more than 4 GB: five seeds work up to about 20,000 residues, twenty up to about 10,000.
+* ColabFold layouts are untested, and have no model switching or agreement view.
+
+## Development
+
+The file readers, the agreement and the CSV export are tested without ChimeraX:
+
+    pip install numpy pytest
+    pytest tests
+
+The plot window itself needs ChimeraX: build and install with `devel install`, then check it on an
+AlphaFold2 and an AlphaFold3 prediction.
 
 ## License
 

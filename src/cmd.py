@@ -1,10 +1,10 @@
 """
 Commands:
 
-  distopae open <dir-or-structure-file> [rank N] [mode pae|contact|std|entropy] [cutoff 8]
-                [contacts true|false] [minProb 0.5] ...
+  distopae open <dir-or-structure-file> [rank N] [mode pae|contact|std|entropy|agreement]
+                [cutoff 8] [contacts true|false] [minProb 0.5] [saveContacts file.csv] ...
   distopae [#model] [paeFile path] [distogram path] [mode ...] [cutoff 8] [palette ..] [range ..]
-                [contacts true|false] [minProb 0.5]
+                [contacts true|false] [minProb 0.5] [saveContacts file.csv]
 """
 
 import os
@@ -13,13 +13,15 @@ import time
 
 import numpy as np
 
-MODE_NAMES = ('pae', 'contact', 'std', 'entropy')
+from .contacts import DEFAULT_MIN_P
+
+MODE_NAMES = ('pae', 'contact', 'std', 'entropy', 'agreement')
 
 
 def distopae(session, structure=None, pae_file=None, distogram=None, mode=None, cutoff=8.0,
-             palette=None, range=None, divider_lines=None, contacts=None, min_prob=0.5,
-             wait=False):
-    '''Show PAE / contact probability / distogram spread plot for a predicted structure.'''
+             palette=None, range=None, divider_lines=None, contacts=None, min_prob=None,
+             save_contacts=None, wait=False):
+    '''Show PAE / contact probability / distogram spread / agreement plot for a predicted structure.'''
     from chimerax.core.errors import UserError
     from .pae import DistoPAE
 
@@ -31,6 +33,25 @@ def distopae(session, structure=None, pae_file=None, distogram=None, mode=None, 
         pae_colormap = colormap_with_range(palette, range, default_colormap_name='pae',
                                            full_range=(0, 30))
 
+    if mode == 'agreement':
+        _check_agreement_runs(structure)
+
+    def loaded(pae, plot):
+        '''Steps that need the contact probabilities of the shown model.'''
+        _apply_contacts(session, pae, plot, contacts, min_prob)
+
+        def finish():
+            if save_contacts is not None:
+                if min_prob is not None:
+                    t = min_prob
+                else:
+                    t = plot.threshold if plot is not None and not plot.closed() else DEFAULT_MIN_P
+                save_contacts_csv(session, pae, save_contacts, t)
+        if mode == 'agreement':
+            start_agreement(session, pae, plot, cutoff, wait=wait, show=True, on_loaded=finish)
+        else:
+            finish()
+
     # Re-show an existing plot unless new data or a new cutoff was requested.
     plot = getattr(structure, '_distopae_plot', None)
     pae = getattr(structure, 'alphafold_pae', None)
@@ -38,15 +59,20 @@ def distopae(session, structure=None, pae_file=None, distogram=None, mode=None, 
              and (pae.metrics is None or pae.metrics.get('cutoff') == cutoff)
              and (not session.ui.is_gui or (plot is not None and not plot.closed())))
     if reuse:
+        if (save_contacts is not None or mode == 'agreement') and not pae.has_contact:
+            raise UserError(f'{structure}: no contact probabilities (no distogram or AF3 '
+                            f'contact_probs, or the distogram is still loading)')
         if plot is not None and not plot.closed():
             plot.display(True)
             if pae_colormap is not None:
                 plot.set_pae_colormap(pae_colormap)
             if divider_lines is not None:
                 plot.show_chain_dividers(divider_lines)
-            if mode is not None:
+            if mode not in (None, 'agreement'):
                 plot.set_mode(mode)
-        _apply_contacts(session, pae, plot, contacts, min_prob)
+        else:
+            plot = None
+        loaded(pae, plot)
         return pae
 
     pae, dpath, contact_probs, pae_path = prepare_prediction(session, structure, pae_file,
@@ -54,11 +80,11 @@ def distopae(session, structure=None, pae_file=None, distogram=None, mode=None, 
 
     if mode in ('std', 'entropy') and dpath is None:
         raise UserError(f'Mode "{mode}" needs a distogram and none was found for {structure}')
-    if mode == 'contact' and dpath is None and not pae.has_contact:
-        raise UserError(f'Mode "contact" needs a distogram or AF3 contact_probs; '
+    if mode in ('contact', 'agreement') and dpath is None and not pae.has_contact:
+        raise UserError(f'Mode "{mode}" needs a distogram or AF3 contact_probs; '
                         f'none found for {structure}')
-    if contacts and dpath is None and not pae.has_contact:
-        raise UserError(f'"contacts true" needs a distogram or AF3 contact_probs; '
+    if (contacts or save_contacts is not None) and dpath is None and not pae.has_contact:
+        raise UserError(f'"contacts" and "saveContacts" need a distogram or AF3 contact_probs; '
                         f'none found for {structure}')
 
     plot = None
@@ -76,28 +102,161 @@ def distopae(session, structure=None, pae_file=None, distogram=None, mode=None, 
             if mode == 'contact':
                 plot.set_mode('contact')
 
-    def loaded():
-        _apply_contacts(session, pae, plot, contacts, min_prob)
-
     if dpath:
-        start_distogram(session, structure, pae, plot, dpath, cutoff, mode, wait,
-                        contact_probs, pae_path, on_loaded=loaded)
+        start_distogram(session, structure, pae, plot, dpath, cutoff,
+                        None if mode == 'agreement' else mode, wait, contact_probs, pae_path,
+                        on_loaded=lambda: loaded(pae, plot))
     else:
-        loaded()
+        loaded(pae, plot)
     return pae
 
 
 def _apply_contacts(session, pae, plot, contacts, min_prob):
     if contacts is None:
         return
+    min_p = 0.5 if min_prob is None else min_prob
     if plot is not None and not plot.closed():
-        plot.show_structure_contacts(contacts, min_prob)
+        plot.show_structure_contacts(contacts, min_p)
         return
     from . import contacts as c
     if contacts:
-        c.show_contacts(pae, min_p=min_prob)
+        c.show_contacts(pae, min_p=min_p)
     else:
         c.hide_contacts(pae.structure)
+
+
+def save_contacts_csv(session, pae, path, min_prob, region=None):
+    '''Write the contacts with P >= min_prob (in the shown model or any seed / model) to CSV.'''
+    from chimerax.core.errors import UserError
+    from .contacts import write_contacts_csv, region_text
+    if not pae.has_contact and pae.agreement is None:
+        raise UserError(f'{pae.structure} has no contact probabilities to save')
+    path = os.path.expanduser(path)
+    n = write_contacts_csv(pae, path, min_prob, region=region, agreement=pae.agreement)
+    agr = pae.agreement
+    extra = f', with P in each of {agr.n} {agr.kind}s' if agr is not None else ''
+    session.logger.info(f'DistoPAE {pae.structure}: saved {n} contacts with P ≥ {min_prob:g}'
+                        f'{region_text(pae, region)}{extra} to {path}')
+    return n
+
+
+# -----------------------------------------------------------------------------
+# Agreement between seeds / models
+#
+def _check_agreement_runs(structure):
+    from chimerax.core.errors import UserError
+    from . import data
+    spath = getattr(structure, 'filename', None)
+    runs = data.agreement_runs(spath) if spath else []
+    if len(runs) < 2:
+        raise UserError(f'Mode "agreement" needs at least two seeds (AlphaFold3) or models '
+                        f'(AlphaFold2) of this prediction; found {len(runs)} for {structure}')
+    return runs
+
+
+def start_agreement(session, pae, plot, cutoff, wait=False, show=False, on_loaded=None):
+    '''
+    Read the contact probabilities of every seed (AF3) or model (AF2) of the prediction and
+    attach them as pae.agreement, in a thread in the GUI. show: switch the plot to the
+    agreement view when done. on_loaded: called when done, also if loading failed.
+    '''
+    if pae.agreement is not None:
+        if show and plot is not None and not plot.closed():
+            plot.agreement_loaded(show=True)
+        if on_loaded is not None:
+            on_loaded()
+        return
+    if pae._agreement_pending is not None:          # Already loading
+        pae._agreement_pending.append((show, on_loaded))
+        return
+    runs = _check_agreement_runs(pae.structure)
+    known = {}
+    mt = pae.metrics
+    if mt is not None and 'contact' in mt and mt.get('path') \
+            and abs(mt.get('cutoff', 8.0) - cutoff) < 1e-6:
+        known[mt['path']] = mt['contact']
+    rows, full_size = pae._rows, pae._full_size
+    pae._agreement_pending = [(show, on_loaded)]
+    if plot is not None and not plot.closed():
+        plot.agreement_loading(len(runs), runs[0]['kind'])
+
+    def work():
+        from . import agreement
+        t0 = time.time()
+        try:
+            agr, msgs = agreement.load(runs, cutoff, full_size, rows, known)
+            err = None
+        except Exception as e:
+            agr, msgs, err = None, [], f'{type(e).__name__}: {e}'
+        return agr, msgs, err, time.time() - t0
+
+    def done(agr, msgs, err, seconds):
+        _agreement_loaded(session, pae, plot, len(runs), agr, msgs, err, seconds)
+
+    if wait or not session.ui.is_gui:
+        done(*work())
+    else:
+        def run():
+            result = work()
+            session.ui.thread_safe(done, *result)
+        threading.Thread(target=run, name='distopae-agreement', daemon=True).start()
+
+
+def _agreement_loaded(session, pae, plot, n_runs, agr, msgs, err, seconds):
+    pending = pae._agreement_pending or []
+    pae._agreement_pending = None
+    s = pae.structure
+    if s.deleted:
+        return
+    for m in msgs:
+        session.logger.warning(f'DistoPAE {s}: agreement: skipped {m}')
+    plot_open = plot is not None and not plot.closed()
+    if agr is None:
+        reason = err or f'fewer than two of the {n_runs} seeds or models have contact probabilities'
+        session.logger.warning(f'DistoPAE {s}: no agreement view: {reason}')
+        if plot_open:
+            plot.agreement_failed(reason)
+    else:
+        pae.agreement = agr
+        if plot_open:
+            cur = plot.pae
+            if cur is not pae and cur.agreement is None and cur.matrix_size == pae.matrix_size:
+                cur.agreement = agr         # Model switched while loading (same prediction)
+        log_agreement(session, pae, plot.threshold if plot_open else DEFAULT_MIN_P, seconds)
+        if plot_open:
+            plot.agreement_loaded(show=any(show for show, _ in pending))
+    for _, cb in pending:
+        if cb is not None:
+            cb()
+
+
+def log_agreement(session, pae, threshold, seconds=None):
+    '''Log the interface score of every seed / model per pair of chains as a table.'''
+    from html import escape
+    from .agreement import TOP_N
+    from .contacts import row_chain_ids
+    agr = pae.agreement
+    msg = f'DistoPAE {escape(str(pae.structure))}: agreement between {agr.n} {agr.kind}s'
+    if seconds is not None:
+        msg += f' (read in {seconds:.1f} s)'
+    scores = agr.chain_pair_scores(row_chain_ids(pae), threshold)
+    if not scores:
+        session.logger.info(msg + '.', is_html=True)
+        return
+    msg += (f'. Per pair of chains: mean of the {TOP_N} highest P(d &lt; {agr.cutoff:g} Å) '
+            f'in each {agr.kind}, and the number of {agr.kind}s with a residue pair at '
+            f'P ≥ {threshold:.2f}.')
+    th = '<th style="padding:1px 6px">'
+    td = '<td style="padding:1px 6px; text-align:right">'
+    head = ''.join(f'{th}{escape(label)}</th>' for label in agr.labels)
+    lines = [f'<table style="border-collapse:collapse"><tr>{th}Chains</th>{head}'
+             f'{th}P ≥ {threshold:.2f}</th></tr>']
+    for (a, b), (means, hits) in scores.items():
+        cells = ''.join(f'{td}{v:.2f}</td>' for v in means)
+        lines.append(f'<tr><td style="padding:1px 6px">{escape(a)}–{escape(b)}</td>{cells}'
+                     f'{td}{hits} of {agr.n}</td></tr>')
+    lines.append('</table>')
+    session.logger.info(msg + ''.join(lines), is_html=True)
 
 
 # -----------------------------------------------------------------------------
@@ -375,8 +534,8 @@ def start_tool_from_menu(session):
 #
 def register_commands(logger):
     from chimerax.core.commands import (CmdDesc, register, OpenFileNameArg, FileNameArg,
-                                        FloatArg, BoolArg, IntArg, EnumOf, ColormapArg,
-                                        ColormapRangeArg)
+                                        SaveFileNameArg, FloatArg, BoolArg, IntArg, EnumOf,
+                                        ColormapArg, ColormapRangeArg)
     from chimerax.atomic import AtomicStructureArg
     common = [('distogram', OpenFileNameArg),
               ('mode', EnumOf(MODE_NAMES)),
@@ -386,6 +545,7 @@ def register_commands(logger):
               ('divider_lines', BoolArg),
               ('contacts', BoolArg),
               ('min_prob', FloatArg),
+              ('save_contacts', SaveFileNameArg),
               ('wait', BoolArg)]
     desc = CmdDesc(optional=[('structure', AtomicStructureArg)],
                    keyword=[('pae_file', OpenFileNameArg)] + common,

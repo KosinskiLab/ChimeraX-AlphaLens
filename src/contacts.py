@@ -1,15 +1,16 @@
 """
 Predicted contacts: residue pairs with high contact probability P(d < cutoff).
 
-Used for the contact dots on the plot and for drawing contacts on the structure as
-pseudobonds. "Interesting" pairs are inter-chain pairs; for a single-chain prediction,
-long-range pairs (|i - j| >= LONG_RANGE).
+Used for the contact dots on the plot, for drawing contacts on the structure as
+pseudobonds and for the CSV export. "Interesting" pairs are inter-chain pairs; for a
+single-chain prediction, long-range pairs (|i - j| >= LONG_RANGE).
 """
 
 import numpy as np
 
 LONG_RANGE = 24
 GROUP_NAME = 'DistoPAE contacts'
+DEFAULT_MIN_P = 0.2         # Initial slider threshold; also used by "saveContacts" without a plot
 
 # Probability bands shared by the plot dots, the banded color scale and the pseudobonds.
 BAND_EDGES = (0.2, 0.5, 0.8)
@@ -45,6 +46,17 @@ def contact_pairs(pae, min_p, region=None, max_pairs=None):
     if len(cand) == 0:
         return np.zeros((0, 2), int), np.zeros(0, np.float32)
     i, j = cand[:, 0], cand[:, 1]
+    keep = _keep(chains, i, j, region)
+    i, j = i[keep], j[keep]
+    p = np.maximum(P[i, j], P[j, i])
+    order = np.argsort(-p, kind='stable')
+    if max_pairs is not None:
+        order = order[:max_pairs]
+    return np.stack([i[order], j[order]], axis=1), p[order]
+
+
+def _keep(chains, i, j, region=None):
+    '''Mask of pairs (i < j) to show: inter-chain (long-range for one chain), inside region.'''
     if len(set(chains) - {''}) > 1:
         keep = chains[i] != chains[j]
     else:
@@ -54,12 +66,15 @@ def contact_pairs(pae, min_p, region=None, max_pairs=None):
         in_r = lambda k: (k >= r1) & (k <= r2)
         in_c = lambda k: (k >= c1) & (k <= c2)
         keep &= (in_r(i) & in_c(j)) | (in_c(i) & in_r(j))
-    i, j = i[keep], j[keep]
-    p = np.maximum(P[i, j], P[j, i])
-    order = np.argsort(-p, kind='stable')
-    if max_pairs is not None:
-        order = order[:max_pairs]
-    return np.stack([i[order], j[order]], axis=1), p[order]
+    return keep
+
+
+def region_text(pae, region):
+    if region is None:
+        return ''
+    r1, r2, c1, c2 = region
+    name = pae.row_residue_or_atom_name
+    return f' between {name(r1)}–{name(r2)} and {name(c1)}–{name(c2)}'
 
 
 def filter_pairs(pairs, probs, min_p, region=None, max_pairs=None):
@@ -139,12 +154,8 @@ def show_contacts(pae, min_p=0.5, region=None, max_pairs=2000, log=True, candida
         b.radius = 0.12 + 0.25 * float(p)
         count += 1
     if log:
-        where = ''
-        if region is not None:
-            r1, r2, c1, c2 = region
-            name = pae.row_residue_or_atom_name
-            where = f' between {name(r1)}–{name(r2)} and {name(c1)}–{name(c2)}'
-        msg = f'DistoPAE {s}: showing {count} predicted contacts with P ≥ {min_p:g}{where}'
+        msg = (f'DistoPAE {s}: showing {count} predicted contacts with P ≥ {min_p:g}'
+               f'{region_text(pae, region)}')
         if len(pairs) >= max_pairs:
             msg += f' (strongest {max_pairs})'
         if count:
@@ -161,6 +172,88 @@ def hide_contacts(structure):
     pbg = structure.pseudobond_group(GROUP_NAME, create_type=None)
     if pbg is not None:
         pbg.pseudobonds.delete()
+
+
+# -----------------------------------------------------------------------------
+# Export to CSV
+# -----------------------------------------------------------------------------
+
+def export_pairs(pae, min_p, region=None, agreement=None):
+    '''
+    Pairs (k, 2), i < j, with P >= min_p in the shown model or, with agreement, in any seed
+    or model; inter-chain (long-range for one chain), inside region. Sorted by the number
+    of seeds / models with P >= min_p, then by P in the shown model.
+    '''
+    P = pae.metrics['contact'] if pae.has_contact else None
+    n = pae.pae_matrix.shape[0]
+    mask = np.zeros((n, n), bool)
+    if P is not None:
+        mask |= np.maximum(P, P.T) >= min_p
+    counts = agreement.counts(min_p) if agreement is not None else None
+    if counts is not None:
+        mask |= counts > 0
+    cand = np.argwhere(np.triu(mask, 1))
+    if len(cand) == 0:
+        return np.zeros((0, 2), int)
+    i, j = cand[:, 0], cand[:, 1]
+    keep = _keep(row_chain_ids(pae), i, j, region)
+    i, j = i[keep], j[keep]
+    p = np.maximum(P[i, j], P[j, i]) if P is not None else np.zeros(len(i))
+    c = counts[i, j] if counts is not None else np.zeros(len(i))
+    order = np.lexsort((-p, -c))
+    return np.stack([i[order], j[order]], axis=1)
+
+
+def _row_fields(ra):
+    '''chain, residue number, residue name, atom name (atoms of ligands only).'''
+    from chimerax.atomic import Residue
+    if ra is None:
+        return ['', '', '', '']
+    r = ra if isinstance(ra, Residue) else ra.residue
+    return [r.chain_id, f'{r.number}{r.insertion_code}', r.name,
+            '' if isinstance(ra, Residue) else ra.name]
+
+
+def contact_rows(pae, pairs, min_p, agreement=None):
+    '''Header and rows of the contact table for export_pairs() output.'''
+    mt = pae.metrics or {}
+    P, mean = mt.get('contact'), mt.get('mean')
+    pm = pae.pae_matrix
+    rra = pae.row_residues_or_atoms()
+    header = ['chain_1', 'residue_1', 'name_1', 'atom_1', 'chain_2', 'residue_2', 'name_2',
+              'atom_2', 'p_contact', 'pae_1_2', 'pae_2_1', 'expected_distance', 'model_distance']
+    if agreement is not None:
+        counts = agreement.counts(min_p)
+        kind = agreement.kind
+        header += [f'{kind}s_with_p_ge_{min_p:.2f}', f'{kind}s']
+        header += ['p_' + label.replace(' ', '_') for label in agreement.labels]
+    f2 = lambda x: f'{float(x):.2f}'
+    f3 = lambda x: f'{float(x):.3f}'
+    rows = []
+    for i, j in pairs:
+        row = _row_fields(rra[i]) + _row_fields(rra[j])
+        row.append(f3(max(P[i, j], P[j, i])) if P is not None else '')
+        row += [f2(pm[i, j]), f2(pm[j, i])]
+        row.append(f2(mean[i, j]) if mean is not None else '')
+        a1, a2 = representative_atom(rra[i]), representative_atom(rra[j])
+        row.append(f2(np.linalg.norm(np.asarray(a1.coord) - np.asarray(a2.coord)))
+                   if a1 is not None and a2 is not None else '')
+        if agreement is not None:
+            row += [int(counts[i, j]), agreement.n] + [f3(v) for v in agreement.pair_values(i, j)]
+        rows.append(row)
+    return header, rows
+
+
+def write_contacts_csv(pae, path, min_p, region=None, agreement=None):
+    '''Write the contacts with P >= min_p to a CSV file. Returns the number of contacts.'''
+    import csv
+    pairs = export_pairs(pae, min_p, region=region, agreement=agreement)
+    header, rows = contact_rows(pae, pairs, min_p, agreement=agreement)
+    with open(path, 'w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        w.writerows(rows)
+    return len(rows)
 
 
 # -----------------------------------------------------------------------------

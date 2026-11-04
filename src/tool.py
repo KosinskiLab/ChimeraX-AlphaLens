@@ -1,9 +1,10 @@
 """
-DistoPAE plot panel: PAE matrix with a pLDDT track, plus contact-probability and
-distogram-spread views reachable with the arrow buttons / tabs when the data exist.
+DistoPAE plot panel: PAE matrix with a pLDDT track, plus contact-probability,
+distogram-spread and seed / model agreement views reachable with the arrow buttons / tabs
+when the data exist.
 
-All three views use the AlphaFold-DB green ramp (dark green = confident: low PAE,
-high contact probability, sharp distance distribution).
+All views use the AlphaFold-DB green ramp (dark green = confident: low PAE, high contact
+probability, sharp distance distribution, contact in many seeds or models).
 
 Interaction: scroll wheel / pinch zooms at the cursor, Shift-drag or middle-drag pans,
 "Fit" resets. When zoomed into a large matrix the
@@ -16,7 +17,7 @@ import numpy as np
 from chimerax.core.tools import ToolInstance
 from chimerax.alphafold.pae import PAEView, pae_pixmap
 
-from .contacts import BAND_EDGES, BAND_RGB
+from .contacts import BAND_EDGES, BAND_RGB, DEFAULT_MIN_P
 
 # pLDDT colors used by AlphaFold / the "alphafold" palette.
 PLDDT_BINS = ((90, (0, 83, 214)), (70, (101, 203, 243)), (50, (255, 219, 19)),
@@ -75,6 +76,8 @@ def make_modes(cutoff=8.0):
                     'Å', '%.2f', 'mean', False),
         'entropy': Mode('entropy', 'Spread H', 'Distogram spread (entropy of distance bins)',
                         'bits', '%.2f', 'mean', False),
+        'agreement': Mode('agreement', 'Agreement', 'Agreement between seeds or models',
+                          '', '%.0f', 'max', True),
     }
 
 
@@ -452,12 +455,15 @@ class DistoPAEPlot(ToolInstance):
         self._pae = pae                     # DistoPAE instance
         self.cutoff = cutoff
         self._modes = make_modes(cutoff)
-        self._mode_cycle = ['pae', 'contact', 'spread']
+        self._mode_cycle = ['pae', 'contact', 'spread', 'agreement']
         self._mode = 'pae'
         self._spread_measure = 'std'
         self._contact_scale = 'sqrt'        # 'sqrt', 'linear' or 'banded'
         self._far_threshold = 0.5           # Grey out spread where P(d > last bin edge) exceeds this
-        self._threshold = 0.2               # Contacts (dots, 3D links) shown for P >= this
+        self._threshold = DEFAULT_MIN_P     # Contacts (dots, 3D links, agreement) for P >= this
+        self._agreement_runs = []           # Seeds / models of the prediction (data.agreement_runs)
+        self._agreement_status = None       # Message while their contact probabilities load
+        self._agreement_error = None        # Why the agreement view could not be made
         self._dots_on = True
         self._dots_all_views = False
         self._mask_matrix = False           # Also blank matrix pixels below the threshold
@@ -608,6 +614,9 @@ class DistoPAEPlot(ToolInstance):
         b = QPushButton('Save Image', bw)
         b.clicked.connect(self._save_image)
         bl.addWidget(b)
+        self._export_button = eb = QPushButton('Export CSV', bw)
+        eb.clicked.connect(self._export_csv)
+        bl.addWidget(eb)
         bl.addStretch(1)
         layout.addWidget(bw)
 
@@ -645,6 +654,8 @@ class DistoPAEPlot(ToolInstance):
         self._detach_structure()
         from . import contacts
         contacts.clear_picked_contact(self._pae.structure)
+        if same_size and pae.agreement is None:
+            pae.agreement = self._pae.agreement     # Seeds / models are shared by all models
         self._pae = pae
         self._attach_structure()
         self._pair_cache = None
@@ -684,6 +695,10 @@ class DistoPAEPlot(ToolInstance):
             self._models = data.prediction_models(path) if path else []
         except Exception:
             self._models = []
+        try:
+            self._agreement_runs = data.agreement_runs(path) if path else []
+        except Exception:
+            self._agreement_runs = []
         import os
         cur = os.path.realpath(path) if path else None
         current = -1
@@ -729,12 +744,19 @@ class DistoPAEPlot(ToolInstance):
     @property
     def _view_mode(self):
         '''Requested view if its data are available, else PAE (choice is remembered).'''
-        return self._mode if self._mode in self.available_modes() else 'pae'
+        m = self._mode
+        if m not in self.available_modes() or (m == 'agreement' and self._pae.agreement is None):
+            return 'pae'
+        return m
 
     @property
     def mode(self):
         m = self._view_mode
         return self._modes[self._spread_measure if m == 'spread' else m]
+
+    @property
+    def threshold(self):
+        return self._threshold
 
     def available_modes(self):
         pae = self._pae
@@ -743,6 +765,9 @@ class DistoPAEPlot(ToolInstance):
             modes.append('contact')
         if pae.has_distogram:
             modes.append('spread')
+        if pae.agreement is not None or (pae.has_contact and len(self._agreement_runs) >= 2
+                                         and self._agreement_error is None):
+            modes.append('agreement')       # Loaded when first shown
         return modes
 
     def step_mode(self, step):
@@ -750,7 +775,13 @@ class DistoPAEPlot(ToolInstance):
         if len(modes) < 2:
             return
         i = modes.index(self._view_mode)
-        self._mode = modes[(i + step) % len(modes)]
+        m = modes[(i + step) % len(modes)]
+        if m == 'agreement' and self._pae.agreement is None:
+            if self._agreement_status is None:
+                self._load_agreement()      # Shown when loaded
+                return
+            m = modes[(i + 2 * step) % len(modes)]      # Still loading: skip it
+        self._mode = m
         self._redraw(keep_zoom=True)
 
     def set_mode(self, name):
@@ -759,10 +790,74 @@ class DistoPAEPlot(ToolInstance):
             name = 'spread'
         if name not in self.available_modes():
             from chimerax.core.errors import UserError
-            need = 'a distogram' if name == 'spread' else 'a distogram or AF3 contact_probs'
-            raise UserError(f'View "{name}" needs {need}; {self._pae.structure}: {self._data_status}')
+            need = {'spread': 'a distogram',
+                    'agreement': 'contact probabilities for at least two seeds or models'
+                    }.get(name, 'a distogram or AF3 contact_probs')
+            why = self._agreement_error if name == 'agreement' and self._agreement_error \
+                else self._data_status
+            raise UserError(f'View "{name}" needs {need}; {self._pae.structure}: {why}')
+        if name == 'agreement' and self._pae.agreement is None:
+            self._load_agreement()
+            for key, b in self._tabs.items():   # Keep the shown view's tab checked meanwhile
+                b.setChecked(key == self._view_mode)
+            return
         self._mode = name
         self._redraw(keep_zoom=True)
+
+    # ---------------------------------------------------------------------------
+    # Agreement between seeds / models
+    #
+    def _load_agreement(self):
+        if self._agreement_status is not None:
+            return                          # Already loading
+        from .cmd import start_agreement
+        try:
+            start_agreement(self.session, self._pae, self, self.cutoff, show=True)
+        except Exception as e:
+            self.agreement_failed(str(e))
+
+    def agreement_loading(self, n, kind):
+        self._agreement_status = f'Loading the contact probabilities of {n} {kind}s ...'
+        self._info.setText(self._agreement_status)
+        self._update_controls()
+
+    def agreement_loaded(self, show=False):
+        self._agreement_status = None
+        self._info.setText('')
+        if show:
+            self._mode = 'agreement'
+        self._update_controls()
+        self._redraw(keep_zoom=True)
+
+    def agreement_failed(self, reason):
+        self._agreement_status = None
+        self._agreement_error = reason
+        self._info.setText(f'No agreement view: {reason}')
+        self._update_controls()
+
+    def _agreement_tooltip(self, enabled):
+        if self._agreement_status is not None:
+            return self._agreement_status
+        agr = self._pae.agreement
+        if agr is not None:
+            return (f'Number of {agr.kind}s (of {agr.n}) in which each residue pair has '
+                    f'P ≥ the slider threshold')
+        if enabled:
+            runs = self._agreement_runs
+            return (f'Number of {runs[0]["kind"]}s (of {len(runs)}) in which each residue pair '
+                    f'has P ≥ the slider threshold; read when first shown')
+        if self._agreement_error:
+            why = self._agreement_error
+        elif not self._pae.has_contact:
+            why = 'the shown model has no contact probabilities'
+        else:
+            why = f'found {len(self._agreement_runs)}'
+        return ('Needs contact probabilities for at least two seeds (AlphaFold3) or two models '
+                f'with distograms (AlphaFold2); {why}')
+
+    def _log_agreement(self):
+        from .cmd import log_agreement
+        log_agreement(self.session, self._pae, self._threshold)
 
     def set_spread_measure(self, measure):
         self._spread_measure = measure
@@ -843,8 +938,22 @@ class DistoPAEPlot(ToolInstance):
                    'spread': 'Needs a distogram'}
         for key, b in self._tabs.items():
             enabled = key in avail
+            if key == 'agreement':
+                b.setToolTip(self._agreement_tooltip(enabled))
+                enabled = enabled and self._agreement_status is None
+            else:
+                b.setToolTip('' if enabled else f'{reasons.get(key, "")} ({self._data_status})')
             b.setEnabled(enabled)
-            b.setToolTip('' if enabled else f'{reasons.get(key, "")} ({self._data_status})')
+        eb = self._export_button
+        eb.setEnabled(self._pae.has_contact)
+        if self._pae.has_contact:
+            agr = self._pae.agreement
+            where = ' inside the dragged box' if self._struct_region is not None else ''
+            per_run = f', with P in each of the {agr.n} {agr.kind}s' if agr is not None else ''
+            eb.setToolTip(f'Save the contacts with P ≥ {self._threshold:.2f}{where} to a CSV file: '
+                          f'residues, P, PAE, expected and model distances{per_run}')
+        else:
+            eb.setToolTip('Needs contact probabilities')
         cb = self._contacts_button
         cb.setEnabled(self._pae.has_contact)
         cb.setChecked(self._struct_contacts and self._pae.has_contact)
@@ -874,6 +983,10 @@ class DistoPAEPlot(ToolInstance):
             if self._contact_scale == 'sqrt':
                 return cmap, np.sqrt(np.clip(m, 0, 1)), (0, 1, 0.5, None)
             return cmap, m, (0, 1, None, None)
+        if mode.key == 'agreement':
+            n = self._pae.agreement.n
+            ticks = np.arange(n + 1) if n <= 10 else np.unique(np.round(np.linspace(0, n, 6)))
+            return green_colormap(0, n, dark_at_high=True), m, (0, n, None, ticks)
         # Spread: range normalized to this prediction (99th percentile of defined pairs)
         far = self._far_mask()
         defined = m[~far] if far is not None else m
@@ -893,10 +1006,15 @@ class DistoPAEPlot(ToolInstance):
             rgb[g] = UNDEFINED_GRAY
         return rgb
 
+    def _matrix(self, key):
+        if key == 'agreement':
+            return self._pae.agreement.counts(self._threshold)
+        return self._pae.matrix(key)
+
     def _redraw(self, keep_zoom=False):
         vm = self._view_mode
         mode = self.mode
-        m = self._pae.matrix(mode.key)
+        m = self._matrix(mode.key)
         n = m.shape[0]
         f = max(1, -(-n // MAX_DISPLAY))
         cmap, vals, cbar = self._colormap_and_values(mode, m)
@@ -934,7 +1052,12 @@ class DistoPAEPlot(ToolInstance):
             edge = self._pae.metrics.get('far_edge', 21.7)
             src = (f' <span style="color:gray">grey: P(d &gt; {edge:.1f} Å) &gt; '
                    f'{self._far_threshold:g}, spread undefined</span>')
-        self._heading.setText(f'<html><b>{escape(mode.title)}</b>{src}{pool}<br>'
+        title = mode.title
+        if vm == 'agreement':
+            agr = self._pae.agreement
+            title = (f'Agreement: {agr.kind}s (of {agr.n}) with P(d < {agr.cutoff:g} Å) ≥ '
+                     f'{self._threshold:.2f}')
+        self._heading.setText(f'<html><b>{escape(title)}</b>{src}{pool}<br>'
                               f'{escape(str(self._pae.structure))} · {n} residues. '
                               f'Drag a box to color residues.{nav}</html>')
         for key, b in self._tabs.items():
@@ -1099,7 +1222,7 @@ class DistoPAEPlot(ToolInstance):
         p.drawRect(QRectF(x0, 2, w, gh))
         if band_ticks is not None:
             ticks = np.array(band_ticks)
-            pos = ticks
+            pos = (ticks - lo) / (hi - lo if hi > lo else 1)
         elif gamma is None:
             ticks = np.linspace(lo, hi, 4 if mode.key != 'pae' else 7)
             pos = (ticks - lo) / (hi - lo if hi > lo else 1)
@@ -1115,6 +1238,8 @@ class DistoPAEPlot(ToolInstance):
         unit = mode.unit
         if mode.key == 'contact':
             unit = {'sqrt': 'P (√ scale)', 'linear': 'P', 'banded': 'P (bands)'}[self._contact_scale]
+        elif mode.key == 'agreement':
+            unit = f'{self._pae.agreement.kind}s'
         p.drawText(x1 + 8, 2 + gh, unit)
         sx = x1 + 8 + fm.horizontalAdvance(unit) + 14
         if self._view_mode == 'spread' and self._far_mask() is not None:
@@ -1222,6 +1347,12 @@ class DistoPAEPlot(ToolInstance):
                 else:
                     vals.append(f'{sp.tab.split()[-1]} {sp.fmt % mt[sp.key][y, x]} {sp.unit}')
                 vals += [f'P(d>{mt["far_edge"]:.1f}Å) {pfar:.2f}', f'E[d] {mt["mean"][y, x]:.1f} Å']
+            agr = pae.agreement
+            if agr is not None:
+                k = int(agr.counts(self._threshold)[y, x])
+                vals.append(f'{k} of {agr.n} {agr.kind}s')
+                if self._view_mode == 'agreement':
+                    vals[-1] += ' (P ' + ' '.join(f'{v:.2f}' for v in agr.pair_values(y, x)) + ')'
             msg = f'{rname} ↔ {cname}:  ' + ',  '.join(vals)
         elif self._track_offset is not None and y >= self._track_offset and 0 <= x < n:
             msg = f'{pae.row_residue_or_atom_name(x)}:  pLDDT {self._plddt[x]:.1f}'
@@ -1352,6 +1483,9 @@ class DistoPAEPlot(ToolInstance):
             for t in (0.2, 0.5, 0.8, 1.0):
                 toggle(f'{t:g}' if t < 1 else 'never', self._far_threshold == t,
                        lambda checked, t=t: self.set_far_threshold(t), sub)
+        if self._pae.agreement is not None:
+            menu.addSeparator()
+            menu.addAction('Log agreement table', self._log_agreement)
         menu.addSeparator()
         menu.addAction('Save image', self._save_image)
 
@@ -1371,6 +1505,23 @@ class DistoPAEPlot(ToolInstance):
 
     def save_image(self, path):
         self.tool_window.ui_area.grab().save(path)
+
+    def _export_csv(self):
+        import os
+        import re
+        name = re.sub(r'[^\w.+-]+', '_', self._pae.structure.name).strip('_') or 'distopae'
+        suggested = os.path.join(os.getcwd(), f'{name}_contacts.csv')
+        from Qt.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getSaveFileName(self.tool_window.ui_area, 'Save contacts as CSV',
+                                              suggested, 'CSV files (*.csv)')
+        if path:
+            self.save_contacts_csv(path)
+
+    def save_contacts_csv(self, path):
+        '''Contacts with P >= the slider threshold, inside the dragged box if there is one.'''
+        from .cmd import save_contacts_csv
+        return save_contacts_csv(self.session, self._pae, path, self._threshold,
+                                 region=self._struct_region)
 
     # ---------------------------------------------------------------------------
     #
