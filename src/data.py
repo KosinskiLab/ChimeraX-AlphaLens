@@ -528,6 +528,22 @@ def agreement_runs(structure_path):
     return runs
 
 
+def agreement_shortfall(structure_path, runs):
+    """Why agreement_runs() found fewer than two runs, for messages."""
+    n = len(runs)
+    if structure_path:
+        d = os.path.dirname(os.path.abspath(structure_path))
+        if re.match(r'seed-(-?\d+)_sample-(\d+)$', os.path.basename(d)):
+            d = os.path.dirname(d)
+        seeds = {r[0] for r in _af3_ranked_samples(d)}
+        if len(seeds) > n:
+            return (f'{n} of the {len(seeds)} seeds have files here; copy the seed-*_sample-* '
+                    f'folders too (scripts/fetch_pred.sh does)')
+        if len(seeds) == 1:
+            return 'the prediction has one seed'
+    return f'found {n}'
+
+
 def _af2_run_labels(names):
     """'model 3', or 'model 3 pred 1' when there are several predictions per model."""
     parsed = [re.match(r'model_(\d+)(?:_[a-z]+(?:_v\d+)?)?(?:_pred_(\d+))?$', n) for n in names]

@@ -89,6 +89,18 @@ def test_af3_runs_one_per_seed_best_first(tmp_path):
     assert runs[0]['path'] == str(d / 'seed-9_sample-0' / 'confidences.json')
 
 
+def test_shortfall_names_missing_seed_folders(tmp_path):
+    import shutil
+    d = make_af3(tmp_path, {1: (0.9, contact_matrix(0.9)), 2: (0.5, contact_matrix(0.3)),
+                            3: (0.1, contact_matrix(0.1))})
+    for sd in d.glob('seed-*_sample-*'):        # Only the top model copied
+        shutil.rmtree(sd)
+    runs = data.agreement_runs(str(d / 'job_model.cif'))
+    assert len(runs) == 1
+    msg = data.agreement_shortfall(str(d / 'job_model.cif'), runs)
+    assert msg.startswith('1 of the 3 seeds have files here') and 'seed-*_sample-*' in msg
+
+
 def test_agreement_counts_and_chain_scores(tmp_path):
     d = make_af3(tmp_path, {1: (0.9, contact_matrix(0.9, 0.6)), 2: (0.5, contact_matrix(0.3)),
                             3: (0.1, contact_matrix(0.1))})

@@ -846,12 +846,20 @@ class DistoPAEPlot(ToolInstance):
             runs = self._agreement_runs
             return (f'Number of {runs[0]["kind"]}s (of {len(runs)}) in which each residue pair '
                     f'has P ≥ the slider threshold; read when first shown')
+        runs = self._agreement_runs
         if self._agreement_error:
             why = self._agreement_error
         elif not self._pae.has_contact:
-            why = 'the shown model has no contact probabilities'
+            if self._data_status.startswith('Loading'):
+                why = 'the distogram is still loading'
+            elif runs and runs[0]['kind'] == 'model':
+                why = ('the result pickles have no distogram (AlphaPulldown removes it unless '
+                       'run with --noremove_keys_from_pickles)')
+            else:
+                why = 'the shown model has no contact probabilities'
         else:
-            why = f'found {len(self._agreement_runs)}'
+            from .data import agreement_shortfall
+            why = agreement_shortfall(getattr(self._pae.structure, 'filename', None), runs)
         return ('Needs contact probabilities for at least two seeds (AlphaFold3) or two models '
                 f'with distograms (AlphaFold2); {why}')
 
@@ -1224,7 +1232,11 @@ class DistoPAEPlot(ToolInstance):
             ticks = np.array(band_ticks)
             pos = (ticks - lo) / (hi - lo if hi > lo else 1)
         elif gamma is None:
-            ticks = np.linspace(lo, hi, 4 if mode.key != 'pae' else 7)
+            if mode.key == 'pae':
+                ticks = np.linspace(lo, hi, 7)
+            else:       # Spread: round steps, not thirds of the range
+                step = next((s for s in (0.5, 1, 2, 5, 10) if (hi - lo) / s <= 5), (hi - lo) / 4)
+                ticks = np.arange(lo, hi + 1e-9, step)
             pos = (ticks - lo) / (hi - lo if hi > lo else 1)
         else:
             ticks = np.array([0, 0.05, 0.25, 0.5, 1.0])
