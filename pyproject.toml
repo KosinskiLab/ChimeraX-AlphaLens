@@ -1,0 +1,40 @@
+[build-system]
+requires = ["ChimeraX-BundleBuilder>=1.4.0", "ChimeraX-Core~=1.6"]
+build-backend = "chimerax.bundle_builder.cx_pep517"
+
+[project]
+name = "ChimeraX-DistoPAE"
+version = "0.4.0"
+license = { text = "MIT" }
+authors = [{ name = "Dmitry Molodenskiy" }]
+description = "AlphaFold PAE / pLDDT plot with distogram contact-probability and distogram-spread views"
+dependencies = ["ChimeraX-Core~=1.6", "ChimeraX-AlphaFold~=1.0"]
+dynamic = ["classifiers", "requires-python"]
+
+[project.readme]
+content-type = "text"
+text = """Interactive plot for AlphaFold2 / AlphaFold3 predictions. Shows the predicted aligned
+error (PAE) matrix with a per-residue pLDDT track, and - when the prediction's distogram is
+available - lets you step with arrow buttons to the contact probability P(d < 8 A) matrix and to
+a matrix of how spread each pairwise distance distribution is."""
+
+[project.urls]
+Home = "https://github.com/KosinskiLab/chimerax-distopae"
+
+[tool.chimerax]
+min-session-version = 1
+max-session-version = 1
+categories = ["Structure Prediction"]
+classifiers = ["Development Status :: 3 - Alpha"]
+
+[tool.chimerax.tool."DistoPAE Plot"]
+category = "Structure Prediction"
+description = "PAE, contact probability and distogram spread plots for AlphaFold predictions"
+
+[tool.chimerax.command.distopae]
+category = "Structure Prediction"
+description = "Show PAE / contact probability / distogram spread plot for a predicted structure"
+
+[tool.chimerax.command."distopae open"]
+category = "Structure Prediction"
+description = "Open an AlphaFold2 or AlphaFold3 prediction directory and show the DistoPAE plot"
