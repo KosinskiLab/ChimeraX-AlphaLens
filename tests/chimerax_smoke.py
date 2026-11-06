@@ -101,6 +101,10 @@ def main(session):
         assert len(rows) == 4 and rows[0]['seeds'] == '2'
         assert rows[0]['p_seed_1'] == '0.900' and rows[0]['p_seed_2'] == '0.100'
 
+        # The Model distances view by its new and its former name
+        for name in ('distance', 'model'):
+            run(session, f'alphalens open {quote(str(af3))} mode {name} wait true')
+
         # Seed 2 must use its own contact_probs, not seed 1's distogram.
         out = d / 'seed2.csv'
         run(session, f'alphalens open {quote(str(af3 / "seed-2_sample-0" / "model.cif"))} '

@@ -46,6 +46,7 @@ class AlphaLensPAE(AlphaFoldPAE):
         self._agreement_load = None     # Waitable background reads (results applied on UI thread)
         self._distogram_load = None
         self._model_contacts = None     # Cache of contacts.model_contacts()
+        self._model_distances = None    # Cache of contacts.model_distances()
 
     # ---------------------------------------------------------------------------
     #

@@ -49,6 +49,32 @@ def test_contact_mask():
     assert m[0, 0] and not m[3, 3]
 
 
+def test_distance_matrix_matches_contact_mask():
+    xyz = np.array([[0, 0, 0], [5, 0, 0], [20, 0, 0], [np.nan] * 3, [7.9, 0, 0]], np.float32)
+    d = contacts.distance_matrix(xyz, chunk=2)
+    assert d.dtype == np.float32 and d.shape == (5, 5)
+    assert np.isclose(d[0, 2], 20) and np.isclose(d[1, 4], 2.9) and d[0, 0] == 0
+    assert np.isnan(d[3]).all() and np.isnan(d[:, 3]).all()
+    with np.errstate(invalid='ignore'):
+        assert ((d < 8.0) == contacts.contact_mask(xyz, 8.0)).all()
+
+
+def test_distance_view_values():
+    far = contacts.DISTANCE_FAR
+    d = np.array([[0.0, 5.0, 8.0], [24.0, far, 100.0], [np.nan, 7.99, 3.0]], np.float32)
+    p = np.array([[1.0, 0.0, 0.9], [0.5, 0.5, 0.5], [0.5, 0.4, 0.7]], np.float32)
+    v = contacts.distance_view_values(d, 8.0, p, floor=0.1)
+    assert v.dtype == np.float32
+    # Contacts (d < 8): their P, at least the floor, so none disappears
+    assert v[0, 0] == 1.0 and np.isclose(v[0, 1], 0.1) and np.isclose(v[2, 1], 0.4)
+    # Farther pairs: -1 at the cutoff (dark grey) to -2 at far and beyond (white)
+    assert v[0, 2] == -1.0 and np.isclose(v[1, 0], -1.5) and v[1, 1] == -2.0 and v[1, 2] == -2.0
+    assert v[2, 0] == -2.0                                  # No coordinates: white
+    # Max-pooling keeps a contact over any distance, and the closest of the farther pairs
+    assert (v[d < 8] >= 0).all() and (v[~(d < 8)] <= -1).all()
+    assert contacts.distance_view_values(d, 8.0)[0, 1] == 1.0   # Without P: one color
+
+
 def test_plddt_palette_bands():
     pae = _pae_module()
     pal = pae.plddt_palette()

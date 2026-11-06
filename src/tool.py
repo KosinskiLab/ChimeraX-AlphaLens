@@ -1,5 +1,5 @@
 """
-AlphaLens plot panel: PAE matrix with a pLDDT track, plus contact-probability, model-contact,
+AlphaLens plot panel: PAE matrix with a pLDDT track, plus contact-probability, model-distance,
 distogram-spread and seed / model agreement views reachable with the arrow buttons / tabs
 when the data exist.
 
@@ -18,7 +18,7 @@ import numpy as np
 from chimerax.core.tools import ToolInstance
 from chimerax.alphafold.pae import PAEView, pae_pixmap
 
-from .contacts import BAND_EDGES, DEFAULT_MIN_P, PICK_RGB, contact_rgb
+from .contacts import BAND_EDGES, DEFAULT_MIN_P, DISTANCE_FAR, PICK_RGB, contact_rgb
 
 # pLDDT colors used by AlphaFold / the "alphafold" palette.
 PLDDT_BINS = ((90, (0, 83, 214)), (70, (101, 203, 243)), (50, (255, 219, 19)),
@@ -31,6 +31,7 @@ MAX_DOTS = 40000
 DOT_LEVELS = 20            # Color steps of the contact dots
 SLIDER_MIN = 0.05          # Lowest contact threshold offered by the slider
 UNDEFINED_GRAY = (190, 190, 190)   # Spread view: pairs whose distance is mostly in the last bin
+DISTANCE_NEAR_GREY = 0.42          # Model distances view: grey at the contact cutoff (white at far)
 
 
 def green_colormap(lo, hi, dark_at_high=False):
@@ -44,6 +45,19 @@ def green_colormap(lo, hi, dark_at_high=False):
 
 
 CONTACT_BAND_EDGES = (0.0, 0.05) + BAND_EDGES + (1.0,)
+
+
+def distance_colormap(contact_cmap):
+    '''
+    Colormap of the Model distances view (values from contacts.distance_view_values): grey
+    from -2 (white, far) to -1 (dark, just beyond the cutoff), then contact_cmap from 0 to 1.
+    '''
+    from chimerax.core.colors import Colormap
+    g = DISTANCE_NEAR_GREY
+    vals = [-2.0, -1.0] + [float(v) for v in contact_cmap.data_values]
+    cols = [(1.0, 1.0, 1.0, 1.0), (g, g, g, 1.0)] + [tuple(float(x) for x in c)
+                                                    for c in contact_cmap.colors]
+    return Colormap(vals, cols)
 
 
 def banded_contact_colormap():
@@ -74,9 +88,9 @@ def make_modes(cutoff=8.0):
         'pae': Mode('pae', 'PAE', 'Predicted aligned error', 'Å', '%.1f', 'mean', False),
         'contact': Mode('contact', 'Contact probability',
                         f'Predicted contact probability P(d < {c} Å)', '', '%.2f', 'max', True),
-        'model': Mode('model', 'Model contacts',
-                      f'Model contacts (CB–CB < {c} Å) colored by predicted P',
-                      '', '%.2f', 'max', True),
+        'model': Mode('model', 'Model distances',
+                      f'Model distances (CB–CB); pairs closer than {c} Å colored by predicted P',
+                      'Å', '%.1f', 'max', True),
         'std': Mode('std', 'Spread σ', 'Distogram spread (standard deviation of distance)',
                     'Å', '%.2f', 'mean', False),
         'entropy': Mode('entropy', 'Spread H', 'Distogram spread (entropy of distance bins)',
@@ -521,7 +535,7 @@ class AlphaLensPlot(ToolInstance):
         ml.addWidget(mc, stretch=1)
         layout.addWidget(mw)
 
-        # Mode switcher:  [<] [PAE][Contact probability][Model contacts][Spread][Agreement] [>]  [Fit]
+        # Mode switcher:  [<] [PAE][Contact probability][Model distances][Spread][Agreement] [>]  [Fit]
         sw = QWidget(parent)
         sl = QHBoxLayout(sw)
         sl.setContentsMargins(0, 0, 0, 0)
@@ -769,7 +783,7 @@ class AlphaLensPlot(ToolInstance):
         modes = ['pae']
         if pae.has_contact:
             modes.append('contact')
-        modes.append('model')               # Colored by P when there is one, else plain
+        modes.append('model')               # Contacts colored by P when there is one
         if pae.has_distogram:
             modes.append('spread')
         if pae.agreement is not None or (pae.has_contact and len(self._agreement_runs) >= 2
@@ -956,9 +970,10 @@ class AlphaLensPlot(ToolInstance):
             'pae': 'Predicted aligned error',
             'contact': f'Contact probability predicted by AlphaFold, P(d < {c} Å), from the '
                        'distogram or AF3 contact_probs; dots mark the pairs above the slider',
-            'model': f'Residue pairs closer than {c} Å in the shown model (CB–CB, CA for glycine), '
-                     'colored by the predicted contact probability'
-                     + ('' if self._pae.has_contact else ' (none here: uniform grey)'),
+            'model': f'Distances in the shown model (CB–CB, CA for glycine): grey from {c} Å '
+                     f'(dark) to {DISTANCE_FAR:g} Å and beyond (white); pairs closer than {c} Å '
+                     'are colored by the predicted contact probability'
+                     + ('' if self._pae.has_contact else ' (none here: one color)'),
             'spread': 'How spread the predicted distance distribution of each pair is',
         }
         for key, b in self._tabs.items():
@@ -1027,20 +1042,18 @@ class AlphaLensPlot(ToolInstance):
         mt = self._pae.metrics
         return mt.get('cutoff', self.cutoff) if mt else self.cutoff
 
-    def _model_contact_mask(self):
-        from .contacts import model_contacts
-        return model_contacts(self._pae, self._contact_cutoff())[0]
-
     def _model_colormap_and_values(self, P):
         '''
-        Model contacts colored like the contact-probability view, on white. A contact with P
-        near 0 still gets the lightest visible color, so that no model contact disappears.
+        Distances in the model in grey, with the pairs closer than the cutoff (the contacts in
+        the model) colored like the contact-probability view. A contact with P near 0 still
+        gets the lightest visible color, so that no model contact disappears.
         '''
-        mask = self._model_contact_mask()
+        from .contacts import model_distances, distance_view_values
+        dist = model_distances(self._pae)[0]
+        c = self._contact_cutoff()
         if P is None:
-            from chimerax.core.colors import Colormap
-            cmap = Colormap((0, 1), ((1, 1, 1, 1), (0.45, 0.45, 0.45, 1)))
-            return cmap, mask.astype(np.float32), (0, 1, None, ())
+            cmap = green_colormap(0, 1, dark_at_high=True)
+            return distance_colormap(cmap), distance_view_values(dist, c), (0, 1, None, ())
         mode = self._modes['contact']
         saved, self._mask_matrix = self._mask_matrix, False
         try:
@@ -1048,8 +1061,7 @@ class AlphaLensPlot(ToolInstance):
         finally:
             self._mask_matrix = saved
         floor = 0.06 if self._contact_scale == 'banded' else 1 / 6
-        vals = np.where(mask, np.maximum(vals, floor), -1).astype(np.float32)
-        return cmap, vals, cbar
+        return distance_colormap(cmap), distance_view_values(dist, c, vals, floor), cbar
 
     def _render_region(self, y0, y1, x0, x1, f):
         '''RGB image of matrix rows y0:y1, columns x0:x1, pooled by f.'''
@@ -1107,7 +1119,7 @@ class AlphaLensPlot(ToolInstance):
                 and self._pae.metrics.get('contact_only'):
             src = ' <span style="color:gray">(AF3 contact_probs; no distogram)</span>'
         if mode.key == 'model' and not self._pae.has_contact:
-            src = ' <span style="color:gray">(no contact probabilities: grey)</span>'
+            src = ' <span style="color:gray">(no contact probabilities: contacts in one color)</span>'
         pool = (f' <span style="color:gray">[overview {f}×{f} {mode.pool}-pooled; '
                 f'zoom in for full resolution]</span>') if f > 1 else ''
         if far is not None:
@@ -1285,7 +1297,7 @@ class AlphaLensPlot(ToolInstance):
         # Legend of the blue contact colors when dots or lines are shown
         dots = self._view.dots_visible or (self._struct_contacts and self._pae.has_contact)
         model_plain = mode.key == 'model' and not self._pae.has_contact
-        extra = 170 + (200 if dots else 0) + (150 if mode.key == 'model' else 0)
+        extra = 170 + (200 if dots else 0) + (250 if mode.key == 'model' else 0)
         pm = QPixmap(int((w + extra) * dpr), int(H * dpr))
         pm.setDevicePixelRatio(dpr)
         pm.fill(Qt.GlobalColor.transparent)
@@ -1294,16 +1306,15 @@ class AlphaLensPlot(ToolInstance):
         vals = lo + t * (hi - lo) if gamma is None else t      # gamma: bar is in display space
         row = np.ascontiguousarray(cmap.interpolated_rgba8(vals)[:, :3][None, :, :].repeat(gh, 0))
         img = QImage(row.data, w, gh, 3 * w, QImage.Format.Format_RGB888)
-        if model_plain:         # Model contacts without P: two swatches instead of a bar
+        if model_plain:         # Model distances without P: contact swatch and distance ramp
             p.setPen(QColor(90, 90, 90))
             fm = p.fontMetrics()
-            sx = x0
-            for rgb, text in (((115, 115, 115), f'< {self._contact_cutoff():g} Å in model'),
-                              ((255, 255, 255), 'farther')):
-                p.fillRect(QRectF(sx, 2, 14, gh), QColor(*rgb))
-                p.drawRect(QRectF(sx, 2, 14, gh))
-                p.drawText(int(sx + 18), 2 + gh, text)
-                sx += 18 + fm.horizontalAdvance(text) + 14
+            rgb = tuple(int(v) for v in cmap.interpolated_rgba8([1.0])[0][:3])
+            text = f'< {self._contact_cutoff():g} Å in model'
+            p.fillRect(QRectF(x0, 2, 14, gh), QColor(*rgb))
+            p.drawRect(QRectF(x0, 2, 14, gh))
+            p.drawText(int(x0 + 18), 2 + gh, text)
+            self._draw_distance_ramp(p, x0 + 18 + fm.horizontalAdvance(text) + 14, gh)
             p.end()
             self._cbar.setPixmap(pm)
             return
@@ -1332,6 +1343,8 @@ class AlphaLensPlot(ToolInstance):
         unit = mode.unit
         if mode.key in ('contact', 'model'):
             unit = {'sqrt': 'P (√ scale)', 'linear': 'P', 'banded': 'P (bands)'}[self._contact_scale]
+            if mode.key == 'model':
+                unit += f', pairs < {self._contact_cutoff():g} Å'
         elif mode.key == 'agreement':
             unit = f'{self._pae.agreement.kind}s'
         p.drawText(x1 + 8, 2 + gh, unit)
@@ -1341,11 +1354,7 @@ class AlphaLensPlot(ToolInstance):
             p.drawRect(QRectF(sx, 2, 14, gh))
             p.drawText(int(sx + 18), 2 + gh, 'far (>21.7 Å)')
         elif mode.key == 'model':
-            p.fillRect(QRectF(sx, 2, 14, gh), QColor(255, 255, 255))
-            p.drawRect(QRectF(sx, 2, 14, gh))
-            text = f'≥ {self._contact_cutoff():g} Å in model'
-            p.drawText(int(sx + 18), 2 + gh, text)
-            sx += 18 + fm.horizontalAdvance(text) + 14
+            sx = self._draw_distance_ramp(p, sx, gh)
         if dots and not (self._view_mode == 'spread' and self._far_mask() is not None):
             # Predicted contacts (dots and lines): blue ramp from the threshold to 1
             label = 'contacts:'
@@ -1361,6 +1370,23 @@ class AlphaLensPlot(ToolInstance):
                 p.drawText(int(tx - fm.horizontalAdvance(tv) / 2), 5 + gh + fm.ascent(), tv)
         p.end()
         self._cbar.setPixmap(pm)
+
+    def _draw_distance_ramp(self, p, sx, gh):
+        '''Grey ramp of the Model distances view (cutoff to DISTANCE_FAR Å); returns the next x.'''
+        from Qt.QtGui import QImage
+        from Qt.QtCore import QRectF
+        fm = p.fontMetrics()
+        label = 'distance:'
+        p.drawText(int(sx), 2 + gh, label)
+        sx += fm.horizontalAdvance(label) + 6
+        lw = 70
+        g = np.round(255 * np.linspace(DISTANCE_NEAR_GREY, 1.0, lw)).astype(np.uint8)
+        ramp = np.ascontiguousarray(np.repeat(np.stack([g, g, g], -1)[None], gh, 0))
+        p.drawImage(QRectF(sx, 2, lw, gh), QImage(ramp.data, lw, gh, 3 * lw, QImage.Format.Format_RGB888))
+        p.drawRect(QRectF(sx, 2, lw, gh))
+        for tv, tx in ((f'{self._contact_cutoff():g}', sx), (f'{DISTANCE_FAR:g}+ Å', sx + lw)):
+            p.drawText(int(tx - fm.horizontalAdvance(tv) / 2), 5 + gh + fm.ascent(), tv)
+        return sx + lw + 30
 
     def _set_chains(self):
         from .contacts import row_chain_ids
@@ -1476,7 +1502,7 @@ class AlphaLensPlot(ToolInstance):
             self._select_rows(ranges)
         tiny = (r2 - r1) < 3 and (r4 - r3) < 3
         if not tiny and self._pae.has_contact:
-            # A dragged box draws the contacts inside it as red lines on the structure
+            # A dragged box draws the contacts inside it as lines on the structure
             self._struct_region = (r3, r4, r1, r2)
             self.show_structure_contacts(True)
         elif tiny and self._struct_contacts:

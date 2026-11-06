@@ -20,7 +20,7 @@ under the slider.*
 |---|---|---|
 | PAE | predicted aligned error (Å) | 0–30 Å |
 | Contact probability | predicted P(d < 8 Å) from the distogram, or AF3 `contact_probs` if there is no distogram | √P scale, so weak contacts show |
-| Model contacts | residue pairs closer than 8 Å in the shown model, colored by the predicted P; white where the model has no contact | as the contact-probability view |
+| Model distances | CB–CB distances in the shown model; the pairs closer than 8 Å (contacts in the model) colored by the predicted P | distances grey, 8 Å dark to 40 Å and beyond white; contacts as the contact-probability view |
 | Spread σ / H | standard deviation (Å) or entropy (bits) of the predicted distance distribution | 0 to the 99th percentile of the model |
 | Agreement | number of AF3 seeds or AF2 models in which the pair has P ≥ the slider threshold | 0 to the number of seeds or models |
 
@@ -41,7 +41,7 @@ macOS, Linux and Windows.
    pip needs it.
 2. In the ChimeraX command line:
 
-       toolshed install ~/Downloads/chimerax_alphalens-0.5.0-py3-none-any.whl
+       toolshed install ~/Downloads/chimerax_alphalens-0.6.0-py3-none-any.whl
 
 3. Restart ChimeraX.
 
@@ -135,13 +135,16 @@ the distogram in the background.
   Contacts restores all. The log lists the strongest pairs. By default, dragging a box also colors
   those residues (an off-diagonal box uses two colors); this can be switched off in the
   right-click menu.
-* **Model contacts:** the residue pairs whose CB atoms (CA for glycine, the atoms the distogram
-  describes) are closer than 8 Å in the shown model, colored by the predicted contact probability
-  on the same scale as the contact-probability view. Model contacts with P near 0 get the lightest
-  green, so none disappears. Flip between the two views with ← / → at the same zoom: a contact
-  that is predicted but white here is not formed in this model, and a pale contact here is in the
-  model without support from the prediction. Hovering gives the CB–CB distance in the model in
-  every view. Without contact probabilities (AF2 without a distogram) the model contacts are grey.
+* **Model distances:** the distances between the CB atoms (CA for glycine, the atoms the
+  distogram describes) in the shown model, in grey from 8 Å (dark) to 40 Å and beyond (white).
+  The pairs closer than 8 Å, the contacts in the model, are colored by the predicted contact
+  probability on the same scale as the contact-probability view, so one matrix shows how far apart
+  the parts of the model are and which of its contacts the prediction supports. Contacts with P
+  near 0 get the lightest green, so none disappears; in a zoomed-out overview the contacts are
+  kept over the distances. Flip to the contact-probability view with ← / → at the same zoom: a
+  contact that is predicted but grey here is not formed in this model. Hovering gives the CB–CB
+  distance in the model in every view. Without contact probabilities (AF2 without a distogram)
+  the contacts are drawn in one color.
 * **Color pLDDT** colors the structure in the four AlphaFold pLDDT bands (< 50, 50–70, 70–90,
   > 90), as the pLDDT track of the plot, instead of ChimeraX's smooth "alphafold" palette.
 * **Color PAE Domains** colors the structure using ChimeraX's PAE domain clustering.
@@ -212,7 +215,7 @@ pair, most reproduced and most probable first:
 ## Commands
 
     alphalens [#model] [paeFile file] [distogram file]
-             [mode pae|contact|model|std|entropy|agreement]
+             [mode pae|contact|distance|std|entropy|agreement]
              [cutoff 8] [contacts true|false] [minProb 0.5] [saveContacts file.csv]
              [palette name] [range low,high] [dividerLines true|false] [wait true|false]
     alphalens open path [rank N] [same options except paeFile]
@@ -221,8 +224,8 @@ pair, most reproduced and most probable first:
 | Option | Meaning |
 |---|---|
 | `paeFile`, `distogram` | files with non-standard names; otherwise they are found next to the structure |
-| `mode` | view to show: `contact` the predicted contact probability, `model` the contacts in the model, `std` / `entropy` the spread; `agreement` reads every seed or model first and logs the agreement table |
-| `cutoff` | contact distance in Å (default 8), also for the model contacts; needs a distogram, because AF3 `contact_probs` are fixed at 8 Å |
+| `mode` | view to show: `contact` the predicted contact probability, `distance` the distances and contacts in the model (`model` also works), `std` / `entropy` the spread; `agreement` reads every seed or model first and logs the agreement table |
+| `cutoff` | contact distance in Å (default 8), also for the contacts in the Model distances view; needs a distogram, because AF3 `contact_probs` are fixed at 8 Å |
 | `contacts`, `minProb` | draw or remove the contacts with P ≥ minProb on the structure (default 0.5; also moves the slider) |
 | `saveContacts` | write the contacts to a CSV file as Export CSV does, with P ≥ minProb if given, otherwise the slider threshold (0.2 without a plot) |
 | `palette`, `range` | PAE color map, as in `alphafold pae` |

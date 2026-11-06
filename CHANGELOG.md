@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
+
+* **Model distances** view replaces Model contacts: the CB–CB distances in the shown model in grey
+  (8 Å dark to 40 Å and beyond white), with the pairs closer than 8 Å colored by the predicted
+  contact probability in the same matrix. `mode distance`; `mode model` still works.
+
+## 0.5.1
 
 * Never use another AF3 seed's distogram when the requested seed's file is missing; an
   unknown seed is resolved only when the available distograms belong to one seed.
