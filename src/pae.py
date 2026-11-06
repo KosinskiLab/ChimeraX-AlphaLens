@@ -43,6 +43,8 @@ class AlphaLensPAE(AlphaFoldPAE):
         self.metrics = None             # dict from data.distogram_metrics, trimmed like PAE
         self.agreement = None           # agreement.Agreement over the seeds / models
         self._agreement_pending = None  # Callbacks while the agreement data load
+        self._agreement_load = None     # Waitable background reads (results applied on UI thread)
+        self._distogram_load = None
         self._model_contacts = None     # Cache of contacts.model_contacts()
 
     # ---------------------------------------------------------------------------
