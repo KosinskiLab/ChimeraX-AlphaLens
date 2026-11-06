@@ -37,7 +37,7 @@ Requires ChimeraX 1.6 or newer; tested with 1.10 and 1.12. The bundle is pure Py
 macOS, Linux and Windows.
 
 1. Download `chimerax_alphalens-<version>-py3-none-any.whl` from the
-   [Releases](https://github.com/KosinskiLab/chimerax-alphalens/releases) page. Keep the file name:
+   [Releases](https://github.com/KosinskiLab/AlphaLens/releases) page. Keep the file name:
    pip needs it.
 2. In the ChimeraX command line:
 
@@ -53,11 +53,11 @@ in the same way. To remove the bundle, run `toolshed uninstall AlphaLens`.
 
 ### From source
 
-    git clone https://github.com/KosinskiLab/chimerax-alphalens.git
+    git clone https://github.com/KosinskiLab/AlphaLens.git
 
 Then, in the ChimeraX command line, change to the checkout first:
 
-    cd /path/to/chimerax-alphalens
+    cd /path/to/AlphaLens
     devel install .        # install from the checkout
     devel build .          # or only build the wheel into dist/
     devel clean .          # remove build files
@@ -79,8 +79,10 @@ one structure is open) or `alphalens #1`.
 
 The plot reads the PAE file next to the structure, plus the distogram if the prediction kept it.
 If the distogram is missing, you get the PAE view and, for AF3, the contact view from
-`contact_probs`. The tabs that need a distogram are greyed out with a tooltip saying why. Only a
-missing PAE file is an error.
+`contact_probs` from the same seed. A missing seed distogram is never replaced by another seed's
+distogram. The tabs that need unavailable data are greyed out with a tooltip saying why.
+A readable PAE file is required; an unreadable optional distogram still leaves the PAE view usable.
+Explicit requests for views, contacts or CSV export fail if their required data cannot be loaded.
 
 ## Getting a distogram
 
@@ -112,9 +114,10 @@ the distogram in the background.
   are present locally. The chosen model opens in the same window, superposed on the previous one,
   which is hidden; the view and zoom are kept.
 * **Contact dots:** in the contact-probability view, inter-chain pairs above the slider threshold
-  (long-range pairs for a single chain) are drawn as blue dots that stay visible at any zoom,
+  (pairs at least 24 matrix positions apart for a single chain) are drawn as blue dots that stay visible at any zoom,
   darker blue for higher P (the scale is next to the color bar). Right-click to turn them off or
-  show them in every view.
+  show them in every view. At most the 40,000 strongest pairs are shown as dots; CSV export is
+  not capped by this display limit.
 * **Predicted contacts P ≥ slider:** one threshold (0.05–1, default 0.2) for the dots, the 3D
   lines, the agreement view and the CSV export. "hide in matrix too" also blanks matrix pixels
   below it.
@@ -141,6 +144,7 @@ the distogram in the background.
   every view. Without contact probabilities (AF2 without a distogram) the model contacts are grey.
 * **Color pLDDT** colors the structure in the four AlphaFold pLDDT bands (< 50, 50–70, 70–90,
   > 90), as the pLDDT track of the plot, instead of ChimeraX's smooth "alphafold" palette.
+* **Color PAE Domains** colors the structure using ChimeraX's PAE domain clustering.
 * Large models that ChimeraX shows as spheres are switched to cartoon the first time contact lines
   are drawn, because the lines would otherwise be hidden inside the atoms.
 * **Spread:** the last distogram bin collects every distance above 21.7 Å, so the spread is
@@ -223,7 +227,7 @@ pair, most reproduced and most probable first:
 | `saveContacts` | write the contacts to a CSV file as Export CSV does, with P ≥ minProb if given, otherwise the slider threshold (0.2 without a plot) |
 | `palette`, `range` | PAE color map, as in `alphafold pae` |
 | `dividerLines` | chain divider lines on the plot |
-| `wait` | load the distogram (and the agreement data) before the command returns, for scripts |
+| `wait` | finish the distogram and requested agreement loading before the command returns, including reads already running in the background; use `wait true` before consuming a GUI command's CSV output |
 | `rank` | 0 = top model; AF2 `ranked_N`, AF3 N-th best sample |
 
 For example, without a window (`ChimeraX --nogui`), this logs the agreement table and writes the
@@ -241,8 +245,8 @@ contacts reached in any seed, with P per seed:
   probabilities are detected automatically).
 * **ColabFold** (untested): `*_unrelaxed_rank_NNN_*.pdb` + `*_scores_rank_NNN_*.json`, and
   `*_all_rank_NNN_*.pickle` with `--save-all`.
-* JSON, pickle and npz files can be `.gz` or `.xz` compressed. AlphaFold DB PAE files are read
-  too. For other layouts, give the files with `paeFile` and `distogram`.
+* PAE JSON and result pickle files, and NPZ distograms, can be `.gz` or `.xz` compressed.
+  AlphaFold DB PAE files are read too. For other layouts, give the files with `paeFile` and `distogram`.
 
 ## Predictions on a remote machine
 
@@ -265,10 +269,17 @@ large; without them the AF2 plot shows PAE only.
 
 ## Development
 
-The file readers, the agreement and the CSV export are tested without ChimeraX:
+The file readers, agreement, CSV export and command loading behavior are tested without ChimeraX:
 
     pip install numpy pytest
     pytest tests
+
+For a headless integration check with real ChimeraX structures and commands, run from the checkout:
+
+    ChimeraX --nogui --exit --cmd "open tests/chimerax_smoke.py"
+
+This creates temporary synthetic AF2 and AF3 predictions and checks agreement, compressed
+distograms, CSV export, seed matching and loading errors without installing the bundle.
 
 The plot window itself needs ChimeraX: build and install with `devel install`, then check it on an
 AlphaFold2 and an AlphaFold3 prediction.
@@ -276,4 +287,4 @@ AlphaFold2 and an AlphaFold3 prediction.
 ## License
 
 MIT; see [LICENSE](LICENSE). Bug reports and questions go to the
-[issue tracker](https://github.com/KosinskiLab/chimerax-alphalens/issues).
+[issue tracker](https://github.com/KosinskiLab/AlphaLens/issues).

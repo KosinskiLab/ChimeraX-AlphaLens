@@ -36,6 +36,7 @@ filters=(
     --include='*confidences.json' --include='*confidences.json.gz' --include='*confidences.json.xz'
     --include='ranking_scores.csv'
     --include='seed-*_distogram/*.npz'
+    --include='seed-*_distogram/*.npz.gz' --include='seed-*_distogram/*.npz.xz'
     # ColabFold
     --include='*_rank_[0-9][0-9][0-9]_*.pdb' --include='*_scores_rank_*.json'
 )

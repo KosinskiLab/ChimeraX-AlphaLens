@@ -13,12 +13,57 @@ The bundle was called DistoPAE up to version 0.4; "distopae" and "distopae open"
 import os
 import threading
 import time
+from concurrent.futures import Future
 
 import numpy as np
 
 from .contacts import DEFAULT_MIN_P
 
 MODE_NAMES = ('pae', 'contact', 'model', 'std', 'entropy', 'agreement')
+
+
+class _BackgroundLoad:
+    '''A data read whose result can be applied by either the GUI or a waiting command.
+
+    The worker only reads data. Both finish() and wait() run on the session thread,
+    so waiting never needs to process Qt events or wait for a queued GUI callback.
+    '''
+
+    def __init__(self, work, done):
+        self._work, self._done = work, done
+        self._future = Future()
+        self._finished = False
+
+    def start(self, session, wait, name):
+        def read():
+            try:
+                self._future.set_result(self._work())
+            except Exception as e:
+                self._future.set_exception(e)
+
+        if wait or not session.ui.is_gui:
+            read()
+            self.wait()
+        else:
+            def run():
+                read()
+                session.ui.thread_safe(self.finish)
+            threading.Thread(target=run, name=name, daemon=True).start()
+
+    def finish(self):
+        if self._finished:
+            return                       # A waiting command already applied this result
+        try:
+            result = self._future.result()
+            self._finished = True
+            self._done(*result)
+        finally:
+            self._finished = True
+            # Do not retain full-size matrices or callbacks after applying the result.
+            self._future = self._work = self._done = None
+
+    def wait(self):
+        self.finish()
 
 
 def alphalens(session, structure=None, pae_file=None, distogram=None, mode=None, cutoff=8.0,
@@ -51,6 +96,13 @@ def alphalens(session, structure=None, pae_file=None, distogram=None, mode=None,
 
     def loaded(pae, plot):
         '''Steps that need the contact probabilities of the shown model.'''
+        if mode in ('std', 'entropy') and not pae.has_distogram:
+            raise UserError(f'Mode "{mode}" needs a distogram; it could not be loaded for '
+                            f'{structure}')
+        if (contacts or save_contacts is not None or mode in ('contact', 'agreement')) \
+                and not pae.has_contact:
+            raise UserError(f'{structure}: no contact probabilities: the distogram could '
+                            f'not be loaded and no AF3 contact_probs are available')
         _apply_contacts(session, pae, plot, contacts, min_prob)
 
         def finish():
@@ -72,6 +124,11 @@ def alphalens(session, structure=None, pae_file=None, distogram=None, mode=None,
              and (pae.metrics is None or pae.metrics.get('cutoff') == cutoff)
              and (not session.ui.is_gui or (plot is not None and not plot.closed())))
     if reuse:
+        if wait:
+            for name in ('_distogram_load', '_agreement_load'):
+                load = getattr(pae, name, None)
+                if load is not None:
+                    load.wait()
         if (save_contacts is not None or mode == 'agreement') and not pae.has_contact:
             raise UserError(f'{structure}: no contact probabilities (no distogram or AF3 '
                             f'contact_probs, or the distogram is still loading)')
@@ -175,7 +232,7 @@ def start_agreement(session, pae, plot, cutoff, wait=False, show=False, on_loade
     '''
     Read the contact probabilities of every seed (AF3) or model (AF2) of the prediction and
     attach them as pae.agreement, in a thread in the GUI. show: switch the plot to the
-    agreement view when done. on_loaded: called when done, also if loading failed.
+    agreement view when done. on_loaded: called only after agreement is available.
     '''
     if pae.agreement is not None:
         if show and plot is not None and not plot.closed():
@@ -185,6 +242,8 @@ def start_agreement(session, pae, plot, cutoff, wait=False, show=False, on_loade
         return
     if pae._agreement_pending is not None:          # Already loading
         pae._agreement_pending.append((show, on_loaded))
+        if wait or not session.ui.is_gui:
+            pae._agreement_load.wait()
         return
     runs = _check_agreement_runs(pae.structure)
     known = {}
@@ -210,13 +269,8 @@ def start_agreement(session, pae, plot, cutoff, wait=False, show=False, on_loade
     def done(agr, msgs, err, seconds):
         _agreement_loaded(session, pae, plot, len(runs), agr, msgs, err, seconds)
 
-    if wait or not session.ui.is_gui:
-        done(*work())
-    else:
-        def run():
-            result = work()
-            session.ui.thread_safe(done, *result)
-        threading.Thread(target=run, name='alphalens-agreement', daemon=True).start()
+    pae._agreement_load = load = _BackgroundLoad(work, done)
+    load.start(session, wait, 'alphalens-agreement')
 
 
 def _agreement_loaded(session, pae, plot, n_runs, agr, msgs, err, seconds):
@@ -233,6 +287,8 @@ def _agreement_loaded(session, pae, plot, n_runs, agr, msgs, err, seconds):
         session.logger.warning(f'AlphaLens {s}: no agreement view: {reason}')
         if plot_open:
             plot.agreement_failed(reason)
+        from chimerax.core.errors import UserError
+        raise UserError(f'AlphaLens {s}: could not load agreement: {reason}')
     else:
         pae.agreement = agr
         if plot_open:
@@ -344,13 +400,8 @@ def start_distogram(session, structure, pae, plot, dpath, cutoff, mode=None, wai
                           contact_probs, pae_path, on_loaded)
     if plot is not None:
         plot.distogram_loading(dpath)
-    if wait or not session.ui.is_gui:
-        done(*_load_metrics(dpath, cutoff))
-    else:
-        def work():
-            result = _load_metrics(dpath, cutoff)
-            session.ui.thread_safe(done, *result)
-        threading.Thread(target=work, name='alphalens-distogram', daemon=True).start()
+    pae._distogram_load = load = _BackgroundLoad(lambda: _load_metrics(dpath, cutoff), done)
+    load.start(session, wait, 'alphalens-distogram')
 
 
 def _load_metrics(path, cutoff):
@@ -383,14 +434,15 @@ def _distogram_loaded(session, structure, pae, plot, metrics, error, seconds, mo
             try:
                 pae.set_distogram_metrics(contact_metrics(contact_probs, pae_path),
                                           contact_probs.shape[0])
-            except ValueError:
-                return
-            session.logger.info(f'AlphaLens {structure}: using AF3 contact_probs instead')
-            if plot_open:
-                plot.set_data_status(f'contact_probs from AF3 confidences; distogram failed: {error}')
-                plot.data_changed()
-            if on_loaded:
-                on_loaded()
+            except ValueError as e:
+                session.logger.warning(f'AlphaLens {structure}: ignoring contact_probs: {e}')
+            else:
+                session.logger.info(f'AlphaLens {structure}: using AF3 contact_probs instead')
+                if plot_open:
+                    plot.set_data_status(f'contact_probs from AF3 confidences; distogram failed: {error}')
+                    plot.data_changed()
+        if on_loaded:
+            on_loaded()          # Validate requested operations; never silently skip an export
         return
     session.logger.info(f'AlphaLens {structure}: distogram loaded in {seconds:.1f} s. '
                         + _interface_summary(pae))

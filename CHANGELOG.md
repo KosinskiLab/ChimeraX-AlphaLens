@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+* Never use another AF3 seed's distogram when the requested seed's file is missing; an
+  unknown seed is resolved only when the available distograms belong to one seed.
+* Read and discover `.npz.gz` and `.npz.xz` distograms, including for agreement, and copy
+  them with `scripts/fetch_pred.sh`.
+* `wait true` finishes background distogram and agreement reads before returning, without
+  applying their results or running their callbacks twice.
+* Explicit data-dependent commands report loading failures. A failed agreement request no
+  longer exports a CSV with only the shown model's contacts. Optional distogram failures
+  still allow PAE viewing and the AF3 contact-probability fallback.
+* Update repository links and document contact display limits and the Color PAE Domains button.
+
 ## 0.5.0
 
 * **Renamed from DistoPAE to AlphaLens**, as the plot now does more than show the distogram and

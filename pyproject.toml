@@ -20,7 +20,7 @@ that probability, the spread of each predicted distance distribution and the agr
 seeds or models. Predicted contacts can be drawn on the structure and exported to CSV."""
 
 [project.urls]
-Home = "https://github.com/KosinskiLab/chimerax-alphalens"
+Home = "https://github.com/KosinskiLab/AlphaLens"
 
 [tool.chimerax]
 min-session-version = 1

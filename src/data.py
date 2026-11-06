@@ -34,6 +34,8 @@ AF_BIN_EDGES = np.linspace(2.3125, 21.6875, 63).astype(np.float32)
 
 PICKLE_SUFFIXES = ('.pkl', '.pkl.gz', '.pkl.xz', '.pickle', '.pickle.gz', '.pickle.xz')
 JSON_SUFFIXES = ('.json', '.json.gz', '.json.xz')
+NPZ_SUFFIXES = ('.npz', '.npz.gz', '.npz.xz')
+NPY_SUFFIXES = ('.npy', '.npy.gz', '.npy.xz')
 
 
 class PredictionFiles:
@@ -209,14 +211,15 @@ def _af3_ranked_samples(d):
 
 
 def _af3_distogram(d, seed=None):
-    if seed is not None:
-        hits = sorted(glob.glob(os.path.join(d, f'seed-{seed}_distogram', '*.npz')))
-        if hits:
-            return hits[0]
-    hits = sorted(glob.glob(os.path.join(d, 'seed-*_distogram', '*.npz')))
-    if len(hits) == 1 or (hits and seed is None):
-        return hits[0]
-    return None
+    # A known seed must never fall back to a different seed's predictions.
+    pattern = '*' if seed is None else str(seed)
+    hits = [p for suffix in NPZ_SUFFIXES
+            for p in sorted(glob.glob(os.path.join(d, f'seed-{pattern}_distogram', '*' + suffix)))]
+    if not hits:
+        return None
+    if seed is None and len({os.path.dirname(p) for p in hits}) != 1:
+        return None                    # The top model's seed cannot be inferred safely
+    return hits[0]                     # Prefer an uncompressed copy if one exists
 
 
 # -----------------------------------------------------------------------------
@@ -252,7 +255,7 @@ def distogram_file_ok(path):
         return False
     if path.endswith(PICKLE_SUFFIXES):
         return pickle_has_distogram(path)
-    return path.endswith(('.npz', '.npy'))
+    return path.endswith(NPZ_SUFFIXES + NPY_SUFFIXES)
 
 
 def contact_metrics(contact_probs, source, cutoff=8.0):
@@ -333,15 +336,16 @@ def read_distogram(path):
         values = np.asarray(logits)
         del p
         are_logits = True
-    elif path.endswith('.npz'):
-        z = np.load(path)
-        key = next((k for k in ('distogram', 'logits', 'distogram_logits', 'probs')
-                    if k in z.files), z.files[0])
-        values = z[key]
-        edges = z['bin_edges'] if 'bin_edges' in z.files else None
+    elif path.endswith(NPZ_SUFFIXES):
+        with _open_maybe_gz(path) as f, np.load(f, allow_pickle=False) as z:
+            key = next((k for k in ('distogram', 'logits', 'distogram_logits', 'probs')
+                        if k in z.files), z.files[0])
+            values = z[key]
+            edges = z['bin_edges'] if 'bin_edges' in z.files else None
         are_logits = None
     else:
-        values = np.load(path)
+        with _open_maybe_gz(path) as f:
+            values = np.load(f, allow_pickle=False)
         edges = None
         are_logits = None
 
@@ -512,9 +516,9 @@ def agreement_runs(structure_path):
     for seed, sample, _ in _af3_ranked_samples(d):
         if seed in done:
             continue
-        hits = sorted(glob.glob(os.path.join(d, f'seed-{seed}_distogram', '*.npz')))
-        if hits:
-            source, p = 'distogram', hits[0]
+        distogram = _af3_distogram(d, seed)
+        if distogram:
+            source, p = 'distogram', distogram
         elif seed == shown_seed and shown.pae_path:
             source, p = 'contact_probs', shown.pae_path      # Already read for the plot
         else:
