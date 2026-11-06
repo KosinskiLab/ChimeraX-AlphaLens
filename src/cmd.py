@@ -1,13 +1,14 @@
 """
 Commands:
 
-  alphalens open <dir-or-structure-file> [rank N] [mode pae|contact|model|std|entropy|agreement]
+  alphalens open <dir-or-structure-file> [rank N] [mode pae|contact|distance|std|entropy|agreement]
                 [cutoff 8] [contacts true|false] [minProb 0.5] [saveContacts file.csv] ...
   alphalens [#model] [paeFile path] [distogram path] [mode ...] [cutoff 8] [palette ..] [range ..]
                 [contacts true|false] [minProb 0.5] [saveContacts file.csv]
   alphalens <dir-or-structure-file> [rank N] ...      same as "alphalens open"
 
 The bundle was called DistoPAE up to version 0.4; "distopae" and "distopae open" still work.
+"mode model" (the Model contacts view up to 0.5) is the same as "mode distance".
 """
 
 import os
@@ -19,7 +20,7 @@ import numpy as np
 
 from .contacts import DEFAULT_MIN_P
 
-MODE_NAMES = ('pae', 'contact', 'model', 'std', 'entropy', 'agreement')
+MODE_NAMES = ('pae', 'contact', 'distance', 'model', 'std', 'entropy', 'agreement')
 
 
 class _BackgroundLoad:
@@ -73,6 +74,8 @@ def alphalens(session, structure=None, pae_file=None, distogram=None, mode=None,
     from chimerax.core.errors import UserError
     from .pae import AlphaLensPAE
 
+    if mode == 'distance':
+        mode = 'model'                  # Model distances view; "model" is its name up to 0.5
     if isinstance(structure, str):      # "alphalens <path>": the same as "alphalens open <path>"
         if pae_file is not None:
             raise UserError('"paeFile" needs an open structure, e.g. "alphalens #1 paeFile ..."')
@@ -172,7 +175,7 @@ def alphalens(session, structure=None, pae_file=None, distogram=None, mode=None,
             if mode == 'contact':
                 plot.set_mode('contact')
         if mode == 'model':
-            plot.set_mode('model')          # Colored by P once the distogram has loaded
+            plot.set_mode('model')          # Model distances; contacts colored by P once loaded
 
     if dpath:
         start_distogram(session, structure, pae, plot, dpath, cutoff,

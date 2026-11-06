@@ -5,8 +5,8 @@ Used for the contact dots on the plot, for drawing contacts on the structure as
 pseudobonds and for the CSV export. "Interesting" pairs are inter-chain pairs; for a
 single-chain prediction, long-range pairs (|i - j| >= LONG_RANGE).
 
-Also the contacts present in the model itself (model_contacts), measured between the atoms
-the distogram describes.
+Also the distances and contacts in the model itself (model_distances, model_contacts),
+measured between the atoms the distogram describes.
 """
 
 import numpy as np
@@ -395,20 +395,73 @@ def contact_mask(coords, cutoff, chunk=256):
     return mask
 
 
+def distance_matrix(coords, chunk=256):
+    '''N x N float32 distances between coords; NaN in rows and columns without coordinates.'''
+    xyz = np.asarray(coords, np.float32)
+    n = len(xyz)
+    d = np.empty((n, n), np.float32)
+    for i0 in range(0, n, chunk):
+        diff = xyz[i0:i0 + chunk, None, :] - xyz[None, :, :]
+        d[i0:i0 + chunk] = np.sqrt((diff * diff).sum(axis=-1))
+    return d
+
+
+def model_distances(pae):
+    '''
+    Distances in the model between the distogram_atom()s of the plot rows (N x N, Å, NaN where
+    a row has no atom) and the (N, 3) coordinates used. Cached on the PAE object, which belongs
+    to one model.
+    '''
+    cached = getattr(pae, '_model_distances', None)
+    if cached is not None:
+        return cached
+    atoms = [distogram_atom(ra) for ra in pae.row_residues_or_atoms()]
+    xyz = np.array([a.coord if a is not None else (np.nan,) * 3 for a in atoms], np.float32)
+    pae._model_distances = (distance_matrix(xyz), xyz)
+    return pae._model_distances
+
+
 def model_contacts(pae, cutoff):
     '''
     Contacts in the model, d < cutoff between distogram_atom()s, as an N x N boolean matrix
     over the plot rows, and the (N, 3) coordinates used (NaN where a row has no atom).
-    Cached on the PAE object, which belongs to one model.
     '''
     cached = getattr(pae, '_model_contacts', None)
     if cached is not None and cached[0] == cutoff:
         return cached[1], cached[2]
-    atoms = [distogram_atom(ra) for ra in pae.row_residues_or_atoms()]
-    xyz = np.array([a.coord if a is not None else (np.nan,) * 3 for a in atoms], np.float32)
-    mask = contact_mask(xyz, cutoff)
-    pae._model_contacts = (cutoff, mask, xyz, [a.name if a is not None else '' for a in atoms])
+    dist, xyz = model_distances(pae)
+    with np.errstate(invalid='ignore'):
+        mask = dist < cutoff                # NaN (no atom) compares False
+    pae._model_contacts = (cutoff, mask, xyz)
     return mask, xyz
+
+
+DISTANCE_FAR = 40.0         # Model distances view: grey from the cutoff (dark) to this (white)
+
+
+def distance_view_values(dist, cutoff, contact_values=None, floor=0.0, far=DISTANCE_FAR):
+    '''
+    Values of the Model distances view, for one colormap that is grey below 0 and the
+    contact-probability colormap from 0 to 1:
+
+      pairs closer than cutoff   their contact value (predicted P on the shown contact scale,
+                                 at least floor so none disappears; 1 without contact values)
+      other pairs                -1 - t, t from 0 at the cutoff (dark grey) to 1 at far (white)
+      no coordinates             -2 (white)
+
+    Max-pooling a zoomed-out overview keeps contacts over distances, the highest P among
+    contacts and the closest pair among the rest.
+    '''
+    dist = np.asarray(dist, np.float32)
+    with np.errstate(invalid='ignore'):
+        close = dist < cutoff
+        t = np.clip((dist - cutoff) / (far - cutoff), 0, 1)
+    vals = np.where(np.isnan(dist), np.float32(-2), -1 - t)
+    if contact_values is None:
+        c = np.float32(1)
+    else:
+        c = np.maximum(np.asarray(contact_values, np.float32), floor)
+    return np.where(close, c, vals).astype(np.float32)
 
 
 def model_distance(pae, i, j):

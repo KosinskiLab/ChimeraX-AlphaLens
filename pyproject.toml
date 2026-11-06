@@ -4,10 +4,10 @@ build-backend = "chimerax.bundle_builder.cx_pep517"
 
 [project]
 name = "ChimeraX-AlphaLens"
-version = "0.5.0"
+version = "0.6.0"
 license = { text = "MIT" }
 authors = [{ name = "Dmitry Molodenskiy" }]
-description = "AlphaFold PAE, contact-probability, model-contact, distogram-spread and seed-agreement plot (formerly DistoPAE)"
+description = "AlphaFold PAE, contact-probability, model-distance, distogram-spread and seed-agreement plot (formerly DistoPAE)"
 dependencies = ["ChimeraX-Core~=1.6", "ChimeraX-AlphaFold~=1.0"]
 dynamic = ["classifiers", "requires-python"]
 
@@ -15,8 +15,8 @@ dynamic = ["classifiers", "requires-python"]
 content-type = "text"
 text = """Interactive plot for AlphaFold2 / AlphaFold3 predictions (formerly DistoPAE). Shows the
 predicted aligned error (PAE) matrix with a per-residue pLDDT track and, from the distogram or AF3
-contact_probs, the predicted contact probability P(d < 8 A), the contacts in the model colored by
-that probability, the spread of each predicted distance distribution and the agreement between
+contact_probs, the predicted contact probability P(d < 8 A), the distances in the model with its
+contacts colored by that probability, the spread of each predicted distance distribution and the agreement between
 seeds or models. Predicted contacts can be drawn on the structure and exported to CSV."""
 
 [project.urls]
@@ -30,7 +30,7 @@ classifiers = ["Development Status :: 3 - Alpha"]
 
 [tool.chimerax.tool."AlphaLens"]
 category = "Structure Prediction"
-description = "PAE, contact probability, model contacts, spread and agreement plots for AlphaFold predictions"
+description = "PAE, contact probability, model distances, spread and agreement plots for AlphaFold predictions"
 
 [tool.chimerax.command.alphalens]
 category = "Structure Prediction"
