@@ -4,23 +4,32 @@ Predicted contacts: residue pairs with high contact probability P(d < cutoff).
 Used for the contact dots on the plot, for drawing contacts on the structure as
 pseudobonds and for the CSV export. "Interesting" pairs are inter-chain pairs; for a
 single-chain prediction, long-range pairs (|i - j| >= LONG_RANGE).
+
+Also the contacts present in the model itself (model_contacts), measured between the atoms
+the distogram describes.
 """
 
 import numpy as np
 
 LONG_RANGE = 24
-GROUP_NAME = 'DistoPAE contacts'
+GROUP_NAME = 'AlphaLens contacts'
 DEFAULT_MIN_P = 0.2         # Initial slider threshold; also used by "saveContacts" without a plot
 
-# Probability bands shared by the plot dots, the banded color scale and the pseudobonds.
+# Band edges of the banded contact color scale of the matrix.
 BAND_EDGES = (0.2, 0.5, 0.8)
-BAND_LABELS = ('0.2–0.5', '0.5–0.8', '≥ 0.8')
-BAND_RGB = ((252, 146, 114), (239, 59, 44), (165, 15, 21))     # light / mid / dark red
+
+# Predicted contacts (plot dots and lines on the structure) are blue, darker for higher P:
+# blue reads as confident, and red stays free for clashes. The strongest color is the
+# AlphaFold "very high pLDDT" blue.
+CONTACT_RAMP = ((0.0, (198, 219, 239)), (0.5, (66, 146, 198)), (1.0, (0, 83, 214)))
 
 
-def band_index(p):
-    '''0, 1, 2 for the three bands; -1 below the lowest edge.'''
-    return np.searchsorted(np.asarray(BAND_EDGES), p, side='right') - 1
+def contact_rgb(p):
+    '''(k, 3) uint8 colors of contact probabilities p on the blue contact ramp.'''
+    p = np.clip(np.asarray(p, np.float32), 0, 1)
+    x = [v for v, _ in CONTACT_RAMP]
+    return np.stack([np.interp(p, x, [c[k] for _, c in CONTACT_RAMP]) for k in range(3)],
+                    axis=-1).round().astype(np.uint8)
 
 
 def row_chain_ids(pae):
@@ -124,12 +133,15 @@ def ensure_lines_visible(structure):
         return
     from chimerax.core.commands import run
     run(s.session, f'cartoon #{s.id_string}; hide #{s.id_string} atoms')
-    s.session.logger.info('DistoPAE: switched to cartoon so contact lines are visible')
+    s.session.logger.info('AlphaLens: switched to cartoon so contact lines are visible')
 
 
-def show_contacts(pae, min_p=0.5, region=None, max_pairs=2000, log=True, candidates=None):
+MAX_LINES = 10000            # Most contact lines drawn on the structure at once
+
+
+def show_contacts(pae, min_p=0.5, region=None, max_pairs=MAX_LINES, log=True, candidates=None):
     '''
-    Draw contacts as pseudobonds (CA-CA) colored by probability band. Returns count.
+    Draw contacts as pseudobonds (CA-CA), blue and thicker for higher P. Returns count.
     candidates: precomputed (pairs, probs) from contact_pairs() with a threshold <= min_p.
     '''
     s = pae.structure
@@ -144,17 +156,22 @@ def show_contacts(pae, min_p=0.5, region=None, max_pairs=2000, log=True, candida
     pbg.pseudobonds.delete()
     pbg.dashes = 0
     pbg.display = True
-    count = 0
-    for (i, j), p in zip(pairs, probs):
-        a1, a2 = representative_atom(rra[i]), representative_atom(rra[j])
-        if a1 is None or a2 is None:
-            continue
-        b = pbg.new_pseudobond(a1, a2)
-        b.color = BAND_RGB[max(0, band_index(p))] + (255,)
-        b.radius = 0.12 + 0.25 * float(p)
-        count += 1
+    ends = [(representative_atom(rra[i]), representative_atom(rra[j])) for i, j in pairs]
+    ok = np.array([a1 is not None and a2 is not None for a1, a2 in ends], bool)
+    count = int(ok.sum())
+    if count:
+        from chimerax.atomic import Atoms
+        a1 = Atoms([e[0] for e, k in zip(ends, ok) if k])
+        a2 = Atoms([e[1] for e, k in zip(ends, ok) if k])
+        b = pbg.new_pseudobonds(a1, a2)
+        p = probs[ok]
+        rgba = np.empty((count, 4), np.uint8)
+        rgba[:, :3] = contact_rgb(p)
+        rgba[:, 3] = np.round(255 * (0.3 + 0.7 * p))     # Weak contacts fade into the background
+        b.colors = rgba
+        b.radii = (0.12 + 0.25 * p).astype(np.float32)
     if log:
-        msg = (f'DistoPAE {s}: showing {count} predicted contacts with P ≥ {min_p:g}'
+        msg = (f'AlphaLens {s}: showing {count} predicted contacts with P ≥ {min_p:g}'
                f'{region_text(pae, region)}')
         if len(pairs) >= max_pairs:
             msg += f' (strongest {max_pairs})'
@@ -260,8 +277,9 @@ def write_contacts_csv(pae, path, min_p, region=None, agreement=None):
 # One picked contact (click on a dot in the plot)
 # -----------------------------------------------------------------------------
 
-PICK_GROUP_NAME = 'DistoPAE picked contact'
-PICK_RGBA = (255, 0, 0, 255)            # Bright red, drawn thicker than the contact links
+PICK_GROUP_NAME = 'AlphaLens picked contact'
+PICK_RGB = (255, 190, 0)                # Gold, as the ring around the clicked dot in the plot
+PICK_RGBA = PICK_RGB + (255,)           # Drawn thicker than the blue contact lines
 
 
 def _residue_spec(ra):
@@ -271,7 +289,7 @@ def _residue_spec(ra):
 
 
 def show_picked_contact(pae, i, j, log=True, zoom=False):
-    '''Highlight one residue pair: thick red line, residue labels, side chains shown.'''
+    '''Highlight one residue pair: thick gold line, residue labels, side chains shown.'''
     from chimerax.atomic import Residue
     from chimerax.core.commands import run
     s = pae.structure
@@ -297,7 +315,7 @@ def show_picked_contact(pae, i, j, log=True, zoom=False):
             shown.append(r)
     specs = ' '.join(_residue_spec(ra) for ra in (ra1, ra2))
     run(s.session, f'label {specs} residues', log=False)
-    s._distopae_picked = (shown, specs)
+    s._alphalens_picked = (shown, specs)
     if zoom:
         run(s.session, f'view {specs} pad 0.6', log=False)
     d = float(np.linalg.norm(np.asarray(a1.scene_coord) - np.asarray(a2.scene_coord)))
@@ -309,7 +327,7 @@ def show_picked_contact(pae, i, j, log=True, zoom=False):
                  f'PAE {pae.pae_matrix[i, j]:.1f} / {pae.pae_matrix[j, i]:.1f} Å',
                  f'E[d] {mt["mean"][i, j]:.1f} Å' if 'mean' in mt else None,
                  f'{a1.name}–{a2.name} distance in model {d:.1f} Å']
-        s.session.logger.info(f'DistoPAE {s}: contact {name(i)} – {name(j)}: '
+        s.session.logger.info(f'AlphaLens {s}: contact {name(i)} – {name(j)}: '
                               + ', '.join(x for x in parts if x))
     return d
 
@@ -321,7 +339,7 @@ def clear_picked_contact(structure):
     g = structure.pseudobond_group(PICK_GROUP_NAME, create_type=None)
     if g is not None:
         g.pseudobonds.delete()
-    picked = getattr(structure, '_distopae_picked', None)
+    picked = getattr(structure, '_alphalens_picked', None)
     if picked:
         shown, specs = picked
         for r in shown:
@@ -331,4 +349,73 @@ def clear_picked_contact(structure):
             run(structure.session, f'~label {specs} residues', log=False)
         except Exception:
             pass
-        structure._distopae_picked = None
+        structure._alphalens_picked = None
+
+
+# -----------------------------------------------------------------------------
+# Contacts in the model
+# -----------------------------------------------------------------------------
+
+PURINES = {'A', 'G', 'DA', 'DG'}
+PYRIMIDINES = {'C', 'U', 'DC', 'DT'}
+
+
+def distogram_atom(ra):
+    '''
+    The atom whose distances the distogram predicts (AlphaFold2 and AlphaFold3): CB (CA for
+    glycine) for amino acids, C4 for purines, C2 for pyrimidines, the atom itself for ligand
+    atoms. Falls back to the principal atom (CA / C4') if that atom is missing.
+    '''
+    from chimerax.atomic import Residue
+    if ra is None or ra.deleted:
+        return None
+    if not isinstance(ra, Residue):
+        return ra
+    if ra.polymer_type == Residue.PT_PROTEIN:
+        a = ra.find_atom('CA' if ra.name == 'GLY' else 'CB')
+    elif ra.name in PURINES:
+        a = ra.find_atom('C4')
+    elif ra.name in PYRIMIDINES:
+        a = ra.find_atom('C2')
+    else:
+        a = None
+    return a if a is not None else representative_atom(ra)
+
+
+def contact_mask(coords, cutoff, chunk=256):
+    '''N x N boolean matrix of d(i, j) < cutoff; rows with NaN coordinates have no contacts.'''
+    xyz = np.asarray(coords, np.float32)
+    n = len(xyz)
+    mask = np.zeros((n, n), bool)
+    c2 = float(cutoff) ** 2
+    for i0 in range(0, n, chunk):
+        d = xyz[i0:i0 + chunk, None, :] - xyz[None, :, :]
+        with np.errstate(invalid='ignore'):
+            mask[i0:i0 + chunk] = (d * d).sum(axis=-1) < c2
+    return mask
+
+
+def model_contacts(pae, cutoff):
+    '''
+    Contacts in the model, d < cutoff between distogram_atom()s, as an N x N boolean matrix
+    over the plot rows, and the (N, 3) coordinates used (NaN where a row has no atom).
+    Cached on the PAE object, which belongs to one model.
+    '''
+    cached = getattr(pae, '_model_contacts', None)
+    if cached is not None and cached[0] == cutoff:
+        return cached[1], cached[2]
+    atoms = [distogram_atom(ra) for ra in pae.row_residues_or_atoms()]
+    xyz = np.array([a.coord if a is not None else (np.nan,) * 3 for a in atoms], np.float32)
+    mask = contact_mask(xyz, cutoff)
+    pae._model_contacts = (cutoff, mask, xyz, [a.name if a is not None else '' for a in atoms])
+    return mask, xyz
+
+
+def model_distance(pae, i, j):
+    '''(distance, "CB–CB") between the distogram atoms of rows i and j in the model, or None.'''
+    rra = pae.row_residues_or_atoms()
+    a1, a2 = distogram_atom(rra[i]), distogram_atom(rra[j])
+    if a1 is None or a2 is None:
+        return None
+    d = float(np.linalg.norm(np.asarray(a1.coord, np.float64) - np.asarray(a2.coord, np.float64)))
+    return d, f'{a1.name}–{a2.name}'

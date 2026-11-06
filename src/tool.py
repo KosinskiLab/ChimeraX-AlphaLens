@@ -1,10 +1,11 @@
 """
-DistoPAE plot panel: PAE matrix with a pLDDT track, plus contact-probability,
+AlphaLens plot panel: PAE matrix with a pLDDT track, plus contact-probability, model-contact,
 distogram-spread and seed / model agreement views reachable with the arrow buttons / tabs
 when the data exist.
 
-All views use the AlphaFold-DB green ramp (dark green = confident: low PAE, high contact
-probability, sharp distance distribution, contact in many seeds or models).
+All matrices use the AlphaFold-DB green ramp (dark green = confident: low PAE, high contact
+probability, sharp distance distribution, contact in many seeds or models). Predicted
+contacts drawn on top of the matrix (dots) and on the structure (lines) are blue.
 
 Interaction: scroll wheel / pinch zooms at the cursor, Shift-drag or middle-drag pans,
 "Fit" resets. When zoomed into a large matrix the
@@ -17,7 +18,7 @@ import numpy as np
 from chimerax.core.tools import ToolInstance
 from chimerax.alphafold.pae import PAEView, pae_pixmap
 
-from .contacts import BAND_EDGES, BAND_RGB, DEFAULT_MIN_P
+from .contacts import BAND_EDGES, DEFAULT_MIN_P, PICK_RGB, contact_rgb
 
 # pLDDT colors used by AlphaFold / the "alphafold" palette.
 PLDDT_BINS = ((90, (0, 83, 214)), (70, (101, 203, 243)), (50, (255, 219, 19)),
@@ -27,6 +28,7 @@ MAX_DISPLAY = 900          # Matrices larger than this are pooled for the overvi
 MAX_DETAIL = 1200          # Max pixels per side when redrawing a zoomed region
 MAX_PIXELS_PER_RESIDUE = 40
 MAX_DOTS = 40000
+DOT_LEVELS = 20            # Color steps of the contact dots
 SLIDER_MIN = 0.05          # Lowest contact threshold offered by the slider
 UNDEFINED_GRAY = (190, 190, 190)   # Spread view: pairs whose distance is mostly in the last bin
 
@@ -70,8 +72,11 @@ def make_modes(cutoff=8.0):
     c = f'{cutoff:g}'
     return {
         'pae': Mode('pae', 'PAE', 'Predicted aligned error', 'Å', '%.1f', 'mean', False),
-        'contact': Mode('contact', f'Contacts < {c} Å', f'Contact probability P(d < {c} Å)',
-                        '', '%.2f', 'max', True),
+        'contact': Mode('contact', 'Contact probability',
+                        f'Predicted contact probability P(d < {c} Å)', '', '%.2f', 'max', True),
+        'model': Mode('model', 'Model contacts',
+                      f'Model contacts (CB–CB < {c} Å) colored by predicted P',
+                      '', '%.2f', 'max', True),
         'std': Mode('std', 'Spread σ', 'Distogram spread (standard deviation of distance)',
                     'Å', '%.2f', 'mean', False),
         'entropy': Mode('entropy', 'Spread H', 'Distogram spread (entropy of distance bins)',
@@ -121,7 +126,7 @@ def plddt_track_rgb(p, h):
 
 # -----------------------------------------------------------------------------
 #
-class DistoPAEView(PAEView):
+class AlphaLensView(PAEView):
     '''
     Graphics view in residue-index scene coordinates: overview image (+ zoom detail
     images added by the plot), with chain labels, dividers, pLDDT guides and contact
@@ -350,7 +355,7 @@ class DistoPAEView(PAEView):
         r_px = self._dot_width_px() / 2 + 5
         s = self.transform().m11()
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        for color, width in ((QColor(0, 0, 0), 4.5), (QColor(255, 200, 0), 2.5)):
+        for color, width in ((QColor(0, 0, 0), 4.5), (QColor(*PICK_RGB), 2.5)):
             pen = QPen(color)
             pen.setCosmetic(True)
             pen.setWidthF(width)
@@ -445,17 +450,17 @@ class DistoPAEView(PAEView):
 
 # -----------------------------------------------------------------------------
 #
-class DistoPAEPlot(ToolInstance):
+class AlphaLensPlot(ToolInstance):
 
-    name = 'DistoPAE Plot'
+    name = 'AlphaLens'
     SESSION_ENDURING = False
     SESSION_SAVE = False
 
     def __init__(self, session, pae, cutoff=8.0, pae_colormap=None, divider_lines=True):
-        self._pae = pae                     # DistoPAE instance
+        self._pae = pae                     # AlphaLensPAE instance
         self.cutoff = cutoff
         self._modes = make_modes(cutoff)
-        self._mode_cycle = ['pae', 'contact', 'spread', 'agreement']
+        self._mode_cycle = ['pae', 'contact', 'model', 'spread', 'agreement']
         self._mode = 'pae'
         self._spread_measure = 'std'
         self._contact_scale = 'sqrt'        # 'sqrt', 'linear' or 'banded'
@@ -485,7 +490,7 @@ class DistoPAEPlot(ToolInstance):
         self._plddt = pae.row_plddt()
         self._models = []
 
-        ToolInstance.__init__(self, session, 'DistoPAE Plot')
+        ToolInstance.__init__(self, session, 'AlphaLens')
 
         from chimerax.ui import MainToolWindow
         tw = MainToolWindow(self)
@@ -516,7 +521,7 @@ class DistoPAEPlot(ToolInstance):
         ml.addWidget(mc, stretch=1)
         layout.addWidget(mw)
 
-        # Mode switcher:  [<] [PAE][Contacts][Spread] [>]   [Fit]
+        # Mode switcher:  [<] [PAE][Contact probability][Model contacts][Spread][Agreement] [>]  [Fit]
         sw = QWidget(parent)
         sl = QHBoxLayout(sw)
         sl.setContentsMargins(0, 0, 0, 0)
@@ -536,7 +541,7 @@ class DistoPAEPlot(ToolInstance):
             b = QToolButton(sw)
             b.setCheckable(True)
             b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-            b.setMinimumWidth(110)
+            b.setMinimumWidth(64)
             b.clicked.connect(lambda checked, k=key: self.set_mode(k))
             group.addButton(b)
             sl.addWidget(b)
@@ -552,7 +557,7 @@ class DistoPAEPlot(ToolInstance):
         sl.addWidget(fit)
         layout.addWidget(sw)
 
-        self._view = gv = DistoPAEView(parent, self._rectangle_select, lambda: None,
+        self._view = gv = AlphaLensView(parent, self._rectangle_select, lambda: None,
                                        self._report, self.step_mode, self._update_detail)
         gv.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         gv.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -573,11 +578,12 @@ class DistoPAEPlot(ToolInstance):
         tw_ = QWidget(parent)
         tl = QHBoxLayout(tw_)
         tl.setContentsMargins(0, 0, 0, 0)
-        tl.addWidget(QLabel('Contacts  P ≥', tw_))
+        tl.addWidget(QLabel('Predicted contacts  P ≥', tw_))
         self._slider = sl_ = QSlider(Qt.Orientation.Horizontal, tw_)
         sl_.setRange(int(SLIDER_MIN * 100), 100)
         sl_.setValue(int(round(self._threshold * 100)))
-        sl_.setToolTip('Hide contacts (dots and 3D links) with probability below this')
+        sl_.setToolTip('Show predicted contacts (dots, lines on the structure, agreement, '
+                       'CSV export) with contact probability at least this')
         sl_.valueChanged.connect(self._slider_moved)
         tl.addWidget(sl_, stretch=1)
         self._slider_label = QLabel(f'{self._threshold:.2f}', tw_)
@@ -609,7 +615,7 @@ class DistoPAEPlot(ToolInstance):
             bl.addWidget(b)
         self._contacts_button = cbn = QPushButton('Show Contacts', bw)
         cbn.setCheckable(True)
-        cbn.clicked.connect(lambda checked: self.show_structure_contacts(checked))
+        cbn.clicked.connect(self._contacts_button_clicked)
         bl.addWidget(cbn)
         b = QPushButton('Save Image', bw)
         b.clicked.connect(self._save_image)
@@ -735,7 +741,7 @@ class DistoPAEPlot(ToolInstance):
         try:
             switch_model(self.session, self, path)
         except Exception as e:
-            self.session.logger.error(f'DistoPAE: could not switch model: {e}')
+            self.session.logger.error(f'AlphaLens: could not switch model: {e}')
             self._populate_models()
 
     # ---------------------------------------------------------------------------
@@ -763,6 +769,7 @@ class DistoPAEPlot(ToolInstance):
         modes = ['pae']
         if pae.has_contact:
             modes.append('contact')
+        modes.append('model')               # Colored by P when there is one, else plain
         if pae.has_distogram:
             modes.append('spread')
         if pae.agreement is not None or (pae.has_contact and len(self._agreement_runs) >= 2
@@ -944,13 +951,24 @@ class DistoPAEPlot(ToolInstance):
             b.setToolTip(tip)
         reasons = {'contact': 'Needs a distogram or AlphaFold3 contact_probs',
                    'spread': 'Needs a distogram'}
+        c = f'{self._contact_cutoff():g}'
+        about = {
+            'pae': 'Predicted aligned error',
+            'contact': f'Contact probability predicted by AlphaFold, P(d < {c} Å), from the '
+                       'distogram or AF3 contact_probs; dots mark the pairs above the slider',
+            'model': f'Residue pairs closer than {c} Å in the shown model (CB–CB, CA for glycine), '
+                     'colored by the predicted contact probability'
+                     + ('' if self._pae.has_contact else ' (none here: uniform grey)'),
+            'spread': 'How spread the predicted distance distribution of each pair is',
+        }
         for key, b in self._tabs.items():
             enabled = key in avail
             if key == 'agreement':
                 b.setToolTip(self._agreement_tooltip(enabled))
                 enabled = enabled and self._agreement_status is None
             else:
-                b.setToolTip('' if enabled else f'{reasons.get(key, "")} ({self._data_status})')
+                b.setToolTip(about.get(key, '') if enabled
+                             else f'{reasons.get(key, "")} ({self._data_status})')
             b.setEnabled(enabled)
         eb = self._export_button
         eb.setEnabled(self._pae.has_contact)
@@ -967,9 +985,10 @@ class DistoPAEPlot(ToolInstance):
         cb.setChecked(self._struct_contacts and self._pae.has_contact)
         cb.setText('Hide Contacts' if cb.isChecked() else 'Show Contacts')
         self._threshold_row.setEnabled(self._pae.has_contact)
-        cb.setToolTip(f'Draw predicted contacts (P ≥ {self._threshold:.2f}) on the structure; '
-                      'while shown, dragging a box limits them to that region'
-                      if self._pae.has_contact else 'Needs contact probabilities')
+        cb.setToolTip(f'Draw all predicted contacts with P ≥ {self._threshold:.2f} on the structure '
+                      'as lines, darker blue and thicker for higher P; dragging a box in the plot '
+                      'limits them to that region' if self._pae.has_contact
+                      else 'Needs contact probabilities')
 
     # ---------------------------------------------------------------------------
     # Drawing
@@ -991,6 +1010,8 @@ class DistoPAEPlot(ToolInstance):
             if self._contact_scale == 'sqrt':
                 return cmap, np.sqrt(np.clip(m, 0, 1)), (0, 1, 0.5, None)
             return cmap, m, (0, 1, None, None)
+        if mode.key == 'model':
+            return self._model_colormap_and_values(m)
         if mode.key == 'agreement':
             n = self._pae.agreement.n
             ticks = np.arange(n + 1) if n <= 10 else np.unique(np.round(np.linspace(0, n, 6)))
@@ -1001,6 +1022,34 @@ class DistoPAEPlot(ToolInstance):
         hi = float(np.percentile(defined, 99)) if defined.size else 1.0
         hi = max(0.5, np.ceil(hi * 2) / 2)
         return green_colormap(0, hi), m, (0, hi, None, None)
+
+    def _contact_cutoff(self):
+        mt = self._pae.metrics
+        return mt.get('cutoff', self.cutoff) if mt else self.cutoff
+
+    def _model_contact_mask(self):
+        from .contacts import model_contacts
+        return model_contacts(self._pae, self._contact_cutoff())[0]
+
+    def _model_colormap_and_values(self, P):
+        '''
+        Model contacts colored like the contact-probability view, on white. A contact with P
+        near 0 still gets the lightest visible color, so that no model contact disappears.
+        '''
+        mask = self._model_contact_mask()
+        if P is None:
+            from chimerax.core.colors import Colormap
+            cmap = Colormap((0, 1), ((1, 1, 1, 1), (0.45, 0.45, 0.45, 1)))
+            return cmap, mask.astype(np.float32), (0, 1, None, ())
+        mode = self._modes['contact']
+        saved, self._mask_matrix = self._mask_matrix, False
+        try:
+            cmap, vals, cbar = self._colormap_and_values(mode, P)
+        finally:
+            self._mask_matrix = saved
+        floor = 0.06 if self._contact_scale == 'banded' else 1 / 6
+        vals = np.where(mask, np.maximum(vals, floor), -1).astype(np.float32)
+        return cmap, vals, cbar
 
     def _render_region(self, y0, y1, x0, x1, f):
         '''RGB image of matrix rows y0:y1, columns x0:x1, pooled by f.'''
@@ -1017,13 +1066,15 @@ class DistoPAEPlot(ToolInstance):
     def _matrix(self, key):
         if key == 'agreement':
             return self._pae.agreement.counts(self._threshold)
+        if key == 'model':          # Colored by P; the contacts themselves come from the model
+            return self._pae.matrix('contact')
         return self._pae.matrix(key)
 
     def _redraw(self, keep_zoom=False):
         vm = self._view_mode
         mode = self.mode
         m = self._matrix(mode.key)
-        n = m.shape[0]
+        n = self._pae.matrix_size if m is None else m.shape[0]
         f = max(1, -(-n // MAX_DISPLAY))
         cmap, vals, cbar = self._colormap_and_values(mode, m)
         far = self._far_mask() if vm == 'spread' else None
@@ -1052,8 +1103,11 @@ class DistoPAEPlot(ToolInstance):
         nav = '  ←/→ view, wheel/pinch zoom.' if len(self.available_modes()) > 1 else \
               '  Wheel/pinch to zoom.'
         src = ''
-        if mode.key == 'contact' and self._pae.metrics.get('contact_only'):
+        if mode.key in ('contact', 'model') and self._pae.has_contact \
+                and self._pae.metrics.get('contact_only'):
             src = ' <span style="color:gray">(AF3 contact_probs; no distogram)</span>'
+        if mode.key == 'model' and not self._pae.has_contact:
+            src = ' <span style="color:gray">(no contact probabilities: grey)</span>'
         pool = (f' <span style="color:gray">[overview {f}×{f} {mode.pool}-pooled; '
                 f'zoom in for full resolution]</span>') if f > 1 else ''
         if far is not None:
@@ -1072,7 +1126,12 @@ class DistoPAEPlot(ToolInstance):
             label = self._modes[key].tab if key != 'spread' else self._modes[self._spread_measure].tab
             b.setText(label)
             b.setChecked(key == vm)
+        self._colorbar_args = (mode, cmap, cbar)
         self._draw_colorbar(mode, cmap, cbar)
+
+    def _refresh_colorbar(self):
+        if getattr(self, '_colorbar_args', None) is not None:
+            self._draw_colorbar(*self._colorbar_args)
 
     # -- Zoom detail ----------------------------------------------------------------
     def _clear_detail(self):
@@ -1134,7 +1193,7 @@ class DistoPAEPlot(ToolInstance):
         if not self._dots_on or not self._pae.has_contact:
             self._update_picked_marker()
             return
-        from .contacts import filter_pairs, band_index
+        from .contacts import filter_pairs
         pairs, probs = filter_pairs(*self._candidates(), self._threshold)
         if len(pairs) == 0:
             self._update_picked_marker()
@@ -1144,14 +1203,14 @@ class DistoPAEPlot(ToolInstance):
         i, j = pairs[:, 0] + 0.5, pairs[:, 1] + 0.5
         v.dot_xy = np.concatenate([np.stack([j, i], 1), np.stack([i, j], 1)])
         v.dot_pairs = np.concatenate([pairs, pairs])
-        bands = np.maximum(band_index(probs), 0)       # Below 0.2 drawn as the lightest band
-        for b in range(len(BAND_RGB)):
-            sel = pairs[bands == b]
-            if len(sel) == 0:
-                continue
+        # Blue by P, as the lines on the structure; drawn in DOT_LEVELS color steps
+        levels = np.minimum((probs * DOT_LEVELS).astype(int), DOT_LEVELS - 1)
+        for b in np.unique(levels):
+            sel = pairs[levels == b]
             bi, bj = sel[:, 0] + 0.5, sel[:, 1] + 0.5
             pts = [QPointF(x, y) for x, y in zip(np.concatenate([bj, bi]), np.concatenate([bi, bj]))]
-            v.dots.append((QColor(*BAND_RGB[b]), QPolygonF(pts)))
+            rgb = contact_rgb((b + 0.5) / DOT_LEVELS)
+            v.dots.append((QColor(*(int(c) for c in rgb)), QPolygonF(pts)))
         self._update_picked_marker()
 
     # -- Picked contact (click on a dot) --------------------------------------------------
@@ -1197,6 +1256,13 @@ class DistoPAEPlot(ToolInstance):
         else:
             contacts.hide_contacts(self._pae.structure)
         self._update_controls()
+        self._refresh_colorbar()
+
+    def _contacts_button_clicked(self, checked):
+        '''Show Contacts draws all contacts above the slider, also after a box was dragged.'''
+        if checked:
+            self._struct_region = None
+        self.show_structure_contacts(checked)
 
     def refresh_structure_contacts(self):
         if self._struct_contacts:
@@ -1206,7 +1272,7 @@ class DistoPAEPlot(ToolInstance):
         try:
             self.refresh_picked_contact()
         except Exception as e:
-            self.session.logger.warning(f'DistoPAE: could not re-draw clicked contact: {e}')
+            self.session.logger.warning(f'AlphaLens: could not re-draw clicked contact: {e}')
 
     # -- Colorbar ------------------------------------------------------------------
     def _draw_colorbar(self, mode, cmap, cbar):
@@ -1216,8 +1282,11 @@ class DistoPAEPlot(ToolInstance):
         dpr = self._cbar.devicePixelRatioF()
         w, gh, H = 260, 12, 30
         x0, x1 = 20, 20 + w
-        dots = self._view.dots_visible
-        pm = QPixmap(int((w + (380 if dots else 170)) * dpr), int(H * dpr))
+        # Legend of the blue contact colors when dots or lines are shown
+        dots = self._view.dots_visible or (self._struct_contacts and self._pae.has_contact)
+        model_plain = mode.key == 'model' and not self._pae.has_contact
+        extra = 170 + (200 if dots else 0) + (150 if mode.key == 'model' else 0)
+        pm = QPixmap(int((w + extra) * dpr), int(H * dpr))
         pm.setDevicePixelRatio(dpr)
         pm.fill(Qt.GlobalColor.transparent)
         p = QPainter(pm)
@@ -1225,6 +1294,19 @@ class DistoPAEPlot(ToolInstance):
         vals = lo + t * (hi - lo) if gamma is None else t      # gamma: bar is in display space
         row = np.ascontiguousarray(cmap.interpolated_rgba8(vals)[:, :3][None, :, :].repeat(gh, 0))
         img = QImage(row.data, w, gh, 3 * w, QImage.Format.Format_RGB888)
+        if model_plain:         # Model contacts without P: two swatches instead of a bar
+            p.setPen(QColor(90, 90, 90))
+            fm = p.fontMetrics()
+            sx = x0
+            for rgb, text in (((115, 115, 115), f'< {self._contact_cutoff():g} Å in model'),
+                              ((255, 255, 255), 'farther')):
+                p.fillRect(QRectF(sx, 2, 14, gh), QColor(*rgb))
+                p.drawRect(QRectF(sx, 2, 14, gh))
+                p.drawText(int(sx + 18), 2 + gh, text)
+                sx += 18 + fm.horizontalAdvance(text) + 14
+            p.end()
+            self._cbar.setPixmap(pm)
+            return
         p.drawImage(QRectF(x0, 2, w, gh), img)
         p.setPen(QColor(90, 90, 90))
         p.drawRect(QRectF(x0, 2, w, gh))
@@ -1248,7 +1330,7 @@ class DistoPAEPlot(ToolInstance):
             s = f'{tv:g}'
             p.drawText(int(x - fm.horizontalAdvance(s) / 2), 5 + gh + fm.ascent(), s)
         unit = mode.unit
-        if mode.key == 'contact':
+        if mode.key in ('contact', 'model'):
             unit = {'sqrt': 'P (√ scale)', 'linear': 'P', 'banded': 'P (bands)'}[self._contact_scale]
         elif mode.key == 'agreement':
             unit = f'{self._pae.agreement.kind}s'
@@ -1258,25 +1340,25 @@ class DistoPAEPlot(ToolInstance):
             p.fillRect(QRectF(sx, 2, 14, gh), QColor(*UNDEFINED_GRAY))
             p.drawRect(QRectF(sx, 2, 14, gh))
             p.drawText(int(sx + 18), 2 + gh, 'far (>21.7 Å)')
-        elif dots:
-            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            p.drawText(int(sx), 2 + gh, 'dots:')
-            sx += fm.horizontalAdvance('dots:') + 8
+        elif mode.key == 'model':
+            p.fillRect(QRectF(sx, 2, 14, gh), QColor(255, 255, 255))
+            p.drawRect(QRectF(sx, 2, 14, gh))
+            text = f'≥ {self._contact_cutoff():g} Å in model'
+            p.drawText(int(sx + 18), 2 + gh, text)
+            sx += 18 + fm.horizontalAdvance(text) + 14
+        if dots and not (self._view_mode == 'spread' and self._far_mask() is not None):
+            # Predicted contacts (dots and lines): blue ramp from the threshold to 1
+            label = 'contacts:'
+            p.drawText(int(sx), 2 + gh, label)
+            sx += fm.horizontalAdvance(label) + 6
             t = self._threshold
-            edges = list(BAND_EDGES[1:]) + [None]
-            for b, rgb in enumerate(BAND_RGB):
-                hi_edge = edges[b]
-                if hi_edge is not None and hi_edge <= t + 1e-9:
-                    continue
-                lo_edge = BAND_EDGES[b] if b > 0 else t
-                lo_edge = max(lo_edge, t)
-                p.setPen(QPen(QColor(25, 25, 25), 1))
-                p.setBrush(QColor(*rgb))
-                p.drawEllipse(QPointF(sx + 5, 2 + gh / 2), 4.5, 4.5)
-                p.setPen(QColor(90, 90, 90))
-                label = f'≥ {lo_edge:g}' if hi_edge is None else f'{lo_edge:g}–{hi_edge:g}'
-                p.drawText(int(sx + 12), 2 + gh, label)
-                sx += 12 + fm.horizontalAdvance(label) + 8
+            lw = 70
+            ramp = np.ascontiguousarray(contact_rgb(np.linspace(t, 1, lw))[None, :, :].repeat(gh, 0))
+            p.drawImage(QRectF(sx, 2, lw, gh),
+                        QImage(ramp.data, lw, gh, 3 * lw, QImage.Format.Format_RGB888))
+            p.drawRect(QRectF(sx, 2, lw, gh))
+            for tv, tx in ((f'{t:.2f}', sx), ('1', sx + lw)):
+                p.drawText(int(tx - fm.horizontalAdvance(tv) / 2), 5 + gh + fm.ascent(), tv)
         p.end()
         self._cbar.setPixmap(pm)
 
@@ -1359,6 +1441,10 @@ class DistoPAEPlot(ToolInstance):
                 else:
                     vals.append(f'{sp.tab.split()[-1]} {sp.fmt % mt[sp.key][y, x]} {sp.unit}')
                 vals += [f'P(d>{mt["far_edge"]:.1f}Å) {pfar:.2f}', f'E[d] {mt["mean"][y, x]:.1f} Å']
+            from .contacts import model_distance
+            md = model_distance(pae, y, x)
+            if md is not None:
+                vals.append(f'model {md[1]} {md[0]:.1f} Å')
             agr = pae.agreement
             if agr is not None:
                 k = int(agr.counts(self._threshold)[y, x])
@@ -1521,7 +1607,7 @@ class DistoPAEPlot(ToolInstance):
     def _export_csv(self):
         import os
         import re
-        name = re.sub(r'[^\w.+-]+', '_', self._pae.structure.name).strip('_') or 'distopae'
+        name = re.sub(r'[^\w.+-]+', '_', self._pae.structure.name).strip('_') or 'alphalens'
         suggested = os.path.join(os.getcwd(), f'{name}_contacts.csv')
         from Qt.QtWidgets import QFileDialog
         path, _ = QFileDialog.getSaveFileName(self.tool_window.ui_area, 'Save contacts as CSV',
