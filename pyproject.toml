@@ -3,23 +3,24 @@ requires = ["ChimeraX-BundleBuilder>=1.4.0", "ChimeraX-Core~=1.6"]
 build-backend = "chimerax.bundle_builder.cx_pep517"
 
 [project]
-name = "ChimeraX-DistoPAE"
-version = "0.4.0"
+name = "ChimeraX-AlphaLens"
+version = "0.5.0"
 license = { text = "MIT" }
 authors = [{ name = "Dmitry Molodenskiy" }]
-description = "AlphaFold PAE / pLDDT plot with distogram contact-probability and distogram-spread views"
+description = "AlphaFold PAE, contact-probability, model-contact, distogram-spread and seed-agreement plot (formerly DistoPAE)"
 dependencies = ["ChimeraX-Core~=1.6", "ChimeraX-AlphaFold~=1.0"]
 dynamic = ["classifiers", "requires-python"]
 
 [project.readme]
 content-type = "text"
-text = """Interactive plot for AlphaFold2 / AlphaFold3 predictions. Shows the predicted aligned
-error (PAE) matrix with a per-residue pLDDT track, and - when the prediction's distogram is
-available - lets you step with arrow buttons to the contact probability P(d < 8 A) matrix and to
-a matrix of how spread each pairwise distance distribution is."""
+text = """Interactive plot for AlphaFold2 / AlphaFold3 predictions (formerly DistoPAE). Shows the
+predicted aligned error (PAE) matrix with a per-residue pLDDT track and, from the distogram or AF3
+contact_probs, the predicted contact probability P(d < 8 A), the contacts in the model colored by
+that probability, the spread of each predicted distance distribution and the agreement between
+seeds or models. Predicted contacts can be drawn on the structure and exported to CSV."""
 
 [project.urls]
-Home = "https://github.com/KosinskiLab/chimerax-distopae"
+Home = "https://github.com/KosinskiLab/chimerax-alphalens"
 
 [tool.chimerax]
 min-session-version = 1
@@ -27,14 +28,22 @@ max-session-version = 1
 categories = ["Structure Prediction"]
 classifiers = ["Development Status :: 3 - Alpha"]
 
-[tool.chimerax.tool."DistoPAE Plot"]
+[tool.chimerax.tool."AlphaLens"]
 category = "Structure Prediction"
-description = "PAE, contact probability and distogram spread plots for AlphaFold predictions"
+description = "PAE, contact probability, model contacts, spread and agreement plots for AlphaFold predictions"
+
+[tool.chimerax.command.alphalens]
+category = "Structure Prediction"
+description = "Show the AlphaLens plot for a predicted structure, or open a prediction folder"
+
+[tool.chimerax.command."alphalens open"]
+category = "Structure Prediction"
+description = "Open an AlphaFold2 or AlphaFold3 prediction directory and show the AlphaLens plot"
 
 [tool.chimerax.command.distopae]
 category = "Structure Prediction"
-description = "Show PAE / contact probability / distogram spread plot for a predicted structure"
+description = "Former name of the alphalens command"
 
 [tool.chimerax.command."distopae open"]
 category = "Structure Prediction"
-description = "Open an AlphaFold2 or AlphaFold3 prediction directory and show the DistoPAE plot"
+description = "Former name of the alphalens open command"

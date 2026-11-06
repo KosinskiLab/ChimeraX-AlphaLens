@@ -1,6 +1,6 @@
 """
 Run the parts of the bundle that do not need ChimeraX: import src/ as the package
-"distopae" without executing its __init__ (which needs ChimeraX), and give contacts.py
+"alphalens" without executing its __init__ (which needs ChimeraX), and give contacts.py
 a minimal chimerax.atomic. The stand-in is used under ChimeraX's own Python too, where the
 real Residue cannot be made without a structure; the rest of chimerax stays real there.
 """
@@ -11,9 +11,9 @@ import types
 
 SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, 'src'))
 
-pkg = types.ModuleType('distopae')
+pkg = types.ModuleType('alphalens')
 pkg.__path__ = [SRC]
-sys.modules.setdefault('distopae', pkg)
+sys.modules.setdefault('alphalens', pkg)
 
 try:
     import chimerax             # ChimeraX's Python: keep the real package (chimerax.alphafold)

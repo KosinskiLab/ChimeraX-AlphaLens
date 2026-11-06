@@ -1,10 +1,13 @@
 """
 Commands:
 
-  distopae open <dir-or-structure-file> [rank N] [mode pae|contact|std|entropy|agreement]
+  alphalens open <dir-or-structure-file> [rank N] [mode pae|contact|model|std|entropy|agreement]
                 [cutoff 8] [contacts true|false] [minProb 0.5] [saveContacts file.csv] ...
-  distopae [#model] [paeFile path] [distogram path] [mode ...] [cutoff 8] [palette ..] [range ..]
+  alphalens [#model] [paeFile path] [distogram path] [mode ...] [cutoff 8] [palette ..] [range ..]
                 [contacts true|false] [minProb 0.5] [saveContacts file.csv]
+  alphalens <dir-or-structure-file> [rank N] ...      same as "alphalens open"
+
+The bundle was called DistoPAE up to version 0.4; "distopae" and "distopae open" still work.
 """
 
 import os
@@ -15,15 +18,25 @@ import numpy as np
 
 from .contacts import DEFAULT_MIN_P
 
-MODE_NAMES = ('pae', 'contact', 'std', 'entropy', 'agreement')
+MODE_NAMES = ('pae', 'contact', 'model', 'std', 'entropy', 'agreement')
 
 
-def distopae(session, structure=None, pae_file=None, distogram=None, mode=None, cutoff=8.0,
+def alphalens(session, structure=None, pae_file=None, distogram=None, mode=None, cutoff=8.0,
              palette=None, range=None, divider_lines=None, contacts=None, min_prob=None,
-             save_contacts=None, wait=False):
+             save_contacts=None, wait=False, rank=None):
     '''Show PAE / contact probability / distogram spread / agreement plot for a predicted structure.'''
     from chimerax.core.errors import UserError
-    from .pae import DistoPAE
+    from .pae import AlphaLensPAE
+
+    if isinstance(structure, str):      # "alphalens <path>": the same as "alphalens open <path>"
+        if pae_file is not None:
+            raise UserError('"paeFile" needs an open structure, e.g. "alphalens #1 paeFile ..."')
+        return alphalens_open(session, structure, rank=rank or 0, distogram=distogram, mode=mode,
+                             cutoff=cutoff, palette=palette, range=range,
+                             divider_lines=divider_lines, contacts=contacts, min_prob=min_prob,
+                             save_contacts=save_contacts, wait=wait)
+    if rank is not None:
+        raise UserError('"rank" applies to a prediction folder: "alphalens <folder> rank N"')
 
     structure = _resolve_structure(session, structure)
 
@@ -53,9 +66,9 @@ def distopae(session, structure=None, pae_file=None, distogram=None, mode=None, 
             finish()
 
     # Re-show an existing plot unless new data or a new cutoff was requested.
-    plot = getattr(structure, '_distopae_plot', None)
+    plot = getattr(structure, '_alphalens_plot', None)
     pae = getattr(structure, 'alphafold_pae', None)
-    reuse = (isinstance(pae, DistoPAE) and pae_file is None and distogram is None
+    reuse = (isinstance(pae, AlphaLensPAE) and pae_file is None and distogram is None
              and (pae.metrics is None or pae.metrics.get('cutoff') == cutoff)
              and (not session.ui.is_gui or (plot is not None and not plot.closed())))
     if reuse:
@@ -89,18 +102,20 @@ def distopae(session, structure=None, pae_file=None, distogram=None, mode=None, 
 
     plot = None
     if session.ui.is_gui:
-        from .tool import DistoPAEPlot
-        old = getattr(structure, '_distopae_plot', None)
+        from .tool import AlphaLensPlot
+        old = getattr(structure, '_alphalens_plot', None)
         if old is not None and not old.closed():
             old.delete()
         dividers = True if divider_lines is None else divider_lines
-        plot = DistoPAEPlot(session, pae, cutoff=cutoff, pae_colormap=pae_colormap,
+        plot = AlphaLensPlot(session, pae, cutoff=cutoff, pae_colormap=pae_colormap,
                             divider_lines=dividers)
-        structure._distopae_plot = plot
+        structure._alphalens_plot = plot
         if pae.has_contact:
             plot.set_data_status('contact probabilities from AF3 confidences; no distogram')
             if mode == 'contact':
                 plot.set_mode('contact')
+        if mode == 'model':
+            plot.set_mode('model')          # Colored by P once the distogram has loaded
 
     if dpath:
         start_distogram(session, structure, pae, plot, dpath, cutoff,
@@ -136,7 +151,7 @@ def save_contacts_csv(session, pae, path, min_prob, region=None):
     agr = pae.agreement
     where = f' in the shown model or any of the {agr.n} {agr.kind}s' if agr is not None else ''
     extra = f', with P in each {agr.kind}' if agr is not None else ''
-    session.logger.info(f'DistoPAE {pae.structure}: saved {n} contacts with P ≥ {min_prob:g}'
+    session.logger.info(f'AlphaLens {pae.structure}: saved {n} contacts with P ≥ {min_prob:g}'
                         f'{where}{region_text(pae, region)}{extra} to {path}')
     return n
 
@@ -201,7 +216,7 @@ def start_agreement(session, pae, plot, cutoff, wait=False, show=False, on_loade
         def run():
             result = work()
             session.ui.thread_safe(done, *result)
-        threading.Thread(target=run, name='distopae-agreement', daemon=True).start()
+        threading.Thread(target=run, name='alphalens-agreement', daemon=True).start()
 
 
 def _agreement_loaded(session, pae, plot, n_runs, agr, msgs, err, seconds):
@@ -211,11 +226,11 @@ def _agreement_loaded(session, pae, plot, n_runs, agr, msgs, err, seconds):
     if s.deleted:
         return
     for m in msgs:
-        session.logger.warning(f'DistoPAE {s}: agreement: skipped {m}')
+        session.logger.warning(f'AlphaLens {s}: agreement: skipped {m}')
     plot_open = plot is not None and not plot.closed()
     if agr is None:
         reason = err or f'fewer than two of the {n_runs} seeds or models have contact probabilities'
-        session.logger.warning(f'DistoPAE {s}: no agreement view: {reason}')
+        session.logger.warning(f'AlphaLens {s}: no agreement view: {reason}')
         if plot_open:
             plot.agreement_failed(reason)
     else:
@@ -238,7 +253,7 @@ def log_agreement(session, pae, threshold, seconds=None):
     from .agreement import TOP_N
     from .contacts import row_chain_ids
     agr = pae.agreement
-    msg = f'DistoPAE {escape(str(pae.structure))}: agreement between {agr.n} {agr.kind}s'
+    msg = f'AlphaLens {escape(str(pae.structure))}: agreement between {agr.n} {agr.kind}s'
     if seconds is not None:
         msg += f' (read in {seconds:.1f} s)'
     scores = agr.chain_pair_scores(row_chain_ids(pae), threshold)
@@ -265,12 +280,12 @@ def log_agreement(session, pae, threshold, seconds=None):
 #
 def prepare_prediction(session, structure, pae_file=None, distogram=None, cutoff=8.0):
     '''
-    Read PAE (and AF3 contact_probs) for a structure, attach a DistoPAE object as
+    Read PAE (and AF3 contact_probs) for a structure, attach an AlphaLensPAE object as
     structure.alphafold_pae. Returns (pae, distogram_path or None, contact_probs, pae_path).
     '''
     from chimerax.core.errors import UserError
     from . import data
-    from .pae import DistoPAE
+    from .pae import AlphaLensPAE
 
     spath = getattr(structure, 'filename', None)
     files = data.find_prediction_files(spath) if spath else data.PredictionFiles(None)
@@ -284,7 +299,7 @@ def prepare_prediction(session, structure, pae_file=None, distogram=None, cutoff
     except Exception as e:
         raise UserError(f'Could not read PAE from {pae_path}: {e}')
 
-    pae = DistoPAE(pae_path, structure, matrix)
+    pae = AlphaLensPAE(pae_path, structure, matrix)
     if not pae.reduce_matrix_to_residues_in_structure():
         raise UserError(f'Structure {structure} has {pae.num_residue_rows} residues and '
                         f'{pae.num_atom_rows} non-polymer atoms, which does not match the '
@@ -300,7 +315,7 @@ def prepare_prediction(session, structure, pae_file=None, distogram=None, cutoff
 
     kind = {'af2': 'AlphaFold2', 'af3': 'AlphaFold3', 'colabfold': 'ColabFold'}.get(files.kind, '')
     model = f' {files.model_name}' if files.model_name else ''
-    msg = f'DistoPAE {structure}: {kind}{model}, PAE from {pae_path}'
+    msg = f'AlphaLens {structure}: {kind}{model}, PAE from {pae_path}'
     if dpath:
         msg += f', distogram {dpath}'
     elif contact_probs is not None:
@@ -313,9 +328,9 @@ def prepare_prediction(session, structure, pae_file=None, distogram=None, cutoff
         try:
             pae.set_distogram_metrics(data.contact_metrics(contact_probs, pae_path, cutoff=8.0),
                                       contact_probs.shape[0])
-            session.logger.info(f'DistoPAE {structure}: ' + _interface_summary(pae))
+            session.logger.info(f'AlphaLens {structure}: ' + _interface_summary(pae))
         except ValueError as e:
-            session.logger.warning(f'DistoPAE {structure}: ignoring contact_probs: {e}')
+            session.logger.warning(f'AlphaLens {structure}: ignoring contact_probs: {e}')
         if cutoff != 8.0:
             session.logger.warning('AF3 contact_probs are fixed at 8 Å; cutoff ignored')
     return pae, dpath, contact_probs, pae_path
@@ -335,7 +350,7 @@ def start_distogram(session, structure, pae, plot, dpath, cutoff, mode=None, wai
         def work():
             result = _load_metrics(dpath, cutoff)
             session.ui.thread_safe(done, *result)
-        threading.Thread(target=work, name='distopae-distogram', daemon=True).start()
+        threading.Thread(target=work, name='alphalens-distogram', daemon=True).start()
 
 
 def _load_metrics(path, cutoff):
@@ -359,7 +374,7 @@ def _distogram_loaded(session, structure, pae, plot, metrics, error, seconds, mo
         except ValueError as e:
             error = str(e)
     if error is not None:
-        session.logger.warning(f'DistoPAE {structure}: {error}')
+        session.logger.warning(f'AlphaLens {structure}: {error}')
         if plot_open:
             plot.distogram_failed(error)
         if contact_probs is not None:
@@ -370,14 +385,14 @@ def _distogram_loaded(session, structure, pae, plot, metrics, error, seconds, mo
                                           contact_probs.shape[0])
             except ValueError:
                 return
-            session.logger.info(f'DistoPAE {structure}: using AF3 contact_probs instead')
+            session.logger.info(f'AlphaLens {structure}: using AF3 contact_probs instead')
             if plot_open:
                 plot.set_data_status(f'contact_probs from AF3 confidences; distogram failed: {error}')
                 plot.data_changed()
             if on_loaded:
                 on_loaded()
         return
-    session.logger.info(f'DistoPAE {structure}: distogram loaded in {seconds:.1f} s. '
+    session.logger.info(f'AlphaLens {structure}: distogram loaded in {seconds:.1f} s. '
                         + _interface_summary(pae))
     if plot_open:
         plot.distogram_loaded()
@@ -425,8 +440,8 @@ def _resolve_structure(session, structure):
     if len(ss) == 1:
         return ss[0]
     if not ss:
-        raise UserError('No structure open; use "distopae open <prediction directory>"')
-    raise UserError(f'{len(ss)} structures open; specify one, e.g. "distopae #{ss[0].id_string}"')
+        raise UserError('No structure open; use "alphalens open <prediction directory>"')
+    raise UserError(f'{len(ss)} structures open; specify one, e.g. "alphalens #{ss[0].id_string}"')
 
 
 # -----------------------------------------------------------------------------
@@ -456,8 +471,8 @@ def _open_structure(session, spath, log=True):
     return s
 
 
-def distopae_open(session, path, rank=0, **kw):
-    '''Open a prediction directory (or structure file) and show the DistoPAE plot.'''
+def alphalens_open(session, path, rank=0, **kw):
+    '''Open a prediction directory (or structure file) and show the AlphaLens plot.'''
     from chimerax.core.errors import UserError
     from . import data
     path = os.path.abspath(os.path.expanduser(path))
@@ -471,14 +486,14 @@ def distopae_open(session, path, rank=0, **kw):
     else:
         raise UserError(f'{path} does not exist')
     s = _open_structure(session, spath)
-    return distopae(session, s, **kw)
+    return alphalens(session, s, **kw)
 
 
 def switch_model(session, plot, spath):
     '''Show another model of the same prediction in an existing plot window.'''
     from chimerax.atomic import AtomicStructure
     from chimerax.core.commands import run
-    from .pae import DistoPAE
+    from .pae import AlphaLensPAE
     old = plot.pae.structure
     real = os.path.realpath(spath)
     s = next((m for m in session.models.list(type=AtomicStructure)
@@ -493,17 +508,17 @@ def switch_model(session, plot, spath):
                 pass
     pae = getattr(s, 'alphafold_pae', None)
     dpath = contact_probs = pae_path = None
-    if not isinstance(pae, DistoPAE) or (pae.metrics is not None
+    if not isinstance(pae, AlphaLensPAE) or (pae.metrics is not None
                                          and pae.metrics.get('cutoff') != plot.cutoff):
         pae, dpath, contact_probs, pae_path = prepare_prediction(session, s, cutoff=plot.cutoff)
-    other = getattr(s, '_distopae_plot', None)
+    other = getattr(s, '_alphalens_plot', None)
     if other is not None and other is not plot and not other.closed():
         other.delete()
     if not old.deleted:
         old.display = False
-        old._distopae_plot = None
+        old._alphalens_plot = None
     s.display = True
-    s._distopae_plot = plot
+    s._alphalens_plot = plot
     plot.set_pae(pae)
     if pae.has_contact and dpath is None and pae.metrics.get('contact_only'):
         plot.set_data_status('contact probabilities from AF3 confidences; no distogram')
@@ -521,23 +536,41 @@ def start_tool_from_menu(session):
     from chimerax.atomic import AtomicStructure
     ss = session.models.list(type=AtomicStructure)
     if len(ss) != 1:
-        session.logger.warning('DistoPAE: open a prediction with "distopae open <directory>" '
-                               'or run "distopae #N" for an open predicted structure')
+        session.logger.warning('AlphaLens: open a prediction with "alphalens open <directory>" '
+                               'or run "alphalens #N" for an open predicted structure')
         return None
     try:
-        distopae(session, ss[0])
+        alphalens(session, ss[0])
     except Exception as e:
-        session.logger.warning(f'DistoPAE: {e}')
+        session.logger.warning(f'AlphaLens: {e}')
         return None
-    return getattr(ss[0], '_distopae_plot', None)
+    return getattr(ss[0], '_alphalens_plot', None)
 
 
 # -----------------------------------------------------------------------------
 #
+_old_name_noted = False
+
+
+def _old_name(func, new):
+    '''func under the former command name "distopae", with a note in the log the first time.'''
+    import functools
+
+    @functools.wraps(func)
+    def run(session, *args, **kw):
+        global _old_name_noted
+        if not _old_name_noted:
+            _old_name_noted = True
+            session.logger.info(f'DistoPAE is now called AlphaLens: the command is "{new}"; '
+                                f'"distopae" still works for now')
+        return func(session, *args, **kw)
+    return run
+
+
 def register_commands(logger):
     from chimerax.core.commands import (CmdDesc, register, OpenFileNameArg, FileNameArg,
                                         SaveFileNameArg, FloatArg, BoolArg, IntArg, EnumOf,
-                                        ColormapArg, ColormapRangeArg)
+                                        ColormapArg, ColormapRangeArg, Or)
     from chimerax.atomic import AtomicStructureArg
     common = [('distogram', OpenFileNameArg),
               ('mode', EnumOf(MODE_NAMES)),
@@ -549,11 +582,21 @@ def register_commands(logger):
               ('min_prob', FloatArg),
               ('save_contacts', SaveFileNameArg),
               ('wait', BoolArg)]
-    desc = CmdDesc(optional=[('structure', AtomicStructureArg)],
-                   keyword=[('pae_file', OpenFileNameArg)] + common,
-                   synopsis='Show PAE / contact probability / distogram spread plot')
-    register('distopae', desc, distopae, logger=logger)
-    odesc = CmdDesc(required=[('path', FileNameArg)],
-                    keyword=[('rank', IntArg)] + common,
-                    synopsis='Open AlphaFold2/AlphaFold3 prediction and show DistoPAE plot')
-    register('distopae open', odesc, distopae_open, logger=logger)
+
+    def desc():
+        # An open structure, or a prediction folder / model file to open as "alphalens open" does
+        return CmdDesc(optional=[('structure', Or(AtomicStructureArg, OpenFileNameArg))],
+                       keyword=[('pae_file', OpenFileNameArg), ('rank', IntArg)] + common,
+                       synopsis='Show the AlphaLens plot (PAE, contact probability, model '
+                                'contacts, spread, agreement) for a predicted structure')
+
+    def odesc():
+        return CmdDesc(required=[('path', FileNameArg)],
+                       keyword=[('rank', IntArg)] + common,
+                       synopsis='Open an AlphaFold2/AlphaFold3 prediction and show the AlphaLens plot')
+
+    register('alphalens', desc(), alphalens, logger=logger)
+    register('alphalens open', odesc(), alphalens_open, logger=logger)
+    # Former name (DistoPAE up to 0.4), so that existing scripts and notes keep working
+    register('distopae', desc(), _old_name(alphalens, 'alphalens'), logger=logger)
+    register('distopae open', odesc(), _old_name(alphalens_open, 'alphalens open'), logger=logger)
