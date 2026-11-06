@@ -72,7 +72,7 @@ def load(runs, cutoff=8.0, full_size=None, rows=None, known=None):
 
     runs       from data.agreement_runs(), best first
     full_size  tokens in the PAE matrix of the shown model; runs of another size are skipped
-    rows       matrix rows kept for the structure (DistoPAE._rows), or None for all rows
+    rows       matrix rows kept for the structure (AlphaLensPAE._rows), or None for all rows
     known      {path: P} already computed for these rows (the shown model)
     '''
     n = len(rows) if rows is not None else full_size

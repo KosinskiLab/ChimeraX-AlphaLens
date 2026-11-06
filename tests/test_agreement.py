@@ -5,7 +5,7 @@ import pickle
 import numpy as np
 import pytest
 
-from distopae import agreement, contacts, data
+from alphalens import agreement, contacts, data
 
 N = 6
 CHAINS = ['A', 'A', 'A', 'B', 'B', 'B']
@@ -175,7 +175,7 @@ def test_memory_limit(tmp_path, monkeypatch):
 
 
 class FakePAE:
-    '''What contacts.py reads from a DistoPAE.'''
+    '''What contacts.py reads from an AlphaLensPAE.'''
 
     def __init__(self, P, agr=None):
         from chimerax.atomic import Residue

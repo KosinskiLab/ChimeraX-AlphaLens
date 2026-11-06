@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copy only the files DistoPAE reads from one prediction directory, usually on a remote
+# Copy only the files AlphaLens reads from one prediction directory, usually on a remote
 # machine, so ChimeraX can open it locally.
 #
 #   scripts/fetch_pred.sh [--no-pickles] [user@]host:/path/to/prediction_dir local_dir
@@ -52,4 +52,4 @@ fi
 
 mkdir -p "$dest/$name"
 rsync -a "${progress[@]}" --prune-empty-dirs "${filters[@]}" "$src/" "$dest/$name/"
-echo "In ChimeraX:  distopae open $dest/$name"
+echo "In ChimeraX:  alphalens open $dest/$name"

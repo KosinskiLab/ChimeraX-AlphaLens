@@ -1,7 +1,7 @@
 from chimerax.core.toolshed import BundleAPI
 
 
-class _DistoPAEAPI(BundleAPI):
+class _AlphaLensAPI(BundleAPI):
     api_version = 1
 
     @staticmethod
@@ -15,4 +15,4 @@ class _DistoPAEAPI(BundleAPI):
         return start_tool_from_menu(session)
 
 
-bundle_api = _DistoPAEAPI()
+bundle_api = _AlphaLensAPI()
