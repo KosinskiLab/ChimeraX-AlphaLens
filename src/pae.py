@@ -9,8 +9,22 @@ pLDDT coloring) keeps working with data opened by this bundle.
 import numpy as np
 from chimerax.alphafold.pae import AlphaFoldPAE
 
+# The banded AlphaFold pLDDT colors (very low < 50, low < 70, confident < 90, very high), as
+# in the AlphaFold DB and the plot's pLDDT track. ChimeraX's "alphafold" palette blends them.
+PLDDT_BANDS = ((50, '#FF7D45'), (70, '#FFDB13'), (90, '#65CBF3'), (100, '#0053D6'))
 
-class DistoPAE(AlphaFoldPAE):
+
+def plddt_palette(scale=1.0):
+    '''"color bfactor" palette with sharp steps at 50, 70 and 90 (times scale).'''
+    stops, lo = [], 0
+    for hi, color in PLDDT_BANDS:
+        start = lo if lo == 0 else lo + 1e-5
+        stops += [f'{start * scale:.7g},{color}', f'{hi * scale:.7g},{color}']
+        lo = hi
+    return ':'.join(stops)
+
+
+class AlphaLensPAE(AlphaFoldPAE):
 
     def __init__(self, pae_path, structure, pae_matrix):
         # AlphaFoldPAE.__init__ reads the matrix itself via the module-level
@@ -29,6 +43,7 @@ class DistoPAE(AlphaFoldPAE):
         self.metrics = None             # dict from data.distogram_metrics, trimmed like PAE
         self.agreement = None           # agreement.Agreement over the seeds / models
         self._agreement_pending = None  # Callbacks while the agreement data load
+        self._model_contacts = None     # Cache of contacts.model_contacts()
 
     # ---------------------------------------------------------------------------
     #
@@ -97,3 +112,18 @@ class DistoPAE(AlphaFoldPAE):
         if finite.size and finite.max() <= 1.0:
             p = p * 100            # Some tools store pLDDT as 0-1
         return p
+
+    # ---------------------------------------------------------------------------
+    #
+    def color_plddt(self, log_command=False):
+        '''Color the structure by pLDDT in the banded AlphaFold colors.'''
+        m = self.structure
+        if m is None or m.deleted:
+            return
+        bf = m.atoms.bfactors
+        scale = 0.01 if len(bf) and bf.max() <= 1.0 else 1.0      # pLDDT stored as 0-1
+        cmd = f'color bfactor #{m.id_string} palette "{plddt_palette(scale)}"'
+        if not log_command:
+            cmd += ' log false'
+        from chimerax.core.commands import run
+        run(m.session, cmd, log=log_command)

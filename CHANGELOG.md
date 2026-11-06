@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.0
+
+* **Renamed from DistoPAE to AlphaLens**, as the plot now does more than show the distogram and
+  PAE: bundle ChimeraX-AlphaLens, command `alphalens`, tool Tools > Structure Prediction >
+  AlphaLens, repository KosinskiLab/chimerax-alphalens. `distopae` and `distopae open` still
+  work. Remove the old bundle with `toolshed uninstall DistoPAE`.
+* Predicted contacts are blue instead of red (blue reads as confident; red is kept for clashes):
+  the dots on the plot and the lines on the structure, darker and thicker for higher P, with the
+  scale next to the color bar. Weak contact lines are semi-transparent. The clicked contact is a
+  gold line, matching the gold ring around its dot.
+* **Model contacts** view: the residue pairs closer than 8 Å in the shown model (CB–CB, CA for
+  glycine, as in the distogram), colored by the predicted contact probability; `mode model`.
+  Hovering gives the CB–CB distance in the model in every view.
+* The contact view is labeled "Contact probability", the slider "Predicted contacts", and the tabs
+  explain their content in tooltips.
+* Show Contacts always draws all predicted contacts above the slider threshold, also after a box
+  was dragged, up to 10,000 lines (was 2,000).
+* Color pLDDT uses the banded AlphaFold pLDDT colors (< 50, 50–70, 70–90, > 90) instead of
+  ChimeraX's smooth "alphafold" palette.
+* `alphalens <folder or model file>` works without `open`.
+
 ## 0.4.0
 
 First public release.
