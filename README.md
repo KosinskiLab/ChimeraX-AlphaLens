@@ -12,9 +12,8 @@ the structure and exports them to CSV.
   alt="AlphaLens plot in the contact-probability view, with dots on the inter-chain contacts"></p>
 
 *The contact-probability view for an AlphaFold2 prediction of E. coli succinyl-CoA synthetase,
-SucC–SucD (UniProt P0A836, P0AGE9). Dots mark the inter-chain pairs with P ≥ 0.5 (red in this
-image from version 0.4; blue from 0.5 on). The ringed one was clicked; its values are in the line
-under the slider.*
+SucC–SucD (UniProt P0A836, P0AGE9). Blue dots mark the inter-chain pairs with P ≥ 0.5, darker for
+higher P. The one ringed in gold was clicked; its values are in the line under the slider.*
 
 | View | Matrix | Colors (dark = confident) |
 |---|---|---|
@@ -25,11 +24,12 @@ under the slider.*
 | Agreement | number of AF3 seeds or AF2 models in which the pair has P ≥ the slider threshold | 0 to the number of seeds or models |
 
 <p align="center"><img src="docs/images/views.png" width="760"
-  alt="The PAE, contact, spread and agreement views of one prediction"></p>
+  alt="The PAE, contact-probability, model-distance, spread and agreement views of one prediction, and its contacts drawn on the structure"></p>
 
-*The four views of the same prediction. In the spread view, grey marks pairs whose distance is
-mostly beyond the last distogram bin. The agreement view counts the five AlphaFold2 models in which
-each pair has P ≥ 0.5.*
+*The five views of the same prediction, and its inter-chain contacts with P ≥ 0.5 drawn on the
+structure by Show Contacts. In the spread view, grey marks pairs whose distance is mostly beyond
+the last distogram bin. The agreement view counts the five AlphaFold2 models in which each pair has
+P ≥ 0.5.*
 
 ## Install
 
@@ -286,6 +286,9 @@ distograms, CSV export, seed matching and loading errors without installing the 
 
 The plot window itself needs ChimeraX: build and install with `devel install`, then check it on an
 AlphaFold2 and an AlphaFold3 prediction.
+
+The images in this README are rendered from the installed bundle by
+`docs/render_readme_images.py`; its header says which predictions it needs and how to run it.
 
 ## License
 

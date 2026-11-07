@@ -23,7 +23,7 @@
 
 * **Renamed from DistoPAE to AlphaLens**, as the plot now does more than show the distogram and
   PAE: bundle ChimeraX-AlphaLens, command `alphalens`, tool Tools > Structure Prediction >
-  AlphaLens, repository KosinskiLab/chimerax-alphalens. `distopae` and `distopae open` still
+  AlphaLens, repository KosinskiLab/AlphaLens. `distopae` and `distopae open` still
   work. Remove the old bundle with `toolshed uninstall DistoPAE`.
 * Predicted contacts are blue instead of red (blue reads as confident; red is kept for clashes):
   the dots on the plot and the lines on the structure, darker and thicker for higher P, with the
