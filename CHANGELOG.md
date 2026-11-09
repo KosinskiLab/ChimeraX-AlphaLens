@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0
+
+* **The plot is saved in ChimeraX sessions** (`.cxs`). A session stores the plot's settings and the
+  paths of the PAE file and the distogram, never the matrices, so it stays small. When the session
+  opens, the plot is rebuilt from those files, with the same view, spread measure, contact threshold,
+  dragged box, clicked contact, pLDDT slider and hidden residues. Contact lines and what was shown
+  or hidden in the structure come back as saved.
+* If a distogram has moved, the plot opens without Spread and says so in the log. If the PAE file is
+  gone too, the session still opens with the structure and its contact lines, without the plot.
+* Opening a session that has a plot needs AlphaLens 0.9 or newer. The plot's zoom and window
+  position are not saved.
+
 ## 0.8.0
 
 * **pLDDT slider** right of the pLDDT track: hides the parts of the 3D model below its value.
