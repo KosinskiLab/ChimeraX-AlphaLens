@@ -19,6 +19,7 @@ from chimerax.core.tools import ToolInstance
 from chimerax.alphafold.pae import PAEView, pae_pixmap
 
 from .contacts import BAND_EDGES, DEFAULT_MIN_P, DISTANCE_FAR, PICK_RGB, contact_rgb
+from .hide import RowHider, true_runs
 
 # pLDDT colors used by AlphaFold / the "alphafold" palette.
 PLDDT_BINS = ((90, (0, 83, 214)), (70, (101, 203, 243)), (50, (255, 219, 19)),
@@ -162,6 +163,8 @@ class AlphaLensView(PAEView):
         self.dot_pairs = None       # (N, 2) matrix rows (i, j) of each dot
         self.picked_xy = []         # Scene points of the picked contact (ring drawn)
         self.dot_click_cb = None
+        self.track_hidden = []      # [(start, end)] rows hidden in the 3D model, faded on the track
+        self.plddt_line = 0         # Value of the pLDDT slider, drawn across the track
         self._over_dot = False
         self.zoomed = False
         self._pan_last = None
@@ -197,12 +200,13 @@ class AlphaLensView(PAEView):
         self.track = track
         h = track[1] if track else n
         m = 0.07 * n                        # Margin for chain labels
+        w = n + (2 if track else 1.3) * m   # With room on the right for the pLDDT slider
         if keep_zoom and self.zoomed:
             center = self.mapToScene(self.viewport().rect().center())
-            scene.setSceneRect(-m, -m, n + 1.3 * m, h + 1.3 * m)
+            scene.setSceneRect(-m, -m, w, h + 1.3 * m)
             self.centerOn(center)
         else:
-            scene.setSceneRect(-m, -m, n + 1.3 * m, h + 1.3 * m)
+            scene.setSceneRect(-m, -m, w, h + 1.3 * m)
             self.reset_zoom()
         self._timer.start()
         self.viewport().update()
@@ -261,6 +265,8 @@ class AlphaLensView(PAEView):
 
     def mousePressEvent(self, event):
         from Qt.QtCore import Qt
+        if event.button() == Qt.MouseButton.RightButton:
+            return                  # The context menu; keep the selection and the drag box
         pan = (event.button() == Qt.MouseButton.MiddleButton or
                (event.button() == Qt.MouseButton.LeftButton and
                 event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
@@ -413,6 +419,15 @@ class AlphaLensView(PAEView):
             for frac in (0.7, 0.9):     # pLDDT 70 / 90 guide lines
                 y = self.track[1] - frac * (self.track[1] - self.track[0])
                 painter.drawLine(vp(0, y), vp(n, y))
+            for start, end in self.track_hidden:
+                painter.fillRect(QRectF(vp(start, self.track[0]), vp(end, self.track[1])),
+                                 QColor(255, 255, 255, 190))
+            if self.plddt_line > 0:
+                y = self.track[1] - self.plddt_line / 100 * (self.track[1] - self.track[0])
+                line = QPen(QColor(20, 20, 20))
+                line.setWidthF(1.5)
+                painter.setPen(line)
+                painter.drawLine(vp(0, y), vp(n, y))
         if self.show_dividers and len(self.chains) > 1:
             pen = QPen(QColor(40, 40, 40))
             pen.setWidthF(1.2)
@@ -504,6 +519,8 @@ class AlphaLensPlot(ToolInstance):
         self._data_status = 'No distogram found for this prediction'
         self._track_offset = None
         self._plddt = pae.row_plddt()
+        self._hider = RowHider.for_pae(pae)
+        self._selected_hidden = np.zeros(len(self._plddt), bool)    # Rows hidden by "Hide selected"
         self._models = []
 
         ToolInstance.__init__(self, session, 'AlphaLens')
@@ -589,7 +606,7 @@ class AlphaLensPlot(ToolInstance):
         layout.addWidget(pw)
 
         self._view = gv = AlphaLensView(parent, self._rectangle_select, lambda: None,
-                                       self._report, self.step_mode, self._update_detail)
+                                       self._report, self.step_mode, self._view_changed)
         gv.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         gv.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         gv.setFrameShape(gv.Shape.NoFrame)
@@ -633,6 +650,17 @@ class AlphaLensPlot(ToolInstance):
         self._progress_timer = pt = QTimer(parent)
         pt.setInterval(250)
         pt.timeout.connect(self._show_progress)
+
+        # On the right of the pLDDT track, with the same scale: hides the model below its value
+        self._plddt_slider = ps = QSlider(Qt.Orientation.Vertical, gv.viewport())
+        ps.setRange(0, 100)
+        ps.setToolTip('Hide the parts of the model with pLDDT below this value')
+        ps.valueChanged.connect(self._plddt_slider_moved)
+        self._plddt_value = QLabel('0', gv.viewport())
+        self._plddt_timer = pdt = QTimer(parent)
+        pdt.setSingleShot(True)
+        pdt.setInterval(100)
+        pdt.timeout.connect(self._apply_plddt_threshold)
 
         self._info = QLabel(parent)
         self._info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -693,6 +721,7 @@ class AlphaLensPlot(ToolInstance):
         same_size = pae.matrix_size == self._pae.matrix_size
         self._end_progress()                # A read for the previous model is no longer shown
         self._detach_structure()
+        self._restore_hidden()
         from . import contacts
         contacts.clear_picked_contact(self._pae.structure)
         if same_size and pae.agreement is None:
@@ -703,6 +732,10 @@ class AlphaLensPlot(ToolInstance):
         if not same_size:
             self._picked = None
         self._plddt = pae.row_plddt()
+        self._hider = RowHider.for_pae(pae)
+        if not same_size:
+            self._selected_hidden = np.zeros(len(self._plddt), bool)
+        self._apply_hidden()
         self._color_blocks = None
         self._block_rgb = None
         self._data_status = ('contact probabilities loaded' if pae.has_distogram or pae.has_contact
@@ -1209,6 +1242,75 @@ class AlphaLensPlot(ToolInstance):
         if getattr(self, '_colorbar_args', None) is not None:
             self._draw_colorbar(*self._colorbar_args)
 
+    # -- Hiding parts of the model -----------------------------------------------------
+    def _view_changed(self):
+        self._place_plddt_slider()
+        self._update_detail()
+
+    def _place_plddt_slider(self):
+        '''Put the slider right of the track, so that its handle follows the track's scale.'''
+        v, slider, value = self._view, self._plddt_slider, self._plddt_value
+        if v.track is None:
+            slider.hide()
+            value.hide()
+            return
+        from Qt.QtCore import QPointF
+        from Qt.QtWidgets import QStyle
+        top_right = v.mapFromScene(QPointF(v.n, v.track[0]))
+        bottom = v.mapFromScene(QPointF(v.n, v.track[1])).y()
+        handle = slider.style().pixelMetric(QStyle.PixelMetric.PM_SliderLength, None, slider)
+        width = slider.sizeHint().width()
+        x = min(top_right.x() + 4, v.viewport().width() - width)
+        y = top_right.y() - handle // 2
+        slider.setGeometry(x, y, width, bottom - top_right.y() + handle)
+        value.adjustSize()
+        value.move(x + (width - value.width()) // 2, y - value.height())
+        shown = bottom > 0 and top_right.y() < v.viewport().height()
+        slider.setVisible(shown)
+        value.setVisible(shown)
+
+    def _plddt_slider_moved(self, value):
+        self._view.plddt_line = value
+        self._plddt_value.setText(str(value))
+        self._place_plddt_slider()
+        self._view.viewport().update()
+        self._plddt_timer.start()           # Debounce while dragging
+
+    def _apply_plddt_threshold(self):
+        self._apply_hidden()
+        t = self._plddt_slider.value()
+        n = int((self._plddt < t).sum())
+        self.session.logger.status(f'AlphaLens: {n} residues with pLDDT < {t} hidden' if t
+                                   else 'AlphaLens: pLDDT slider off')
+
+    def _apply_hidden(self):
+        self._hider.apply(plddt=self._plddt < self._plddt_slider.value(),
+                          selected=self._selected_hidden)
+        self._view.track_hidden = true_runs(self._hider.hidden_rows)
+        self._view.plddt_line = self._plddt_slider.value()
+        self._view.viewport().update()
+
+    def _restore_hidden(self):
+        if not self._pae.structure.deleted:
+            self._hider.restore()
+
+    def _hide_selected(self):
+        rows = self._selected_to_hide()
+        if not rows.any():
+            return
+        self._selected_hidden = self._selected_hidden | rows
+        self._apply_hidden()                # The selection stays, so that it can be hidden again
+        self.session.logger.info(f'AlphaLens {self._pae.structure}: hid {int(rows.sum())} selected '
+                                 f'residues; right-click the plot and use "Show hidden" to restore them')
+
+    def _selected_to_hide(self):
+        '''Rows selected in ChimeraX and not yet hidden by "Hide selected".'''
+        return self._hider.selected_rows() & ~self._selected_hidden
+
+    def _show_hidden(self):
+        self._selected_hidden = np.zeros_like(self._selected_hidden)
+        self._apply_hidden()
+
     # -- Zoom detail ----------------------------------------------------------------
     def _clear_detail(self):
         scene = self._view.scene()
@@ -1331,6 +1433,7 @@ class AlphaLensPlot(ToolInstance):
                                    candidates=self._candidates() if self._threshold >= SLIDER_MIN else None)
         else:
             contacts.hide_contacts(self._pae.structure)
+        self._hider.apply()                 # Drawing lines can switch the model to cartoon
         self._update_controls()
         self._refresh_colorbar()
 
@@ -1550,7 +1653,8 @@ class AlphaLensPlot(ToolInstance):
     def _rectangle_select(self, xy1, xy2):
         n = self._pae.matrix_size
         (x1, y1), (x2, y2) = xy1, xy2
-        if self._track_offset is not None and min(y1, y2) >= n:
+        on_track = self._track_offset is not None and min(y1, y2) >= n
+        if on_track:
             y1, y2 = x1, x2          # Drag inside the pLDDT track selects columns only
         clamp = lambda v: int(min(max(v, 0), n - 1))
         r1, r2 = clamp(min(x1, x2)), clamp(max(x1, x2))
@@ -1566,6 +1670,10 @@ class AlphaLensPlot(ToolInstance):
             ranges = [(r1, r2), (r3, r4)] if off_diagonal else [(min(r1, r3), max(r2, r4))]
             self._select_rows(ranges)
         tiny = (r2 - r1) < 3 and (r4 - r3) < 3
+        if on_track and tiny:
+            self.session.selection.clear()      # A click on the track deselects
+        elif on_track:
+            self._select_rows([(r1, r2)])       # For "Hide selected" in the context menu
         if not tiny and self._pae.has_contact:
             # A dragged box draws the contacts inside it as lines on the structure
             self._struct_region = (r3, r4, r1, r2)
@@ -1641,6 +1749,11 @@ class AlphaLensPlot(ToolInstance):
             self._dots_all_views = checked
             self._redraw(keep_zoom=True)
 
+        hide = menu.addAction('Hide selected', self._hide_selected)
+        hide.setEnabled(bool(self._selected_to_hide().any()))
+        show = menu.addAction('Show hidden', self._show_hidden)
+        show.setEnabled(bool(self._selected_hidden.any()))
+        menu.addSeparator()
         menu.addAction('Fit plot (reset zoom)', self._view.reset_zoom)
         toggle('Dragging box colors structure', self._drag_colors_structure, set_drag)
         menu.addAction('Color plot from structure', self._color_from_structure)
@@ -1723,8 +1836,11 @@ class AlphaLensPlot(ToolInstance):
 
     def delete(self):
         self._detach_structure()
+        self._restore_hidden()              # Without the plot, nothing could show them again
         v = self._view
         try:                       # Nothing may fire into a half-deleted tool
+            self._plddt_timer.stop()
+            self._plddt_timer.timeout.disconnect()
             v._timer.stop()
             v._timer.timeout.disconnect()
             self._slider_timer.stop()

@@ -26,8 +26,8 @@ higher P. The one ringed in gold was clicked; its values are in the line under t
 <p align="center"><img src="docs/images/views.png" width="760"
   alt="The PAE, contact-probability, model-distance, spread and agreement views of one prediction, and its contacts drawn on the structure"></p>
 
-*The five views of the same prediction, and its inter-chain contacts with P ≥ 0.5 drawn on the
-structure by Show Contacts. In the spread view, grey marks pairs whose distance is mostly beyond
+*The five views of the same prediction, each with the predicted contacts as blue dots, and its
+inter-chain contacts with P ≥ 0.5 drawn on the structure by Show Contacts. In the spread view, grey marks pairs whose distance is mostly beyond
 the last distogram bin. The agreement view counts the five AlphaFold2 models in which each pair has
 P ≥ 0.5.*
 
@@ -41,7 +41,7 @@ macOS, Linux and Windows.
    pip needs it.
 2. In the ChimeraX command line:
 
-       toolshed install ~/Downloads/chimerax_alphalens-0.7.0-py3-none-any.whl
+       toolshed install ~/Downloads/chimerax_alphalens-0.8.0-py3-none-any.whl
 
 3. Restart ChimeraX.
 
@@ -119,6 +119,10 @@ bar above the plot shows how far it has come; the Spread tab turns on when it fi
   zoom, darker blue for higher P (the scale is next to the color bar). Right-click to turn them
   off, or to keep them to the contact-probability view. At most the 40,000 strongest pairs are
   shown as dots; CSV export is not capped by this display limit.
+* **Hide by pLDDT:** the vertical slider right of the pLDDT track hides the parts of the model
+  with pLDDT below its value; a line marks the value and hidden residues fade on the track.
+* **Hide selected:** drag along the pLDDT track to select residues, then right-click the plot and
+  choose Hide selected. It also hides residues selected in the 3D view. Show hidden restores them.
 * **Predicted contacts P ≥ slider:** one threshold (0.05–1, default 0.2) for the dots, the 3D
   lines, the agreement view and the CSV export. "hide in matrix too" also blanks matrix pixels
   below it.
