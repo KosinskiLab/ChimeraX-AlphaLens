@@ -41,7 +41,7 @@ macOS, Linux and Windows.
    pip needs it.
 2. In the ChimeraX command line:
 
-       toolshed install ~/Downloads/chimerax_alphalens-0.8.0-py3-none-any.whl
+       toolshed install ~/Downloads/chimerax_alphalens-0.9.0-py3-none-any.whl
 
 3. Restart ChimeraX.
 
@@ -216,6 +216,16 @@ pair, most reproduced and most probable first:
 | `model_distance` | distance in the shown model between CA atoms (C4′ for nucleotides, the atom itself for ligands) (Å) |
 | `seeds_with_p_ge_0.20`, `seeds` | with the agreement loaded: in how many of how many seeds (or `models`) the pair reaches the threshold |
 | `p_seed_<S>` / `p_model_<N>` | P in each seed or model |
+
+## Sessions
+
+`save mysession.cxs` keeps the plot with the session. The session stores the plot's settings and
+the paths of the PAE file and the distogram, never the matrices, so it stays small. When it opens,
+the plot is rebuilt from those files with the same view, contact threshold, dragged box, clicked
+contact, pLDDT slider and hidden residues. If the distogram has moved, the plot opens without
+Spread; if the PAE file is gone too, the structure and its contact lines still open, without the
+plot. Opening such a session needs AlphaLens 0.9 or newer. The plot's zoom and window position are
+not saved.
 
 ## Commands
 
