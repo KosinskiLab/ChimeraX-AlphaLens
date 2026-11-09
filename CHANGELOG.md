@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.0
+
+* Opening a session with a plot no longer logs `restore_snapshot for "AlphaLensPlot" returned None`.
+  Sessions saved with 0.9.0 open normally. The session test now fails on any warning or error logged
+  during a normal save and restore.
+
 ## 0.9.0
 
 * **The plot is saved in ChimeraX sessions** (`.cxs`). A session stores the plot's settings and the
