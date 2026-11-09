@@ -484,7 +484,9 @@ class AlphaLensPlot(ToolInstance):
         self._agreement_status = None       # Message while their contact probabilities load
         self._agreement_error = None        # Why the agreement view could not be made
         self._dots_on = True
-        self._dots_all_views = False
+        self._dots_all_views = True         # Contact dots on every matrix, not only the contact view
+        self._load_progress = None          # data.LoadProgress while a distogram is being read
+        self._agreement_progress = None     # The same while the seeds or models are being read
         self._mask_matrix = False           # Also blank matrix pixels below the threshold
         self._pair_cache = None             # (pairs, probs) with P >= SLIDER_MIN, strongest first
         self._struct_contacts = False       # Contacts drawn on the structure
@@ -571,6 +573,21 @@ class AlphaLensPlot(ToolInstance):
         sl.addWidget(fit)
         layout.addWidget(sw)
 
+        # Shown only while a distogram is being read. The text is a separate label because
+        # the macOS style does not draw text inside a progress bar.
+        from Qt.QtWidgets import QProgressBar
+        self._progress_row = pw = QWidget(parent)
+        pl = QHBoxLayout(pw)
+        pl.setContentsMargins(0, 0, 0, 0)
+        self._progress_label = QLabel(pw)
+        pl.addWidget(self._progress_label)
+        self._progress_bar = pb = QProgressBar(pw)
+        pb.setRange(0, 1000)
+        pb.setTextVisible(False)
+        pl.addWidget(pb, stretch=1)
+        pw.hide()
+        layout.addWidget(pw)
+
         self._view = gv = AlphaLensView(parent, self._rectangle_select, lambda: None,
                                        self._report, self.step_mode, self._update_detail)
         gv.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -613,6 +630,9 @@ class AlphaLensPlot(ToolInstance):
         st.setSingleShot(True)
         st.setInterval(120)
         st.timeout.connect(self._apply_threshold)
+        self._progress_timer = pt = QTimer(parent)
+        pt.setInterval(250)
+        pt.timeout.connect(self._show_progress)
 
         self._info = QLabel(parent)
         self._info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -671,6 +691,7 @@ class AlphaLensPlot(ToolInstance):
     def set_pae(self, pae):
         '''Show another model (same prediction) in this window.'''
         same_size = pae.matrix_size == self._pae.matrix_size
+        self._end_progress()                # A read for the previous model is no longer shown
         self._detach_structure()
         from . import contacts
         contacts.clear_picked_contact(self._pae.structure)
@@ -787,7 +808,8 @@ class AlphaLensPlot(ToolInstance):
         if pae.has_distogram:
             modes.append('spread')
         if pae.agreement is not None or (pae.has_contact and len(self._agreement_runs) >= 2
-                                         and self._agreement_error is None):
+                                         and self._agreement_error is None
+                                         and self._load_progress is None):
             modes.append('agreement')       # Loaded when first shown
         return modes
 
@@ -837,13 +859,17 @@ class AlphaLensPlot(ToolInstance):
         except Exception as e:
             self.agreement_failed(str(e))
 
-    def agreement_loading(self, n, kind):
+    def agreement_loading(self, n, kind, progress):
         self._agreement_status = f'Loading the contact probabilities of {n} {kind}s ...'
+        self._agreement_progress = progress
+        self._sync_progress()
         self._info.setText(self._agreement_status)
         self._update_controls()
 
     def agreement_loaded(self, show=False):
         self._agreement_status = None
+        self._agreement_progress = None
+        self._sync_progress()
         self._info.setText('')
         if show:
             self._mode = 'agreement'
@@ -852,6 +878,8 @@ class AlphaLensPlot(ToolInstance):
 
     def agreement_failed(self, reason):
         self._agreement_status = None
+        self._agreement_progress = None
+        self._sync_progress()
         self._agreement_error = reason
         self._info.setText(f'No agreement view: {reason}')
         self._update_controls()
@@ -870,10 +898,10 @@ class AlphaLensPlot(ToolInstance):
         runs = self._agreement_runs
         if self._agreement_error:
             why = self._agreement_error
+        elif self._load_progress is not None:
+            why = 'the distogram is still loading'
         elif not self._pae.has_contact:
-            if self._data_status.startswith('Loading'):
-                why = 'the distogram is still loading'
-            elif runs and runs[0]['kind'] == 'model':
+            if runs and runs[0]['kind'] == 'model':
                 why = ('the result pickles have no distogram (AlphaPulldown removes it unless '
                        'run with --noremove_keys_from_pickles)')
             else:
@@ -944,17 +972,50 @@ class AlphaLensPlot(ToolInstance):
     # ---------------------------------------------------------------------------
     # Data loading status
     #
-    def distogram_loading(self, path):
+    def distogram_loading(self, path, progress):
         self._data_status = f'Loading distogram {path} ...'
+        self._load_progress = progress
+        self._sync_progress()
         self._update_controls()
+        if self._pae.has_contact:
+            self._redraw(keep_zoom=True)    # The heading says where the contacts come from
 
     def distogram_loaded(self):
         self._data_status = 'ok'
+        self._end_progress()
         self.data_changed()
 
     def distogram_failed(self, message):
         self._data_status = f'Distogram could not be read: {message}'
+        self._end_progress()
         self._update_controls()
+
+    def _sync_progress(self):
+        '''Show the progress row while something is being read, else hide it.'''
+        if self._load_progress is None and self._agreement_progress is None:
+            self._progress_timer.stop()
+            self._progress_row.hide()
+        else:
+            self._show_progress()
+            self._progress_row.show()
+            self._progress_timer.start()
+
+    def _show_progress(self):
+        p = self._load_progress or self._agreement_progress
+        if p is None:
+            return
+        fraction = p.fraction()
+        bar = self._progress_bar
+        if fraction is None:
+            bar.setRange(0, 0)              # Busy indicator until the file size is known
+        else:
+            bar.setRange(0, 1000)
+            bar.setValue(int(1000 * fraction))
+        self._progress_label.setText(p.message())
+
+    def _end_progress(self):
+        self._load_progress = None
+        self._sync_progress()
 
     def _update_controls(self):
         avail = self.available_modes()
@@ -986,8 +1047,10 @@ class AlphaLensPlot(ToolInstance):
                              else f'{reasons.get(key, "")} ({self._data_status})')
             b.setEnabled(enabled)
         eb = self._export_button
-        eb.setEnabled(self._pae.has_contact)
-        if self._pae.has_contact:
+        eb.setEnabled(self._pae.has_contact and self._load_progress is None)
+        if self._load_progress is not None:
+            eb.setToolTip('Available when the distogram has loaded')
+        elif self._pae.has_contact:
             agr = self._pae.agreement
             where = ' inside the dragged box' if self._struct_region is not None else ''
             per_run = f', with P in each of the {agr.n} {agr.kind}s' if agr is not None else ''
@@ -1117,7 +1180,8 @@ class AlphaLensPlot(ToolInstance):
         src = ''
         if mode.key in ('contact', 'model') and self._pae.has_contact \
                 and self._pae.metrics.get('contact_only'):
-            src = ' <span style="color:gray">(AF3 contact_probs; no distogram)</span>'
+            note = 'distogram loading' if self._load_progress is not None else 'no distogram'
+            src = f' <span style="color:gray">(AF3 contact_probs; {note})</span>'
         if mode.key == 'model' and not self._pae.has_contact:
             src = ' <span style="color:gray">(no contact probabilities: contacts in one color)</span>'
         pool = (f' <span style="color:gray">[overview {f}×{f} {mode.pool}-pooled; '
@@ -1353,9 +1417,10 @@ class AlphaLensPlot(ToolInstance):
             p.fillRect(QRectF(sx, 2, 14, gh), QColor(*UNDEFINED_GRAY))
             p.drawRect(QRectF(sx, 2, 14, gh))
             p.drawText(int(sx + 18), 2 + gh, 'far (>21.7 Å)')
+            sx += 18 + fm.horizontalAdvance('far (>21.7 Å)') + 14
         elif mode.key == 'model':
             sx = self._draw_distance_ramp(p, sx, gh)
-        if dots and not (self._view_mode == 'spread' and self._far_mask() is not None):
+        if dots:
             # Predicted contacts (dots and lines): blue ramp from the threshold to 1
             label = 'contacts:'
             p.drawText(int(sx), 2 + gh, label)
@@ -1664,6 +1729,8 @@ class AlphaLensPlot(ToolInstance):
             v._timer.timeout.disconnect()
             self._slider_timer.stop()
             self._slider_timer.timeout.disconnect()
+            self._progress_timer.stop()
+            self._progress_timer.timeout.disconnect()
         except Exception:
             pass
         v.dot_click_cb = None

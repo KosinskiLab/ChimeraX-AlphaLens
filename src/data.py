@@ -19,12 +19,14 @@ AlphaFold3 directory
     logits (L, L, 64), present only if AF3 was run with distogram saving enabled.
 """
 
+import contextlib
 import glob
 import gzip
 import json
 import os
 import pickle
 import re
+import time
 
 import numpy as np
 
@@ -226,7 +228,141 @@ def _af3_distogram(d, seed=None):
 # Cheap availability checks (no full load)
 # -----------------------------------------------------------------------------
 
-def _open_maybe_gz(path):
+class LoadProgress:
+    """How far the read of one or several distograms has come. The reading thread writes it,
+    the plot polls it."""
+
+    READ_SHARE = 0.9            # Part of a file's share for reading it; the rest for computing
+
+    def __init__(self, steps=1):
+        self.steps = steps      # Files to read
+        self.step = 0           # Files finished
+        self.label = 'distogram'
+        self.total = 0          # Size of the current file in bytes (0: not known yet)
+        self.bytes_read = 0
+        self.computed = None    # Fraction of its matrices computed, once the file has been read
+        self.started = time.monotonic()
+
+    def next_file(self, step, label):
+        """Start file number step (from 0) of several; label says what it is, e.g. 'seed 7'."""
+        self.total = self.bytes_read = 0
+        self.computed = None
+        self.step = step
+        self.label = f'{label} ({step + 1} of {self.steps})'
+
+    def _file_fraction(self):
+        if self.computed is not None:
+            return self.READ_SHARE + (1 - self.READ_SHARE) * self.computed
+        if not self.total:
+            return None
+        return self.READ_SHARE * min(1.0, self.bytes_read / self.total)
+
+    def fraction(self):
+        """Overall progress from 0 to 1, or None while the size of a single file is not known."""
+        f = self._file_fraction()
+        if f is None and self.steps == 1:
+            return None
+        return (self.step + (f or 0)) / self.steps
+
+    def seconds_left(self):
+        """Estimated time to finish, or None if it is too early to tell."""
+        if self.steps > 1:
+            done = self.fraction()
+        elif not self.total or self.computed is not None:
+            return None
+        else:
+            done = min(1.0, self.bytes_read / self.total)
+        elapsed = time.monotonic() - self.started
+        if done < 0.01 or elapsed < 3:
+            return None
+        return elapsed * (1 - done) / done
+
+    def message(self):
+        if self.computed is not None:
+            what = 'contact probabilities' if self.steps > 1 else 'contact probabilities and spread'
+            return f'Loading {self.label}: computing {what}'
+        if not self.total:
+            return f'Loading {self.label} ...'
+        text = (f'Loading {self.label}: {_file_size(min(self.bytes_read, self.total))} of '
+                f'{_file_size(self.total)}')
+        left = self.seconds_left()
+        if left is None:
+            return text
+        if left < 60:
+            return f'{text}, less than a minute left'
+        return f'{text}, about {round(left / 60)} min left'
+
+
+def _file_size(n):
+    return f'{n / 1e9:.2f} GB' if n >= 1e9 else f'{n / 1e6:.0f} MB'
+
+
+class _ProgressFile:
+    """A binary file that counts in a LoadProgress how many bytes have been read from it."""
+
+    CHUNK = 16 << 20            # Large reads are split so that the bar keeps moving
+
+    def __init__(self, path, progress):
+        self._f = open(path, 'rb')
+        self._progress = progress
+        progress.total = os.fstat(self._f.fileno()).st_size
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self._f.close()
+
+    def __getattr__(self, name):
+        return getattr(self._f, name)
+
+    def read(self, n=-1):
+        if n is None:
+            n = -1
+        if 0 <= n <= self.CHUNK:
+            data = self._f.read(n)
+            self._progress.bytes_read += len(data)
+            return data
+        parts = []
+        while n != 0:
+            data = self._f.read(self.CHUNK if n < 0 else min(n, self.CHUNK))
+            if not data:
+                break
+            self._progress.bytes_read += len(data)
+            parts.append(data)
+            if n > 0:
+                n -= len(data)
+        return b''.join(parts)
+
+    def readinto(self, buffer):
+        view = memoryview(buffer).cast('B')
+        done = 0
+        while done < len(view):
+            n = self._f.readinto(view[done:done + self.CHUNK])
+            if not n:
+                break
+            self._progress.bytes_read += n
+            done += n
+        return done
+
+
+@contextlib.contextmanager
+def _open_with_progress(path, progress):
+    with _ProgressFile(path, progress) as raw:
+        if path.endswith('.gz'):
+            with gzip.open(raw, 'rb') as f:
+                yield f
+        elif path.endswith('.xz'):
+            import lzma
+            with lzma.open(raw, 'rb') as f:
+                yield f
+        else:
+            yield raw
+
+
+def _open_maybe_gz(path, progress=None):
+    if progress is not None:
+        return _open_with_progress(path, progress)
     if path.endswith('.gz'):
         return gzip.open(path, 'rb')
     if path.endswith('.xz'):
@@ -268,8 +404,8 @@ def contact_metrics(contact_probs, source, cutoff=8.0):
 # Loading
 # -----------------------------------------------------------------------------
 
-def _load_pickle(path):
-    with _open_maybe_gz(path) as f:
+def _load_pickle(path, progress=None):
+    with _open_maybe_gz(path, progress) as f:
         try:
             return pickle.load(f)
         except ModuleNotFoundError as e:
@@ -277,7 +413,9 @@ def _load_pickle(path):
                 raise
     from chimerax.alphafold.pae import _fix_alphafold_pickle_jax_dependency
     _fix_alphafold_pickle_jax_dependency()
-    with _open_maybe_gz(path) as f:
+    if progress is not None:
+        progress.bytes_read = 0
+    with _open_maybe_gz(path, progress) as f:
         return pickle.load(f)
 
 
@@ -319,12 +457,13 @@ def read_pae(path):
     return np.asarray(read_pae_matrix(path), dtype=np.float32), None
 
 
-def read_distogram(path):
+def read_distogram(path, progress=None):
     """
     Returns (values, bin_edges, are_logits) with values of shape (N, N, nbins).
+    progress: a LoadProgress to update while reading.
     """
     if path.endswith(PICKLE_SUFFIXES):
-        p = _load_pickle(path)
+        p = _load_pickle(path, progress)
         dg = p.get('distogram') if isinstance(p, dict) else None
         if dg is None:
             raise ValueError(f'{path} contains no distogram')
@@ -337,14 +476,14 @@ def read_distogram(path):
         del p
         are_logits = True
     elif path.endswith(NPZ_SUFFIXES):
-        with _open_maybe_gz(path) as f, np.load(f, allow_pickle=False) as z:
+        with _open_maybe_gz(path, progress) as f, np.load(f, allow_pickle=False) as z:
             key = next((k for k in ('distogram', 'logits', 'distogram_logits', 'probs')
                         if k in z.files), z.files[0])
             values = z[key]
             edges = z['bin_edges'] if 'bin_edges' in z.files else None
         are_logits = None
     else:
-        with _open_maybe_gz(path) as f:
+        with _open_maybe_gz(path, progress) as f:
             values = np.load(f, allow_pickle=False)
         edges = None
         are_logits = None
@@ -372,7 +511,7 @@ def bin_centers(edges):
     return np.concatenate([[edges[0] - step / 2], mids, [edges[-1] + step / 2]])
 
 
-def distogram_metrics(values, edges, are_logits=True, cutoff=8.0, chunk=32):
+def distogram_metrics(values, edges, are_logits=True, cutoff=8.0, chunk=32, progress=None):
     """
     Per-pair matrices from a distogram (N, N, nbins):
 
@@ -393,6 +532,8 @@ def distogram_metrics(values, edges, are_logits=True, cutoff=8.0, chunk=32):
     out = {k: np.empty((n, n), np.float32) for k in ('contact', 'std', 'entropy', 'mean', 'far')}
     tiny = np.float32(1e-12)
     for i0 in range(0, n, chunk):
+        if progress is not None:
+            progress.computed = i0 / n
         i1 = min(n, i0 + chunk)
         x = np.array(values[i0:i1], dtype=np.float32)
         if are_logits:
@@ -412,12 +553,14 @@ def distogram_metrics(values, edges, are_logits=True, cutoff=8.0, chunk=32):
     return out
 
 
-def distogram_contact(values, edges, are_logits=True, cutoff=8.0, chunk=32):
+def distogram_contact(values, edges, are_logits=True, cutoff=8.0, chunk=32, progress=None):
     """P(d < cutoff) only, computed as in distogram_metrics."""
     n = values.shape[0]
     nbelow = int(np.searchsorted(edges, cutoff, side='right'))
     out = np.empty((n, n), np.float32)
     for i0 in range(0, n, chunk):
+        if progress is not None:
+            progress.computed = i0 / n
         i1 = min(n, i0 + chunk)
         x = np.array(values[i0:i1], dtype=np.float32)
         if are_logits:
@@ -428,9 +571,9 @@ def distogram_contact(values, edges, are_logits=True, cutoff=8.0, chunk=32):
     return out
 
 
-def load_distogram_metrics(path, cutoff=8.0):
-    values, edges, are_logits = read_distogram(path)
-    m = distogram_metrics(values, edges, are_logits, cutoff=cutoff)
+def load_distogram_metrics(path, cutoff=8.0, progress=None):
+    values, edges, are_logits = read_distogram(path, progress)
+    m = distogram_metrics(values, edges, are_logits, cutoff=cutoff, progress=progress)
     m['path'] = path
     m['nbins'] = values.shape[-1]
     return m
@@ -560,14 +703,14 @@ def _af2_run_labels(names):
     return labels if len(set(labels)) == len(labels) else list(names)
 
 
-def run_contact_probs(run, cutoff=8.0):
+def run_contact_probs(run, cutoff=8.0, progress=None):
     """P(d < cutoff) (N x N, float32) of one run from agreement_runs()."""
     path = run['path']
     if run['source'] == 'distogram':
         if path.endswith(PICKLE_SUFFIXES) and not pickle_has_distogram(path):
             raise ValueError(f'{os.path.basename(path)} has no distogram')
-        values, edges, are_logits = read_distogram(path)
-        return distogram_contact(values, edges, are_logits, cutoff=cutoff)
+        values, edges, are_logits = read_distogram(path, progress)
+        return distogram_contact(values, edges, are_logits, cutoff=cutoff, progress=progress)
     if abs(cutoff - 8.0) > 1e-6:
         raise ValueError('AlphaFold3 contact_probs are fixed at 8 Å; another cutoff needs '
                          'the distogram')

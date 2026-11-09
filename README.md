@@ -41,7 +41,7 @@ macOS, Linux and Windows.
    pip needs it.
 2. In the ChimeraX command line:
 
-       toolshed install ~/Downloads/chimerax_alphalens-0.6.0-py3-none-any.whl
+       toolshed install ~/Downloads/chimerax_alphalens-0.7.0-py3-none-any.whl
 
 3. Restart ChimeraX.
 
@@ -99,8 +99,9 @@ keep the distogram by default:
 | ColabFold | `--save-all` (untested) | `*_all_rank_NNN_*.pickle` |
 
 A distogram holds N × N × 64 values, so it is large: a 2,000-residue complex gives about 0.5 GB
-(AF3, float16) or 1 GB (AF2, float32) before compression. The plot opens at once with PAE and loads
-the distogram in the background.
+(AF3, float16) or 1 GB (AF2, float32) before compression. The plot opens at once with PAE, and for
+AF3 with the contacts from `contact_probs`, and loads the distogram in the background. A progress
+bar above the plot shows how far it has come; the Spread tab turns on when it finishes.
 
 ## Using the plot
 
@@ -113,11 +114,11 @@ the distogram in the background.
 * **Model:** the dropdown lists the AF2 ranked models or AF3 samples of the same prediction that
   are present locally. The chosen model opens in the same window, superposed on the previous one,
   which is hidden; the view and zoom are kept.
-* **Contact dots:** in the contact-probability view, inter-chain pairs above the slider threshold
-  (pairs at least 24 matrix positions apart for a single chain) are drawn as blue dots that stay visible at any zoom,
-  darker blue for higher P (the scale is next to the color bar). Right-click to turn them off or
-  show them in every view. At most the 40,000 strongest pairs are shown as dots; CSV export is
-  not capped by this display limit.
+* **Contact dots:** in every view, inter-chain pairs above the slider threshold (pairs at least
+  24 matrix positions apart for a single chain) are drawn as blue dots that stay visible at any
+  zoom, darker blue for higher P (the scale is next to the color bar). Right-click to turn them
+  off, or to keep them to the contact-probability view. At most the 40,000 strongest pairs are
+  shown as dots; CSV export is not capped by this display limit.
 * **Predicted contacts P ≥ slider:** one threshold (0.05–1, default 0.2) for the dots, the 3D
   lines, the agreement view and the CSV export. "hide in matrix too" also blanks matrix pixels
   below it.
