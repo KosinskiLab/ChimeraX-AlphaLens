@@ -66,6 +66,10 @@ class _BackgroundLoad:
     def wait(self):
         self.finish()
 
+    @property
+    def pending(self):
+        return not self._finished
+
 
 def alphalens(session, structure=None, pae_file=None, distogram=None, mode=None, cutoff=8.0,
              palette=None, range=None, divider_lines=None, contacts=None, min_prob=None,
@@ -132,7 +136,9 @@ def alphalens(session, structure=None, pae_file=None, distogram=None, mode=None,
                 load = getattr(pae, name, None)
                 if load is not None:
                     load.wait()
-        if (save_contacts is not None or mode == 'agreement') and not pae.has_contact:
+        load = getattr(pae, '_distogram_load', None)
+        loading = load is not None and load.pending
+        if (save_contacts is not None or mode == 'agreement') and (loading or not pae.has_contact):
             raise UserError(f'{structure}: no contact probabilities (no distogram or AF3 '
                             f'contact_probs, or the distogram is still loading)')
         if plot is not None and not plot.closed():
@@ -176,6 +182,8 @@ def alphalens(session, structure=None, pae_file=None, distogram=None, mode=None,
                 plot.set_mode('contact')
         if mode == 'model':
             plot.set_mode('model')          # Model distances; contacts colored by P once loaded
+        if dpath and not wait and pae.has_contact:
+            _apply_contacts(session, pae, plot, contacts, min_prob)     # Redrawn once loaded
 
     if dpath:
         start_distogram(session, structure, pae, plot, dpath, cutoff,
@@ -256,14 +264,16 @@ def start_agreement(session, pae, plot, cutoff, wait=False, show=False, on_loade
         known[mt['path']] = mt['contact']
     rows, full_size = pae._rows, pae._full_size
     pae._agreement_pending = [(show, on_loaded)]
+    from .data import LoadProgress
+    progress = LoadProgress()
     if plot is not None and not plot.closed():
-        plot.agreement_loading(len(runs), runs[0]['kind'])
+        plot.agreement_loading(len(runs), runs[0]['kind'], progress)
 
     def work():
         from . import agreement
         t0 = time.time()
         try:
-            agr, msgs = agreement.load(runs, cutoff, full_size, rows, known)
+            agr, msgs = agreement.load(runs, cutoff, full_size, rows, known, progress)
             err = None
         except Exception as e:
             agr, msgs, err = None, [], f'{type(e).__name__}: {e}'
@@ -383,11 +393,14 @@ def prepare_prediction(session, structure, pae_file=None, distogram=None, cutoff
         msg += ', no distogram available (PAE only)'
     session.logger.info(msg)
 
-    if dpath is None and contact_probs is not None:
+    # Usable at once; a distogram, if there is one, replaces them when it has been read.
+    # They are fixed at 8 Å, so another cutoff has to wait for the distogram.
+    if contact_probs is not None and (dpath is None or cutoff == 8.0):
         try:
             pae.set_distogram_metrics(data.contact_metrics(contact_probs, pae_path, cutoff=8.0),
                                       contact_probs.shape[0])
-            session.logger.info(f'AlphaLens {structure}: ' + _interface_summary(pae))
+            if dpath is None:
+                session.logger.info(f'AlphaLens {structure}: ' + _interface_summary(pae))
         except ValueError as e:
             session.logger.warning(f'AlphaLens {structure}: ignoring contact_probs: {e}')
         if cutoff != 8.0:
@@ -401,17 +414,19 @@ def start_distogram(session, structure, pae, plot, dpath, cutoff, mode=None, wai
     def done(metrics, error, seconds):
         _distogram_loaded(session, structure, pae, plot, metrics, error, seconds, mode,
                           contact_probs, pae_path, on_loaded)
+    from .data import LoadProgress
+    progress = LoadProgress()
     if plot is not None:
-        plot.distogram_loading(dpath)
-    pae._distogram_load = load = _BackgroundLoad(lambda: _load_metrics(dpath, cutoff), done)
+        plot.distogram_loading(dpath, progress)
+    pae._distogram_load = load = _BackgroundLoad(lambda: _load_metrics(dpath, cutoff, progress), done)
     load.start(session, wait, 'alphalens-distogram')
 
 
-def _load_metrics(path, cutoff):
+def _load_metrics(path, cutoff, progress=None):
     from .data import load_distogram_metrics
     t0 = time.time()
     try:
-        m, err = load_distogram_metrics(path, cutoff), None
+        m, err = load_distogram_metrics(path, cutoff, progress), None
     except Exception as e:
         m, err = None, f'{type(e).__name__}: {e}'
     return m, err, time.time() - t0
