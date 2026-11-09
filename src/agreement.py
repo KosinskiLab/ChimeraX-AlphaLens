@@ -65,7 +65,7 @@ class Agreement:
         return out
 
 
-def load(runs, cutoff=8.0, full_size=None, rows=None, known=None):
+def load(runs, cutoff=8.0, full_size=None, rows=None, known=None, progress=None):
     '''
     Read the contact probabilities of every run. Returns (Agreement, or None if fewer than
     two runs could be read, and messages about the runs that were skipped).
@@ -74,6 +74,7 @@ def load(runs, cutoff=8.0, full_size=None, rows=None, known=None):
     full_size  tokens in the PAE matrix of the shown model; runs of another size are skipped
     rows       matrix rows kept for the structure (AlphaLensPAE._rows), or None for all rows
     known      {path: P} already computed for these rows (the shown model)
+    progress   a data.LoadProgress to update while reading
     '''
     n = len(rows) if rows is not None else full_size
     need = len(runs) * n * n * 2
@@ -82,13 +83,21 @@ def load(runs, cutoff=8.0, full_size=None, rows=None, known=None):
                          f'the limit is {MAX_BYTES / 2**30:.0f} GB')
     stack = np.empty((len(runs), n, n), np.float16)
     labels, msgs = [], []
+    known_paths = {path for path, P in (known or {}).items() if P.shape == (n, n)}
+    to_read = sum(run['path'] not in known_paths for run in runs)
+    if progress is not None:
+        progress.steps = max(1, to_read)
+    read = 0
     for run in runs:
         P = (known or {}).get(run['path'])
         if P is not None and P.shape != (n, n):
             P = None
         if P is None:
+            if progress is not None:
+                progress.next_file(read, run['label'])
+            read += 1
             try:
-                P = data.run_contact_probs(run, cutoff)
+                P = data.run_contact_probs(run, cutoff, progress)
             except Exception as e:
                 msgs.append(f'{run["label"]}: {e}')
                 continue

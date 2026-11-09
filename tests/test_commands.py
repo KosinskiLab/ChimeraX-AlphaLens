@@ -206,6 +206,51 @@ def test_wait_finishes_pending_distogram_before_export(session, tmp_path, monkey
     assert callbacks == ['loaded']
 
 
+def test_contact_probs_are_usable_while_the_distogram_loads(session, tmp_path):
+    structure, path = prediction(tmp_path)
+    conf = tmp_path / 'seed-1_sample-0' / 'confidences.json'
+    conf.write_text(json.dumps({'pae': [[1, 2], [3, 4]],
+                               'contact_probs': [[0., .9], [.9, 0.]]}))
+    pae, dpath, contact_probs, _ = cmd.prepare_prediction(session, structure)
+    assert dpath == str(path)
+    assert contact_probs is not None
+    assert pae.has_contact and not pae.has_distogram
+    assert pae.metrics['contact_only']
+
+
+def test_contact_probs_wait_for_the_distogram_with_another_cutoff(session, tmp_path):
+    structure, path = prediction(tmp_path)
+    conf = tmp_path / 'seed-1_sample-0' / 'confidences.json'
+    conf.write_text(json.dumps({'pae': [[1, 2], [3, 4]],
+                               'contact_probs': [[0., .9], [.9, 0.]]}))
+    pae, dpath, _, _ = cmd.prepare_prediction(session, structure, cutoff=6.0)
+    assert dpath == str(path)
+    assert not pae.has_contact
+
+
+def test_export_is_refused_while_the_distogram_is_still_loading(session, tmp_path):
+    structure, _ = prediction(tmp_path)
+    pae = PAE('', structure, np.zeros((2, 2)))
+    pae.metrics = {'contact': np.ones((2, 2)), 'cutoff': 8.0, 'contact_only': True}
+    pae._distogram_load = types.SimpleNamespace(pending=True, wait=lambda: None)
+    structure.alphafold_pae = pae
+    structure._alphalens_plot = Plot(pae)
+    session.ui.is_gui = True
+    out = tmp_path / 'contacts.csv'
+    with pytest.raises(UserError, match='still loading'):
+        cmd.alphalens(session, structure, save_contacts=str(out))
+    assert not out.exists()
+
+
+def test_background_load_reports_pending_until_applied(session):
+    applied = []
+    load = cmd._BackgroundLoad(lambda: (1,), applied.append)
+    assert load.pending
+    load.start(session, True, 'test')
+    assert applied == [1]
+    assert not load.pending
+
+
 def test_bad_distogram_keeps_passive_pae_view_available(session, tmp_path):
     structure, _ = prediction(tmp_path)
     pae = cmd.alphalens(session, structure, wait=True)

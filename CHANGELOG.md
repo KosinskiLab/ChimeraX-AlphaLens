@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.0
+
+* **Progress bar while distograms load**, above the plot: gigabytes read and the time left, then
+  the computing step, and for the Agreement view which seed or model is being read. Large
+  distograms over a network share take minutes.
+* **Contact dots on every matrix** (PAE, Contact probability, Model distances, Spread, Agreement),
+  not only on the contact-probability view. Right-click, "Show contact dots in all views", keeps
+  them to the contact-probability view.
+* AF3 contacts appear at once from `contact_probs`, and the distogram values replace them when it
+  has loaded. Before, the Contact probability tab and the contact lines waited for the distogram.
+  Export CSV and the Agreement tab stay off until the distogram has loaded, as they use its data.
+
 ## 0.6.0
 
 * **Model distances** view replaces Model contacts: the CB–CB distances in the shown model in grey
