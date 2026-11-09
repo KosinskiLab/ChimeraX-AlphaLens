@@ -14,5 +14,12 @@ class _AlphaLensAPI(BundleAPI):
         from .cmd import start_tool_from_menu
         return start_tool_from_menu(session)
 
+    @staticmethod
+    def get_class(class_name):
+        if class_name == 'AlphaLensPlot':
+            from .tool import AlphaLensPlot
+            return AlphaLensPlot
+        return None
+
 
 bundle_api = _AlphaLensAPI()

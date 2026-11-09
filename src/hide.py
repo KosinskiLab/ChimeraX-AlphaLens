@@ -74,6 +74,18 @@ class RowHider:
         turned_off[turn_off] = True
         setattr(items, attribute, shown)
 
+    def state(self):
+        '''What this object turned off, as lists of indices that can go into a session.'''
+        return {'ribbon_off': np.flatnonzero(self._ribbon_off).tolist(),
+                'atom_off': np.flatnonzero(self._atom_off).tolist()}
+
+    def set_state(self, state):
+        '''Take over what an earlier object of the same model had turned off.'''
+        for name, off in (('ribbon_off', self._ribbon_off), ('atom_off', self._atom_off)):
+            off[:] = False
+            indices = np.asarray(state.get(name, ()), int)
+            off[indices[(indices >= 0) & (indices < len(off))]] = True
+
     def selected_rows(self):
         '''Bool array: rows with an atom selected in ChimeraX.'''
         mask = np.zeros(self._n, bool)
