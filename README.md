@@ -41,7 +41,7 @@ macOS, Linux and Windows.
    pip needs it.
 2. In the ChimeraX command line:
 
-       toolshed install ~/Downloads/chimerax_alphalens-0.9.0-py3-none-any.whl
+       toolshed install ~/Downloads/chimerax_alphalens-0.10.0-py3-none-any.whl
 
 3. Restart ChimeraX.
 

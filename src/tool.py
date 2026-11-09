@@ -479,6 +479,12 @@ class AlphaLensView(PAEView):
 
 # -----------------------------------------------------------------------------
 #
+class _PlotBeingRestored:
+    '''What a session gets for a saved plot: the plot itself is built when the restore has ended.'''
+
+
+# -----------------------------------------------------------------------------
+#
 class AlphaLensPlot(ToolInstance):
 
     name = 'AlphaLens'
@@ -1868,9 +1874,6 @@ class AlphaLensPlot(ToolInstance):
 
     @classmethod
     def restore_snapshot(cls, session, data):
-        if not session.ui.is_gui:
-            return None             # The structure and its contact lines are restored anyway
-
         def restore(*_):
             from chimerax.core.triggerset import DEREGISTER
             from .cmd import restore_plot
@@ -1881,7 +1884,7 @@ class AlphaLensPlot(ToolInstance):
                                        f'{data.get("structure")}: {type(e).__name__}: {e}')
             return DEREGISTER
         session.triggers.add_handler('end restore session', restore)
-        return None
+        return _PlotBeingRestored()
 
     def restore_settings(self, st):
         '''Apply saved settings. What the session already restored (contact lines) is not redrawn.'''
