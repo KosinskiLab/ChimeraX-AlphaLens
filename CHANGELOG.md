@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0
+
+* **pLDDT slider** right of the pLDDT track: hides the parts of the 3D model below its value.
+* Dragging along the pLDDT track selects those residues; right-click, **Hide selected** hides them
+  and **Show hidden** restores them. Residues selected in the 3D view can be hidden the same way.
+  Only what was hidden this way is shown again, so side chains that were off stay off.
+* Right-clicking the plot no longer starts a drag or clears the box drawn by the last drag.
+
 ## 0.7.0
 
 * **Progress bar while distograms load**, above the plot: gigabytes read and the time left, then
