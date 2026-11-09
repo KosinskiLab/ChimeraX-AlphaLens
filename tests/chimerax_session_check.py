@@ -15,10 +15,24 @@ import numpy as np
 from Qt.QtCore import QTimer
 from chimerax.atomic import AtomicStructure
 from chimerax.core.commands import run
+from chimerax.core.logger import Log
 
 MODEL, OUT = os.environ['ALPHALENS_SESSION_MODEL'], os.environ['ALPHALENS_SESSION_OUT']
 LIMIT = 900
 failures = []
+logged = []
+
+
+def collect_log():
+    '''Keep what is logged, as a restore problem may only be a warning. A log added now would not
+    get messages, the Log tool takes them first, so the logger's methods are wrapped.'''
+    logger = session.logger
+    levels = {'info': Log.LEVEL_INFO, 'warning': Log.LEVEL_WARNING, 'error': Log.LEVEL_ERROR, 'bug': Log.LEVEL_BUG}
+    for name, level in levels.items():
+        def wrapped(msg, *a, original=getattr(logger, name), level=level, **k):
+            logged.append((level, str(msg)))
+            return original(msg, *a, **k)
+        setattr(logger, name, wrapped)
 
 
 def log(*a):
@@ -146,6 +160,9 @@ def verify(s):
     for k, v in saved['fields'].items():
         check(f'restored {k}', now[k] == v, f'{now[k]!r:.90} vs {v!r:.90}')
     check('spread still available', 'spread' in p.available_modes())
+    check('log was collected', any('AlphaLens' in m for _, m in logged))
+    bad = [m for level, m in logged if level != Log.LEVEL_INFO]
+    check('no warning or error logged while saving and restoring', not bad, str(bad)[:300])
     check('has distogram', p.pae.has_distogram)
     check('contact lines kept, hidden ones stay hidden', lines(s) == saved['lines'], f'{lines(s)} vs {saved["lines"]}')
     check('atoms and ribbons shown unchanged', shown(s) == saved['shown'], f'{shown(s)} vs {saved["shown"]}')
@@ -184,8 +201,12 @@ def no_files_check():
     check('files gone: session still opens', len(ss) == 1)
     check('files gone: no plot', ss and getattr(ss[0], '_alphalens_plot', None) is None)
     check('files gone: contact lines still there', ss and lines(ss[0]) == saved['lines'])
+    bad = [m for level, m in logged if level in (Log.LEVEL_ERROR, Log.LEVEL_BUG)
+           or 'restore_snapshot' in m or 'Traceback' in m or 'Unable to restore' in m]
+    check('files gone: only warnings about the missing files', not bad, str(bad)[:300])
     done()
 
 
+collect_log()
 log('start', MODEL)
 later(1500, start)
