@@ -23,6 +23,23 @@ def hider():
     return RowHider(4, np.arange(4), residues, np.repeat(np.arange(4), 2), atoms), residues, atoms
 
 
+def test_state_round_trip_shows_what_an_earlier_hider_hid():
+    first, residues, atoms = hider()
+    first.apply(plddt=np.array([True, True, False, False]))
+    assert first.state() == {'ribbon_off': [0, 1], 'atom_off': [0, 2]}
+    restored = RowHider(4, np.arange(4), residues, np.repeat(np.arange(4), 2), atoms)
+    restored.set_state(first.state())
+    restored.restore()
+    assert residues.ribbon_displays.tolist() == [True, True, True, False]
+    assert atoms.displays.tolist() == [True, False] * 4
+
+
+def test_set_state_ignores_indices_outside_the_model():
+    h, _, _ = hider()
+    h.set_state({'ribbon_off': [1, 99, -1], 'atom_off': [8]})
+    assert h.state() == {'ribbon_off': [1], 'atom_off': []}
+
+
 def mask(*rows):
     m = np.zeros(4, bool)
     m[list(rows)] = True

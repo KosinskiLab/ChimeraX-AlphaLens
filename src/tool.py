@@ -483,7 +483,8 @@ class AlphaLensPlot(ToolInstance):
 
     name = 'AlphaLens'
     SESSION_ENDURING = False
-    SESSION_SAVE = False
+    SESSION_SAVE = True                 # Settings and file paths only, see take_snapshot()
+    SNAPSHOT_VERSION = 1
 
     def __init__(self, session, pae, cutoff=8.0, pae_colormap=None, divider_lines=True):
         self._pae = pae                     # AlphaLensPAE instance
@@ -501,6 +502,7 @@ class AlphaLensPlot(ToolInstance):
         self._dots_on = True
         self._dots_all_views = True         # Contact dots on every matrix, not only the contact view
         self._load_progress = None          # data.LoadProgress while a distogram is being read
+        self._distogram_file = None         # Distogram of the shown model, saved in sessions
         self._agreement_progress = None     # The same while the seeds or models are being read
         self._mask_matrix = False           # Also blank matrix pixels below the threshold
         self._pair_cache = None             # (pairs, probs) with P >= SLIDER_MIN, strongest first
@@ -720,6 +722,7 @@ class AlphaLensPlot(ToolInstance):
         '''Show another model (same prediction) in this window.'''
         same_size = pae.matrix_size == self._pae.matrix_size
         self._end_progress()                # A read for the previous model is no longer shown
+        self._distogram_file = None
         self._detach_structure()
         self._restore_hidden()
         from . import contacts
@@ -1006,6 +1009,7 @@ class AlphaLensPlot(ToolInstance):
     # Data loading status
     #
     def distogram_loading(self, path, progress):
+        self._distogram_file = path
         self._data_status = f'Loading distogram {path} ...'
         self._load_progress = progress
         self._sync_progress()
@@ -1824,6 +1828,113 @@ class AlphaLensPlot(ToolInstance):
         from .cmd import save_contacts_csv
         return save_contacts_csv(self.session, self._pae, path, self._threshold,
                                  region=self._struct_region)
+
+    # ---------------------------------------------------------------------------
+    # Sessions store the settings and the paths of the prediction files, never the matrices:
+    # a distogram is gigabytes. The plot is rebuilt from those files when the session opens.
+    #
+    def take_snapshot(self, session, flags):
+        pae = self._pae
+        s = pae.structure
+        cmap = self._pae_colormap
+        return {
+            'version': self.SNAPSHOT_VERSION,
+            'structure': s,
+            'model_file': getattr(s, 'filename', None),
+            'pae_file': pae._pae_path,
+            'distogram_file': self._distogram_file,
+            'cutoff': self.cutoff,
+            'mode': self._mode,
+            'spread_measure': self._spread_measure,
+            'contact_scale': self._contact_scale,
+            'far_threshold': self._far_threshold,
+            'threshold': self._threshold,
+            'dots_on': self._dots_on,
+            'dots_all_views': self._dots_all_views,
+            'mask_matrix': self._mask_matrix,
+            'struct_contacts': self._struct_contacts,
+            'struct_region': self._struct_region,
+            'picked': None if self._picked is None else tuple(int(i) for i in self._picked),
+            'zoom_to_pick': self._zoom_to_pick,
+            'drag_colors_structure': self._drag_colors_structure,
+            'divider_lines': self._showing_chain_dividers,
+            'show_plddt': self._show_plddt,
+            'color_blocks': self._color_blocks is not None,
+            'plddt_slider': self._plddt_slider.value(),
+            'selected_hidden': np.flatnonzero(self._selected_hidden).tolist(),
+            'hider': self._hider.state(),
+            'pae_colormap': None if cmap is None else (cmap.data_values.tolist(), cmap.colors.tolist()),
+        }
+
+    @classmethod
+    def restore_snapshot(cls, session, data):
+        if not session.ui.is_gui:
+            return None             # The structure and its contact lines are restored anyway
+
+        def restore(*_):
+            from chimerax.core.triggerset import DEREGISTER
+            from .cmd import restore_plot
+            try:
+                restore_plot(session, data)
+            except Exception as e:      # A plot that cannot be rebuilt must not lose the session
+                session.logger.warning(f'AlphaLens: could not restore the plot of '
+                                       f'{data.get("structure")}: {type(e).__name__}: {e}')
+            return DEREGISTER
+        session.triggers.add_handler('end restore session', restore)
+        return None
+
+    def restore_settings(self, st):
+        '''Apply saved settings. What the session already restored (contact lines) is not redrawn.'''
+        self._spread_measure = st.get('spread_measure', self._spread_measure)
+        self._contact_scale = st.get('contact_scale', self._contact_scale)
+        self._far_threshold = st.get('far_threshold', self._far_threshold)
+        self._dots_on = st.get('dots_on', self._dots_on)
+        self._dots_all_views = st.get('dots_all_views', self._dots_all_views)
+        self._zoom_to_pick = st.get('zoom_to_pick', self._zoom_to_pick)
+        self._drag_colors_structure = st.get('drag_colors_structure', self._drag_colors_structure)
+        self._show_plddt = st.get('show_plddt', self._show_plddt)
+        self._mask_box.blockSignals(True)
+        self._mask_box.setChecked(bool(st.get('mask_matrix', False)))
+        self._mask_box.blockSignals(False)
+        self._mask_matrix = self._mask_box.isChecked()
+        self.set_threshold(st.get('threshold', self._threshold))    # Before _struct_contacts is set
+        n = len(self._plddt)
+        region = st.get('struct_region')
+        self._struct_region = None if region is None or max(region) >= n else tuple(region)
+        picked = st.get('picked')
+        self._picked = None if picked is None or max(picked) >= n else tuple(picked)
+        self._update_picked_marker()
+        self._struct_contacts = bool(st.get('struct_contacts')) and self._pae.has_contact
+        self._hider.set_state(st.get('hider', {}))
+        hidden = np.asarray(st.get('selected_hidden', ()), int)
+        self._selected_hidden[hidden[(hidden >= 0) & (hidden < n)]] = True
+        self._plddt_slider.blockSignals(True)
+        self._plddt_slider.setValue(int(st.get('plddt_slider', 0)))
+        self._plddt_slider.blockSignals(False)
+        self._plddt_value.setText(str(self._plddt_slider.value()))
+        self._apply_hidden()
+        if st.get('color_blocks'):
+            self._color_from_structure()
+        self.restore_mode(st.get('mode'))
+        self._update_controls()
+        self._update_dots()
+        self._redraw(keep_zoom=False)
+
+    def restore_mode(self, mode):
+        '''Show the saved view when its data are there. Agreement is read only when asked for.'''
+        if mode in self.available_modes() and mode != 'agreement':
+            self.set_mode(mode)
+
+    def restore_loaded(self, st):
+        '''The data have been read: go to a view that had to wait for them.'''
+        mode = st.get('mode')
+        if mode == 'agreement' and 'agreement' in self.available_modes():
+            self.set_mode('agreement')
+        else:
+            self.restore_mode(mode)
+        if self._struct_contacts and not self._pae.has_contact:
+            self._struct_contacts = False
+        self._update_controls()
 
     # ---------------------------------------------------------------------------
     #

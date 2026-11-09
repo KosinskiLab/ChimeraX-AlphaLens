@@ -194,6 +194,55 @@ def alphalens(session, structure=None, pae_file=None, distogram=None, mode=None,
     return pae
 
 
+def restore_plot(session, st):
+    '''
+    Recreate a plot saved in a session. The session holds its settings and the paths of the
+    prediction files; the matrices are read again from those files. Returns the plot or None.
+    '''
+    from chimerax.core.errors import UserError
+    from .tool import AlphaLensPlot
+    structure = st.get('structure')
+    if structure is None or structure.deleted:
+        return None
+    if st.get('model_file') and not getattr(structure, 'filename', None):
+        structure.filename = st['model_file']   # Finds the other files, seeds and models
+
+    def usable(key, what):
+        path = st.get(key)
+        if path and not os.path.exists(path):
+            session.logger.warning(f'AlphaLens {structure}: the saved {what} {path} was not found')
+            return None
+        return path
+
+    cutoff = st.get('cutoff', 8.0)
+    pae_file, distogram = usable('pae_file', 'PAE file'), usable('distogram_file', 'distogram')
+    try:
+        pae, dpath, contact_probs, pae_path = prepare_prediction(session, structure, pae_file,
+                                                                 distogram, cutoff)
+    except UserError as e:
+        session.logger.warning(f'AlphaLens {structure}: the plot was not restored: {e}. The '
+                               f'structure and its contact lines are unchanged.')
+        return None
+    pae_colormap = None
+    if st.get('pae_colormap') is not None:
+        from chimerax.core.colors import Colormap
+        values, colors = st['pae_colormap']
+        pae_colormap = Colormap(np.array(values), np.array(colors))
+    plot = AlphaLensPlot(session, pae, cutoff=cutoff, pae_colormap=pae_colormap,
+                         divider_lines=st.get('divider_lines', True))
+    structure._alphalens_plot = plot
+    if pae.has_contact:
+        plot.set_data_status('contact probabilities from AF3 confidences; no distogram')
+    plot.restore_settings(st)
+    finish = lambda: None if plot.closed() else plot.restore_loaded(st)
+    if dpath:
+        start_distogram(session, structure, pae, plot, dpath, cutoff, None, False, contact_probs,
+                        pae_path, on_loaded=finish)
+    else:
+        finish()
+    return plot
+
+
 def _apply_contacts(session, pae, plot, contacts, min_prob):
     if contacts is None:
         return
