@@ -279,7 +279,6 @@ large; without them the AF2 plot shows PAE only.
 
 ## Limitations
 
-* The plot is not saved in ChimeraX sessions; run `alphalens` again after restoring a session.
 * AF3 `contact_probs` are fixed at 8 Å; another `cutoff` needs the distogram.
 * The agreement view keeps N × N values per seed or model in memory (2 bytes each) and refuses
   more than 4 GB: five seeds work up to about 20,000 residues, twenty up to about 10,000.
