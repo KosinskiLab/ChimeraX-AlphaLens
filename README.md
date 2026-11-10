@@ -2,11 +2,13 @@
 
 *Formerly DistoPAE (up to version 0.4). The `distopae` command still works.*
 
-A [ChimeraX](https://www.cgl.ucsf.edu/chimerax/) plot for AlphaFold2 and AlphaFold3 predictions. Like
+AlphaLens 1.0 is a [ChimeraX](https://www.cgl.ucsf.edu/chimerax/) tool for inspecting
+AlphaFold2/AlphaFold3 predictions and running small local protein predictions. Like
 ChimeraX's built-in AlphaFold error plot, it shows the PAE matrix with a pLDDT track. It adds views
 computed from the predicted distogram, compares the predicted contacts with the contacts in the
 model, shows which contacts are reproduced across seeds or models, draws the predicted contacts on
-the structure and exports them to CSV.
+the structure and exports them to CSV. On Apple Silicon, it can also predict from raw
+sequences, FASTA or UniProt IDs, or re-predict an interface selected in the plot.
 
 <p align="center"><img src="docs/images/contacts.png" width="640"
   alt="AlphaLens plot in the contact-probability view, with dots on the inter-chain contacts"></p>
@@ -34,14 +36,15 @@ P ≥ 0.5.*
 ## Install
 
 Requires ChimeraX 1.6 or newer; tested with 1.10 and 1.12. The bundle is pure Python, so one wheel works on
-macOS, Linux and Windows.
+macOS, Linux and Windows. The optional local prediction engine currently requires
+Apple Silicon macOS 13 or newer and is tested with ChimeraX 1.12.
 
 1. Download `chimerax_alphalens-<version>-py3-none-any.whl` from the
    [Releases](https://github.com/KosinskiLab/AlphaLens/releases) page. Keep the file name:
    pip needs it.
 2. In the ChimeraX command line:
 
-       toolshed install ~/Downloads/chimerax_alphalens-0.10.0-py3-none-any.whl
+       toolshed install ~/Downloads/chimerax_alphalens-1.0.0-py3-none-any.whl
 
 3. Restart ChimeraX.
 
@@ -66,8 +69,23 @@ ChimeraX builds a `pyproject.toml` bundle from its current directory, whatever p
 `devel`: without the `cd`, `devel install` fails with "package directory 'src' does not exist"
 (seen in ChimeraX 1.10).
 
+### Optional local prediction engine (Apple Silicon)
+
+Download [setup_localfold.py](https://github.com/KosinskiLab/AlphaLens/releases/download/v1.0.0/setup_localfold.py)
+from the 1.0 release. With Python 3, Git and Xcode Command Line Tools installed, run in Terminal:
+
+```sh
+python3 ~/Downloads/setup_localfold.py
+```
+
+This builds the pinned LocalFold Metal engine outside ChimeraX's Python. The first run
+of each AF2 model downloads about 77 MB of public weights. Existing MSAs stay local;
+remote MSA search sends sequences to ColabFold only when explicitly selected.
+See the [prediction guide](docs/local-prediction.md) for details and measured limits.
+
 ## Quick start
 
+    alphalens predict                               # sequence, FASTA or UniProt input
     alphalens open /path/to/prediction_dir            # top-ranked model
     alphalens open /path/to/prediction_dir rank 2     # AF2 ranked_2 / AF3 third-best sample
     alphalens open /path/to/seed-1_sample-0/model.cif # one AF3 sample
@@ -88,7 +106,7 @@ Explicit requests for views, contacts or CSV export fail if their required data 
 
 ## Getting a distogram
 
-The contact view needs either a distogram or AF3 `contact_probs`; the spread view needs a
+The contact view needs either a distogram or confidence JSON `contact_probs` (AF3 or local AF2-monomer); the spread view needs a
 distogram. AF3 always writes `contact_probs` to its confidences file, but most pipelines do not
 keep the distogram by default:
 
@@ -268,9 +286,9 @@ contacts reached in any seed, with P per seed:
 * PAE JSON and result pickle files, and NPZ distograms, can be `.gz` or `.xz` compressed.
   AlphaFold DB PAE files are read too. For other layouts, give the files with `paeFile` and `distogram`.
 
-## Experimental local protein and interface prediction
+## Local protein and interface prediction (experimental)
 
-On Apple Silicon, the 0.11.0a2 prototype predicts one/two proteins from raw sequences,
+On Apple Silicon, AlphaLens 1.0 predicts one or two proteins from raw sequences,
 FASTA or UniProt IDs using `alphalens predict` (also under Tools → Structure Prediction
 → AlphaLens Prediction). It can also re-predict two selected protein intervals with
 LocalFold's native AF2-Multimer engine. Drag an interface box, then right-click
