@@ -16,7 +16,14 @@ def finish(job):
     return job
 
 
-def test_setup_failure_cancel_and_retry(tmp_path):
+@pytest.fixture
+def worker_platform(monkeypatch):
+    # Stand-in installer processes are pure Python and can exercise the lifecycle on CI.
+    monkeypatch.setattr(setup.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(setup.platform, 'machine', lambda: 'arm64')
+
+
+def test_setup_failure_cancel_and_retry(tmp_path, worker_platform):
     script = tmp_path/'worker.py'
     script.write_text('import sys\nprint("controlled failure", flush=True)\nsys.exit(7)\n')
     job = finish(setup.SetupJob(tmp_path/'prefix', 'af3', script=script).start())
@@ -38,7 +45,7 @@ print('AlphaLens setup: Installed engine',flush=True)
     assert job.read_messages() == ['Installed engine']
 
 
-def test_success_requires_an_executable(tmp_path):
+def test_success_requires_an_executable(tmp_path, worker_platform):
     script = tmp_path/'empty.py';script.write_text('pass\n')
     job = finish(setup.SetupJob(tmp_path/'prefix', 'af2', script=script).start())
     assert job.state == 'failed' and 'did not create' in job.error
@@ -50,6 +57,17 @@ def test_prerequisite_error_is_actionable(monkeypatch):
     monkeypatch.setattr(setup.subprocess,'run',lambda *a,**k:subprocess.CompletedProcess(a,1))
     with pytest.raises(RuntimeError,match='xcode-select --install'):
         setup.check_prerequisites()
+
+
+def test_unsupported_platform_is_reported_before_importing_posix_lock(tmp_path, monkeypatch):
+    import sys
+    monkeypatch.setattr(setup.platform, 'system', lambda: 'Windows')
+    monkeypatch.setitem(sys.modules, 'fcntl', None)
+    with pytest.raises(RuntimeError, match='Apple Silicon macOS'):
+        setup.install(tmp_path/'prefix', ['af3'])
+    with pytest.raises(RuntimeError, match='Apple Silicon macOS'):
+        setup.SetupJob(tmp_path/'prefix', 'af3').start()
+    assert not (tmp_path/'prefix').exists()
 
 
 def test_source_checkout_and_concurrent_setup_are_preserved(tmp_path,monkeypatch):
