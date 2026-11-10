@@ -284,3 +284,12 @@ def test_bad_distogram_af3_fallback_is_only_used_for_supported_operations(sessio
         with out.open() as f:
             rows = list(csv.DictReader(f))
         assert rows[0]['p_contact'] == '0.900'
+
+
+def test_requested_distogram_provenance_is_available_before_loading(session, tmp_path):
+    structure, path = prediction(tmp_path)
+    external = tmp_path / 'external.npz'
+    path.rename(external)
+    pae, dpath, _, _ = cmd.prepare_prediction(session, structure, distogram=str(external))
+    assert not pae.has_contact
+    assert pae._distogram_file == dpath == str(external)
