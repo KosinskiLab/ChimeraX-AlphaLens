@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.0.1a4
+
+* Fix the prediction dialog growing taller with every status update. Status and
+  result text now use a fixed-height, scrollable area; long messages remain readable.
+* Check that 100 progress updates and long errors leave the window size unchanged.
+
+## 1.0.1a3
+
+* Add prediction progress: an activity bar during model/alignment preparation and
+  remote MSA search, completed inference passes during folding, and a completion
+  state after the result opens. Elapsed time remains visible; queue time has no ETA.
+* Explain the required MSA choice beside its controls and enable Predict only after
+  an alignment source is chosen. Startup failures are highlighted and logged.
+
+## 1.0.1a2
+
+* Remove the fixed local prediction length cap. Inputs above 1,024 total residues,
+  including flanks, show a non-blocking warning about runtime and GPU memory.
+* Replace the fixed five-minute job timeout with an optional time limit in minutes,
+  defaulting to No limit. Manual cancellation and the native GPU-memory check remain.
+* Cover large input, flanks, unlimited runtime, optional timeouts and cancellation with
+  regression checks. A real 799-residue pair completed in 25–26 seconds on the tested
+  M5 Max with a supplied MSA (3.26 GB engine buffer peak).
+* Clarify that AlphaLens uses the native Metal engine; the browser WebGPU backend is
+  not integrated. This is a test build; memory and speed still depend on the hardware.
+
 ## 1.0.0
 
 * **Local prediction on Apple Silicon:** predict one or two proteins from raw sequence,

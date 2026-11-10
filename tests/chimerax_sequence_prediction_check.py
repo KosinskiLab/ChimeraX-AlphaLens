@@ -57,21 +57,21 @@ def main():
             assert not dialog.start_button.isEnabled(), 'Unresolved input could be submitted'
             dialog.load_button.click()
             pump(lambda: not dialog.lookup_timer.isActive(), seconds=50)
-            assert dialog.entries, dialog.status.text()
+            assert dialog.entries, dialog.status.toPlainText()
             assert dialog.start_button.isEnabled(), dialog.preview.text()
             if case == 'uniprot_monomer':
                 assert dialog.entries[0]['accession'] == 'P00648'
                 assert dialog.prediction_input()[0][0]['sequence'] == sequences[0]
             started=time.monotonic()
             dialog.start_button.click()
-            assert dialog.job and dialog.job.state=='running',dialog.status.text()
+            assert dialog.job and dialog.job.state=='running',dialog.status.toPlainText()
             ticks=[]
             heartbeat=QTimer(); heartbeat.setInterval(50); heartbeat.timeout.connect(lambda: ticks.append(time.monotonic()))
             heartbeat.start()
             pump(lambda: not dialog.timer.isActive())
             heartbeat.stop()
-            assert dialog.job.state=='complete',dialog.status.text()
-            assert dialog.output_model is not None,dialog.status.text()
+            assert dialog.job.state=='complete',dialog.status.toPlainText()
+            assert dialog.output_model is not None,dialog.status.toPlainText()
             assert dialog.comparison is None
             assert ticks
             if case != 'fasta_pair':
@@ -81,7 +81,7 @@ def main():
             if case == 'uniprot_monomer':
                 assert dialog.job.manifest['msa_source'] == 'cache'
                 assert dialog.job.chains[0]['residue_map'][0]['number'] == 50
-                assert 'pTM' in dialog.status.text() and 'ipTM' not in dialog.status.text()
+                assert 'pTM' in dialog.status.toPlainText() and 'ipTM' not in dialog.status.toPlainText()
             result=dict(case=case,elapsed_seconds=time.monotonic()-started,model=dialog.job.model,
                         result=dialog.job.result,job_directory=str(dialog.job.directory),heartbeat_ticks=len(ticks))
             results.append(result)
