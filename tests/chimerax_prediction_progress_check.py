@@ -58,6 +58,26 @@ def main():
         assert not dialog.msa_hint.isHidden()
         assert dialog.msa_hint.height() >= dialog.msa_hint.heightForWidth(dialog.msa_hint.width())
         assert dialog.job is None
+        dialog.set_status('Running · 0.0 s · MSA: supplied')
+        session.ui.processEvents()
+        initial_height = dialog.height()
+        initial_status_height = dialog.status.height()
+        for tick in range(100):
+            dialog.set_status(f'Running · {tick/10:.1f} s · MSA: supplied')
+            session.ui.processEvents()
+        layout_result = dict(before=initial_height, after=dialog.height(),
+                             status_before=initial_status_height, status_after=dialog.status.height())
+        (out / 'layout.json').write_text(json.dumps(layout_result))
+        assert dialog.height() == initial_height, layout_result
+        assert dialog.status.height() == initial_status_height, layout_result
+        # Long errors stay fully accessible without enlarging the dialog.
+        long_message = '\n'.join(f'Error detail {i}: ' + 'x'*120 for i in range(30))
+        dialog.set_status(long_message)
+        session.ui.processEvents()
+        assert dialog.height() == initial_height
+        assert dialog.status.toPlainText() == long_message
+        assert dialog.status.verticalScrollBar().maximum() > 0
+        dialog.set_status('Review the sequences, choose an MSA, then click Predict.')
         dialog.grab().save(str(out / 'msa-required.png'))
         dialog.search.setChecked(True)
         assert dialog.start_button.isEnabled() and dialog.msa_hint.isHidden()
@@ -70,7 +90,7 @@ def main():
         dialog.executable.setText(str(out / 'missing-engine'))
         dialog.start_button.click()
         assert dialog.progress_label.text() == 'Could not start'
-        assert 'not installed' in dialog.status.text()
+        assert 'not installed' in dialog.status.toPlainText()
         assert 'bold' in dialog.status.styleSheet()
         assert dialog.job is None
         stub = out / 'progress-engine'
@@ -80,7 +100,7 @@ def main():
         stub.chmod(0o755)
         dialog.executable.setText(str(stub))
         dialog.start_button.click()
-        assert dialog.job and dialog.job.state == 'running', dialog.status.text()
+        assert dialog.job and dialog.job.state == 'running', dialog.status.toPlainText()
         pump(lambda: 'queued' in dialog.progress_label.text())
         assert dialog.progress_bar.maximum() == 0
         assert dialog.cancel_button.isEnabled() and not dialog.start_button.isEnabled()
@@ -98,7 +118,7 @@ def main():
         pump(lambda: not dialog.timer.isActive())
         assert dialog.job.state == 'failed'
         assert dialog.progress_label.text() == 'Failed'
-        assert 'status 7' in dialog.status.text()
+        assert 'status 7' in dialog.status.toPlainText()
         assert dialog.progress_bar.value() == 0 and dialog.start_button.isEnabled()
 
         results = []
@@ -115,7 +135,7 @@ def main():
             dialog.output.setText(str(out / mode))
             started = time.monotonic()
             dialog.start_button.click()
-            assert dialog.job.state == 'running', dialog.status.text()
+            assert dialog.job.state == 'running', dialog.status.toPlainText()
             observations = []
             timer = QTimer(); timer.setInterval(40)
             timer.timeout.connect(lambda: observations.append((time.monotonic(),
@@ -123,12 +143,12 @@ def main():
             timer.start()
             pump(lambda: not dialog.timer.isActive())
             timer.stop()
-            assert dialog.job.state == 'complete', dialog.status.text()
-            assert dialog.output_model is not None, dialog.status.text()
+            assert dialog.job.state == 'complete', dialog.status.toPlainText()
+            assert dialog.output_model is not None, dialog.status.toPlainText()
             assert (dialog.comparison is not None) == (mode == 'region')
             assert dialog.progress_bar.value() == dialog.progress_bar.maximum() == 100
             assert dialog.progress_label.text() == 'Complete'
-            assert dialog.status.height() >= dialog.status.heightForWidth(dialog.status.width())
+            assert dialog.status.height() == initial_status_height
             assert any(0 < value < total == 4 for _, _, value, total in observations), observations
             assert max(b[0]-a[0] for a, b in zip(observations, observations[1:])) < 2
             assert not dialog.status.styleSheet(), 'Stale error styling'

@@ -56,7 +56,7 @@ def main():
             assert dialog.start_button.isEnabled(), dialog.preview.text()
             started = time.monotonic()
             dialog.start_button.click()
-            assert dialog.job and dialog.job.state == 'running', dialog.status.text()
+            assert dialog.job and dialog.job.state == 'running', dialog.status.toPlainText()
             ticks=[]
             heartbeat=QTimer(); heartbeat.setInterval(50); heartbeat.timeout.connect(lambda: ticks.append(time.monotonic()))
             heartbeat.start()
@@ -65,8 +65,8 @@ def main():
                 session.models.close([structure])
             pump(lambda: not dialog.timer.isActive())
             heartbeat.stop()
-            assert dialog.job.state == 'complete', dialog.status.text()
-            assert dialog.output_model is not None, dialog.status.text()
+            assert dialog.job.state == 'complete', dialog.status.toPlainText()
+            assert dialog.output_model is not None, dialog.status.toPlainText()
             assert dialog.comparison['aligned_chain_ca_rmsd'] is not None
             assert dialog.comparison['aligned_chain_ca_rmsd'] < 2
             assert structure.deleted == (case == 'cached_crop')

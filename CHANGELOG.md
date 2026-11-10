@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1a4
+
+* Fix the prediction dialog growing taller with every status update. Status and
+  result text now use a fixed-height, scrollable area; long messages remain readable.
+* Check that 100 progress updates and long errors leave the window size unchanged.
+
 ## 1.0.1a3
 
 * Add prediction progress: an activity bar during model/alignment preparation and
