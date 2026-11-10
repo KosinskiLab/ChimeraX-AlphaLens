@@ -35,7 +35,7 @@ P ≥ 0.5.*
 
 ## Install
 
-This branch contains the 1.0.1a2 test build with a warning for large predictions.
+This branch contains the 1.0.1a3 test build with prediction progress and a warning for large predictions.
 Build it from source or use its test wheel; the published 1.0.0 release retains
 the 400-residue limit.
 
@@ -48,7 +48,7 @@ Apple Silicon macOS 13 or newer and is tested with ChimeraX 1.12.
    pip needs it.
 2. In the ChimeraX command line:
 
-       toolshed install ~/Downloads/chimerax_alphalens-1.0.1a2-py3-none-any.whl
+       toolshed install ~/Downloads/chimerax_alphalens-1.0.1a3-py3-none-any.whl
 
 3. Restart ChimeraX.
 
@@ -307,7 +307,9 @@ LocalFold’s browser WebGPU backend is not connected to AlphaLens.
 Tested 175–195-residue predictions
 took about 2–3 seconds with cached MSAs on an M5 Max. A full 799-residue pair took
 25.9 seconds with a supplied MSA and a 3.26 GB engine-reported buffer peak. Fresh
-remote searches can take minutes.
+remote searches can take minutes. The progress bar shows activity during preparation
+and MSA search, then completed inference passes during folding. Choose an MSA source
+to enable **Predict**; a missing alignment is explained beside the MSA controls.
 
 See [setup, workflow, measurements and limitations](docs/local-prediction.md).
 

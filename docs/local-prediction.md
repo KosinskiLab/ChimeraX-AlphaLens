@@ -1,6 +1,6 @@
 # Experimental local protein and interface prediction
 
-AlphaLens 1.0.1a2 can predict one or two protein sequences, or re-predict two
+AlphaLens 1.0.1a3 can predict one or two protein sequences, or re-predict two
 selected protein intervals, with AlphaFold2 on
 Apple Silicon, using [LocalFold's native Metal implementation](https://github.com/sokrypton/localfold/tree/68c59196fa7d32c6edfc061ed369889c1cdb680b/metal).
 The prediction runs in a separate process; ChimeraX remains interactive. The original
@@ -10,7 +10,7 @@ are not yet connected to AlphaLens.
 
 ## Setup
 
-Install the AlphaLens wheel. Version 1.0.1a2 is a test build with the length cap removed;
+Install the AlphaLens wheel. Version 1.0.1a3 is a test build with progress reporting and the length cap removed;
 the published 1.0.0 release still has the 400-residue limit. The local prediction feature remains experimental.
 The engine requires Apple Silicon, macOS 13 or newer, Git, Python 3 and Xcode Command
 Line Tools. It does not require a Python ML environment inside ChimeraX.
@@ -78,6 +78,7 @@ header, release, retrieval time, original sequence hash and selected ranges.
    and nonstandard amino acids. Large inputs show a warning without disabling Predict.
 4. Choose an MSA source. **Reuse and crop the source MSA** is selected automatically
    when a matching `<structure-stem>.a3m` or `input.a3m` is found beside the source.
+   Embedded MSAs in AF3 `*_data.json` files are not imported automatically.
    Its first query must exactly match the plotted protein tokens. Cropping preserves
    existing paired/unpaired rows and their insertion encoding. Alternatively, supply
    a merged A3M for exactly the two cropped sequences, in the displayed order.
@@ -85,7 +86,11 @@ header, release, retrieval time, original sequence hash and selected ranges.
    This sends the selected sequences to `https://api.colabfold.com`, unless the exact
    query already exists in the local MSA cache. `LOCALFOLD_MMSEQS_API` can select a
    compatible private endpoint; the dialog displays the configured endpoint.
-6. Click **Predict**. Use **Cancel job** to stop it. A process-wide file lock serializes
+6. Click **Predict** (enabled once an MSA source is chosen). The progress bar shows
+   activity during preparation and remote search, then the number of completed
+   inference passes during folding. The displayed fraction covers inference passes,
+   not total runtime; remote queues have no known percentage or ETA. The bar reaches
+   Complete only after the validated result opens. Use **Cancel job** to stop it. A process-wide file lock serializes
    jobs across AlphaLens windows and instances. The optional **Time limit (minutes)**
    defaults to **No limit**. A positive value covers the whole job, including MSA search. Closing a running dialog cancels its job;
    closing the source model does not interrupt an already-started prediction.
