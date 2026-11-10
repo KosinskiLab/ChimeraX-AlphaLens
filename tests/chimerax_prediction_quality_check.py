@@ -40,9 +40,19 @@ def main():
         dialog.reuse.setChecked(False);dialog.search.setChecked(False)
         dialog.msa.setText(str(old/'fold.a3m'))
         dialog.output.setText(str(out/'jobs'))
+        logged=[]
+        original_info=session.logger.info
+        def record(message,*args,**kwargs):
+            logged.append(str(message));return original_info(message,*args,**kwargs)
+        session.logger.info=record
+        stages=[]
+        observer=QTimer();observer.setInterval(50)
+        observer.timeout.connect(lambda: stages.append(dialog.progress_label.text()))
+        observer.start()
         dialog.start_button.click()
         assert dialog.job and dialog.job.state=='running',dialog.status.toPlainText()
         pump(lambda:not dialog.timer.isActive())
+        observer.stop()
         assert dialog.job.state=='complete',dialog.status.toPlainText()
         assert dialog.output_model is not None,dialog.status.toPlainText()
         assert dialog.job.result['geometry']['ca_pairs_under_2A']==0
@@ -50,6 +60,10 @@ def main():
         assert dialog.job.result['iptm']>.4
         assert dialog.report_button.isEnabled()
         text=(dialog.job.directory/'prediction_report.txt').read_text(encoding='utf-8').strip()
+        assert any('Predicting with AF3' in stage for stage in stages),stages
+        assert dialog.status.toPlainText().endswith(text)
+        assert dialog.status.firstVisibleBlock().text().startswith('Local prediction')
+        assert logged.count(text)==1
         assert 'Same residues: pLDDT' in text and 'Same selected pairs:' in text
         dialog.report_button.click()
         report=session._alphalens_prediction_reports[-1]
@@ -76,6 +90,7 @@ def main():
             assert dialog.job.options['seed'] not in [r['seed'] for r in runs]
             assert dialog.report_directory==dialog.job.directory
             assert (Path(jobdir)/'prediction_report.txt').read_text(encoding='utf-8').strip()==text
+            assert text in dialog.status.toPlainText()
             dialog.report_button.click();report=session._alphalens_prediction_reports[-1]
             assert f"Seed: {dialog.job.options['seed']}" in report.findChild(QPlainTextEdit).toPlainText()
             report.close()

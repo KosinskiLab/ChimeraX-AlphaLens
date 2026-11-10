@@ -1,6 +1,6 @@
 # Experimental local protein and interface prediction
 
-AlphaLens 1.1.2 can predict protein complexes from sequences or UniProt IDs, or re-predict
+AlphaLens 1.1.3 can predict protein complexes from sequences or UniProt IDs, or re-predict
 selected regions spanning multiple protein chains, with AlphaFold 2 or AlphaFold 3 on
 Apple Silicon, using [LocalFold's native Metal implementation](https://github.com/sokrypton/localfold/tree/68c59196fa7d32c6edfc061ed369889c1cdb680b/metal).
 The prediction runs in a separate process; ChimeraX remains interactive. The original
@@ -10,7 +10,7 @@ are not yet connected to AlphaLens.
 
 ## Setup
 
-Install the AlphaLens 1.1.2 wheel. The local prediction feature remains experimental.
+Install the AlphaLens 1.1.3 wheel. The local prediction feature remains experimental.
 The engine requires Apple Silicon, macOS 13 or newer, Git, Python 3 and Xcode Command
 Line Tools. It does not require a Python ML environment inside ChimeraX.
 
@@ -280,3 +280,9 @@ settings grid, backend comparison, geometry counts and cached-MSA timings.
 Results now include `prediction_report.txt`. **Prediction report…** in the dialog or
 the result plot's context menu reopens the full comparison, including after restarting
 ChimeraX. Older reports can be reconstructed from the existing JSON files.
+
+From 1.1.3, the prediction window retains a scrollable history of stage changes and
+complete reports across repeated runs. The same prediction messages appear in the
+ChimeraX Log. The live stage label shows elapsed time; the alignment source is
+recorded once at submission. AF3 uses `NSUnbufferedIO=YES` so its stage output is
+available during inference, rather than buffered until the process exits.
