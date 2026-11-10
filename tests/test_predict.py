@@ -33,10 +33,24 @@ def test_crop_rejects_missing_sequence_positions():
 
 
 def test_sequence_limits():
-    with pytest.raises(ValueError, match='400'):
-        validate_chains([dict(sequence='A'*201, residue_map=[{}]*201)]*2)
+    # The budget covers the combined sequence, not a separate budget per chain.
+    validate_chains([dict(sequence='A'*410, residue_map=[{}]*410),
+                     dict(sequence='A'*389, residue_map=[{}]*389)])
+    validate_chains([dict(sequence='A'*512, residue_map=[{}]*512)]*2)
+    validate_chains([dict(sequence='A'*1024, residue_map=[{}]*1024)])
+    with pytest.raises(ValueError, match='1024'):
+        validate_chains([dict(sequence='A'*513, residue_map=[{}]*513),
+                         dict(sequence='A'*512, residue_map=[{}]*512)])
     with pytest.raises(ValueError, match='standard'):
         validate_chains([dict(sequence='AX', residue_map=[{}, {}])]*2)
+
+
+def test_crop_limit_includes_flanks():
+    r = [dict(chain_id=c, chain_index=i, aa='A', number=i+1, insertion_code='')
+         for c in 'AB' for i in range(600)]
+    assert sum(len(c['sequence']) for c in crop_chains(r, (50, 549, 650, 1149), 6)) == 1024
+    with pytest.raises(ValueError, match='including flanks'):
+        crop_chains(r, (50, 549, 650, 1149), 7)
 
 
 def test_a3m_query_validation(tmp_path):

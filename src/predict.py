@@ -13,6 +13,9 @@ ENGINE_REVISION = '68c59196fa7d32c6edfc061ed369889c1cdb680b'
 MODEL = 'model_1_multimer_v3'
 MONOMER_MODEL = 'model_1_ptm'
 AMINO_ACIDS = 'ACDEFGHIKLMNPQRSTVWY'
+# Total across chains, after extending a selected region with flanks.
+# LocalFold also checks its estimated allocation against the GPU working-set budget.
+MAX_RESIDUES = 1024
 
 
 def data_directory():
@@ -48,8 +51,9 @@ def validate_chains(chains):
             raise ValueError('Use nonempty protein sequences with the 20 standard amino acids.')
         if len(chain['residue_map']) != len(seq):
             raise ValueError('The sequence and residue mapping have different lengths.')
-    if sum(len(c['sequence']) for c in chains) > 400:
-        raise ValueError('The prototype is limited to 400 total residues; select a smaller interface.')
+    if sum(len(c['sequence']) for c in chains) > MAX_RESIDUES:
+        raise ValueError(f'Local prediction is limited to {MAX_RESIDUES} total residues, '
+                         'including flanks; select a smaller region.')
 
 
 def crop_chains(rows, region, flanks=10):

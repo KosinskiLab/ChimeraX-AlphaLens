@@ -42,8 +42,8 @@ def test_bad_ranges(interval):
 
 
 def test_large_uniprot_sequence_can_be_cropped_before_limit_check():
-    entries = [dict(label='large', sequence='A'*800, input_kind='uniprot')]
-    with pytest.raises(ValueError, match='400'):
+    entries = [dict(label='large', sequence='A'*1800, input_kind='uniprot')]
+    with pytest.raises(ValueError, match='1024'):
         inputs.sequence_chains(entries)
     assert len(inputs.sequence_chains(entries, ['500-700', ''])[0][0]['sequence']) == 201
     with pytest.raises(ValueError, match='missing chain'):
