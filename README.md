@@ -35,8 +35,9 @@ P ≥ 0.5.*
 
 ## Install
 
-Version 1.1.0 adds local AF3 prediction, multi-chain inputs, random seeds and
-contact-probability reports. Large inputs show a warning without a residue-count cap.
+Version 1.1.1 fixes plot growth during mouse hover and includes local AF3 prediction,
+multi-chain inputs, random seeds and contact-probability reports. Large inputs show
+a warning without a residue-count cap.
 
 Requires ChimeraX 1.6 or newer; tested with 1.10 and 1.12. The bundle is pure Python, so one wheel works on
 macOS, Linux and Windows. The optional local prediction engine currently requires
@@ -47,7 +48,7 @@ Apple Silicon macOS 13 or newer and is tested with ChimeraX 1.12.
    pip needs it.
 2. In the ChimeraX command line:
 
-       toolshed install ~/Downloads/chimerax_alphalens-1.1.0-py3-none-any.whl
+       toolshed install ~/Downloads/chimerax_alphalens-1.1.1-py3-none-any.whl
 
 3. Restart ChimeraX.
 
@@ -74,8 +75,8 @@ ChimeraX builds a `pyproject.toml` bundle from its current directory, whatever p
 
 ### Optional local prediction engine (Apple Silicon)
 
-Download [setup_localfold.py](https://github.com/KosinskiLab/AlphaLens/releases/download/v1.1.0/setup_localfold.py)
-from the 1.1.0 release. With Python 3, Git and Xcode Command Line Tools installed, run in Terminal:
+Download [setup_localfold.py](https://github.com/KosinskiLab/AlphaLens/releases/download/v1.1.1/setup_localfold.py)
+from the 1.1.1 release. With Python 3, Git and Xcode Command Line Tools installed, run in Terminal:
 
 ```sh
 python3 ~/Downloads/setup_localfold.py
