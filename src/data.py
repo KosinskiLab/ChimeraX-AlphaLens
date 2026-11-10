@@ -124,10 +124,12 @@ def find_prediction_files(structure_path):
         prefix = base[:-len('_model.cif')]
         conf = _first_existing(os.path.join(d, f'{prefix}_confidences{s}') for s in JSON_SUFFIXES)
         if conf or os.path.exists(os.path.join(d, 'ranking_scores.csv')):
-            ranked = _af3_ranked_samples(d)
+            ranked = _af3_ranked_samples(d, fallback=False)
             seed = ranked[0][0] if ranked else None
             model_name = f'seed-{ranked[0][0]}_sample-{ranked[0][1]}' if ranked else 'top'
-            return PredictionFiles(path, 'af3', model_name, conf, _af3_distogram(d, seed))
+            # Directory order and a lone available distogram do not identify the top seed.
+            distogram = _af3_distogram(d, seed) if seed is not None else None
+            return PredictionFiles(path, 'af3', model_name, conf, distogram)
 
     # ---- AlphaFold2 / AlphaPulldown
     model_name = None
@@ -187,7 +189,7 @@ def _af2_ranking_order(d):
         return None
 
 
-def _af3_ranked_samples(d):
+def _af3_ranked_samples(d, fallback=True):
     """[(seed, sample, score), ...] best first, from ranking_scores.csv or sample dirs."""
     rows = []
     p = os.path.join(d, 'ranking_scores.csv')
@@ -203,7 +205,7 @@ def _af3_ranked_samples(d):
                     rows.append((r['seed'], r['sample'], float(r['ranking_score'])))
                 except (KeyError, ValueError):
                     pass
-    if not rows:
+    if not rows and fallback:
         for sd in sorted(glob.glob(os.path.join(d, 'seed-*_sample-*'))):
             m = re.match(r'seed-(-?\d+)_sample-(\d+)$', os.path.basename(sd))
             if m:

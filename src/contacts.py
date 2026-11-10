@@ -413,10 +413,11 @@ def model_distances(pae):
     to one model.
     '''
     cached = getattr(pae, '_model_distances', None)
-    if cached is not None:
-        return cached
     atoms = [distogram_atom(ra) for ra in pae.row_residues_or_atoms()]
     xyz = np.array([a.coord if a is not None else (np.nan,) * 3 for a in atoms], np.float32)
+    if cached is not None and np.array_equal(cached[1], xyz, equal_nan=True):
+        return cached
+    pae._model_contacts = None
     pae._model_distances = (distance_matrix(xyz), xyz)
     return pae._model_distances
 
@@ -426,10 +427,10 @@ def model_contacts(pae, cutoff):
     Contacts in the model, d < cutoff between distogram_atom()s, as an N x N boolean matrix
     over the plot rows, and the (N, 3) coordinates used (NaN where a row has no atom).
     '''
+    dist, xyz = model_distances(pae)
     cached = getattr(pae, '_model_contacts', None)
     if cached is not None and cached[0] == cutoff:
         return cached[1], cached[2]
-    dist, xyz = model_distances(pae)
     with np.errstate(invalid='ignore'):
         mask = dist < cutoff                # NaN (no atom) compares False
     pae._model_contacts = (cutoff, mask, xyz)

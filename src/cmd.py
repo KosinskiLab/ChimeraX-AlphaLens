@@ -118,7 +118,9 @@ def alphalens(session, structure=None, pae_file=None, distogram=None, mode=None,
                     t = min_prob
                 else:
                     t = plot.threshold if plot is not None and not plot.closed() else DEFAULT_MIN_P
-                save_contacts_csv(session, pae, save_contacts, t)
+                region = (plot._struct_region if plot is not None and not plot.closed()
+                          and plot.pae is pae else None)
+                save_contacts_csv(session, pae, save_contacts, t, region=region)
         if mode == 'agreement':
             start_agreement(session, pae, plot, cutoff, wait=wait, show=True, on_loaded=finish)
         else:

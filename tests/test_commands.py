@@ -65,6 +65,7 @@ class UI:
 
 
 class Plot:
+    _struct_region = None
     threshold = 0.2
 
     def __init__(self, pae):
@@ -307,3 +308,18 @@ def test_agreement_completion_after_source_model_closed(session, tmp_path, succe
         assert failures == ['read failed']
     assert not callbacks
     assert old._agreement_pending is None
+
+
+@pytest.mark.parametrize('min_prob', [None, 0.8])
+def test_command_export_passes_active_region(session, tmp_path, monkeypatch, min_prob):
+    structure, _ = prediction(tmp_path)
+    pae = PAE('', structure, np.zeros((2, 2)))
+    pae.metrics = {'contact': np.ones((2, 2)), 'cutoff': 8.0}
+    structure.alphafold_pae = pae
+    structure._alphalens_plot = plot = Plot(pae)
+    plot._struct_region = (0, 0, 1, 1)
+    session.ui.is_gui = True
+    exports = []
+    monkeypatch.setattr(cmd, 'save_contacts_csv', lambda *a, **kw: exports.append((a[3], kw)))
+    cmd.alphalens(session, structure, save_contacts=str(tmp_path / 'contacts.csv'), min_prob=min_prob)
+    assert exports == [(plot.threshold if min_prob is None else min_prob, {'region': (0, 0, 1, 1)})]

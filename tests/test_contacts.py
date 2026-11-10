@@ -84,3 +84,18 @@ def test_plddt_palette_bands():
     assert all(b > a for a, b in zip(values, values[1:]))   # Strictly increasing
     small = [float(stop.split(',')[0]) for stop in pae.plddt_palette(0.01).split(':')]
     assert all(b > a for a, b in zip(small, small[1:])) and small[-1] == 1.0
+
+
+def test_distance_and_contact_caches_follow_coordinates_without_gui_triggers():
+    atoms = [types.SimpleNamespace(coord=np.array([0., 0., 0.]), deleted=False),
+             types.SimpleNamespace(coord=np.array([5., 0., 0.]), deleted=False)]
+    pae = types.SimpleNamespace(row_residues_or_atoms=lambda: atoms)
+    original = contacts.model_distances(pae)
+    assert contacts.model_distances(pae) is original
+    assert contacts.model_contacts(pae, 8.)[0][0, 1]
+    atoms[1].coord[0] = 20.
+    assert not contacts.model_contacts(pae, 8.)[0][0, 1]
+    assert contacts.model_distances(pae)[0][0, 1] == 20.
+    atoms[1].deleted = True
+    assert np.isnan(contacts.model_distances(pae)[0][0, 1])
+    assert not contacts.model_contacts(pae, 8.)[0][0, 1]
