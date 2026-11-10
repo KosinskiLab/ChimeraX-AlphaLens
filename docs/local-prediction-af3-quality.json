@@ -1,0 +1,324 @@
+{
+  "date": "2026-11-10",
+  "hardware": "Apple M5 Max, 40 GPU cores, 64 GB unified memory",
+  "os": "macOS 27.2",
+  "engine_revision": "68c59196fa7d32c6edfc061ed369889c1cdb680b",
+  "model": "LocalFold AF3 int8",
+  "notes": [
+    "Cached identical MSAs and seeds within each case; wall time excludes remote MSA search.",
+    "user: 366-residue crop; pilot: 195-residue barnase-barstar, PDB 1BRS chains A/D.",
+    "nonlocal_CA_pairs_under2A excludes immediate sequence neighbours; production geometry validation also includes those neighbours.",
+    "Crystal used only for validation, never a prediction template.",
+    "Limited case validation; this does not establish general equivalence to full-precision AF3."
+  ],
+  "corrected_runtime_environment": {
+    "LOCALFOLD_GEMM_TENSOR": "0",
+    "LOCALFOLD_ATTN_TENSOR": "0"
+  },
+  "rejected_original_model": "Prediction failed geometry checks: 362 C\u03b1 pairs closer than 2 \u00c5; 25/364 adjacent C\u03b1 distances outside 2.5\u20134.5 \u00c5. The coordinates may be collapsed or broken. Output files are retained.",
+  "standard_pilot_complex_ca_rmsd_angstrom_rounded": 0.591,
+  "measurements": {
+    "settings-grid": [
+      {
+        "case": "user-r3-s200",
+        "seconds": 3.7141841249977006,
+        "exit_code": 0,
+        "residues": 366,
+        "radius_gyration": 9.776222616949543,
+        "adjacent_CA_quantiles": [
+          1.1669880033659301,
+          2.706183745754619,
+          3.365587902521436,
+          3.604702744164669,
+          3.9976405541268956
+        ],
+        "nonlocal_CA_pairs_under2A": 397,
+        "mean_plddt": 48.14,
+        "iptm": 0.15,
+        "ptm": 0.18,
+        "has_clash": 1.0,
+        "ranking_score": -99.84
+      },
+      {
+        "case": "user-r10-s200",
+        "seconds": 7.061915957998281,
+        "exit_code": 0,
+        "residues": 366,
+        "radius_gyration": 9.694091672312824,
+        "adjacent_CA_quantiles": [
+          0.9541179172408404,
+          2.742876785632154,
+          3.3869366198157884,
+          3.6053148677293465,
+          4.516044951060606
+        ],
+        "nonlocal_CA_pairs_under2A": 416,
+        "mean_plddt": 48.29,
+        "iptm": 0.15,
+        "ptm": 0.17,
+        "has_clash": 1.0,
+        "ranking_score": -99.84
+      },
+      {
+        "case": "user-r10-s400",
+        "seconds": 8.768179165999754,
+        "exit_code": 0,
+        "residues": 366,
+        "radius_gyration": 8.945571971884334,
+        "adjacent_CA_quantiles": [
+          0.7460167558439956,
+          2.7234167694802376,
+          3.4000740426457883,
+          3.5848305397721485,
+          3.7219819988817795
+        ],
+        "nonlocal_CA_pairs_under2A": 515,
+        "mean_plddt": 49.53,
+        "iptm": 0.18,
+        "ptm": 0.17,
+        "has_clash": 1.0,
+        "ranking_score": -99.82
+      },
+      {
+        "case": "user-r10-s200-msa1024",
+        "seconds": 7.857738500002597,
+        "exit_code": 0,
+        "residues": 366,
+        "radius_gyration": 9.476494628620511,
+        "adjacent_CA_quantiles": [
+          0.43329204931547044,
+          2.6948312010274833,
+          3.3776800109277545,
+          3.5754541259110066,
+          3.9697371449505314
+        ],
+        "nonlocal_CA_pairs_under2A": 405,
+        "mean_plddt": 48.83,
+        "iptm": 0.16,
+        "ptm": 0.18,
+        "has_clash": 1.0,
+        "ranking_score": -99.83
+      },
+      {
+        "case": "user-r10-s200-native-sampler",
+        "seconds": 7.708886499996879,
+        "exit_code": 0,
+        "residues": 366,
+        "radius_gyration": 9.7583852366096,
+        "adjacent_CA_quantiles": [
+          0.3928625713910653,
+          2.577381621620456,
+          3.388217417554924,
+          3.646455184775969,
+          4.229788410783689
+        ],
+        "nonlocal_CA_pairs_under2A": 400,
+        "mean_plddt": 48.58,
+        "iptm": 0.16,
+        "ptm": 0.17,
+        "has_clash": 1.0,
+        "ranking_score": -99.83
+      },
+      {
+        "case": "pilot-r3-s200",
+        "seconds": 2.0025729579974723,
+        "exit_code": 0,
+        "residues": 195,
+        "radius_gyration": 16.69621034548707,
+        "adjacent_CA_quantiles": [
+          1.4475044041383782,
+          2.9874991156371116,
+          3.6103462437832747,
+          5.8347135964645185,
+          21.655563788550968
+        ],
+        "nonlocal_CA_pairs_under2A": 41,
+        "mean_plddt": 69.28,
+        "iptm": 0.36,
+        "ptm": 0.41,
+        "has_clash": 1.0,
+        "ranking_score": -99.63
+      },
+      {
+        "case": "pilot-r10-s200",
+        "seconds": 3.126319874998444,
+        "exit_code": 0,
+        "residues": 195,
+        "radius_gyration": 16.29332755067575,
+        "adjacent_CA_quantiles": [
+          1.0400600944176241,
+          2.7840882641786666,
+          3.559878368708684,
+          4.9289794599168095,
+          21.407599538481655
+        ],
+        "nonlocal_CA_pairs_under2A": 47,
+        "mean_plddt": 70.49,
+        "iptm": 0.35,
+        "ptm": 0.41,
+        "has_clash": 1.0,
+        "ranking_score": -99.64
+      },
+      {
+        "case": "pilot-r10-s200-native-sampler",
+        "seconds": 2.7731952499998442,
+        "exit_code": 0,
+        "residues": 195,
+        "radius_gyration": 10.557919605505539,
+        "adjacent_CA_quantiles": [
+          1.2464982952254693,
+          2.81470823203408,
+          3.4124683148712167,
+          3.66770527181851,
+          6.145100324648899
+        ],
+        "nonlocal_CA_pairs_under2A": 90,
+        "mean_plddt": 65.56,
+        "iptm": 0.27,
+        "ptm": 0.33,
+        "has_clash": 1.0,
+        "ranking_score": -99.71
+      }
+    ],
+    "backend-checks": [
+      {
+        "case": "6mrr-control",
+        "environment": {},
+        "seconds": 2.192299999998795,
+        "exit_code": 0,
+        "mean_plddt": 71.8,
+        "iptm": null,
+        "ptm": 0.54,
+        "has_clash": 1.0,
+        "nonlocal_CA_pairs_under2A": 0,
+        "adjacent_CA_median": 3.6886042075560224
+      },
+      {
+        "case": "user-no-tensor",
+        "environment": {
+          "LOCALFOLD_GEMM_TENSOR": "0"
+        },
+        "seconds": 11.887239749998116,
+        "exit_code": 0,
+        "mean_plddt": 71.62,
+        "iptm": 0.48,
+        "ptm": 0.44,
+        "has_clash": 0.0,
+        "nonlocal_CA_pairs_under2A": 0,
+        "adjacent_CA_median": 3.8370330972232694
+      },
+      {
+        "case": "user-float-acc",
+        "environment": {
+          "LOCALFOLD_GEMM_FLOAT_ACC": "1"
+        },
+        "seconds": 4.874738333001005,
+        "exit_code": 0,
+        "mean_plddt": 48.29,
+        "iptm": 0.15,
+        "ptm": 0.18,
+        "has_clash": 1.0,
+        "nonlocal_CA_pairs_under2A": 379,
+        "adjacent_CA_median": 3.3859360857611716
+      },
+      {
+        "case": "user-no-conditioning-ahead",
+        "environment": {
+          "AF3_COND_AHEAD": "0"
+        },
+        "seconds": 3.663339333001204,
+        "exit_code": 0,
+        "mean_plddt": 48.14,
+        "iptm": 0.15,
+        "ptm": 0.18,
+        "has_clash": 1.0,
+        "nonlocal_CA_pairs_under2A": 397,
+        "adjacent_CA_median": 3.365587902521436
+      },
+      {
+        "case": "user-no-shared-scratch",
+        "environment": {
+          "LOCALFOLD_SHARED_SCRATCH": "0"
+        },
+        "seconds": 3.817394499998045,
+        "exit_code": 0,
+        "mean_plddt": 48.14,
+        "iptm": 0.15,
+        "ptm": 0.18,
+        "has_clash": 1.0,
+        "nonlocal_CA_pairs_under2A": 397,
+        "adjacent_CA_median": 3.365587902521436
+      }
+    ],
+    "corrected-checks": [
+      {
+        "case": "user-r10-s200",
+        "seconds": 17.60410820800098,
+        "exit_code": 0,
+        "mean_plddt": 71.34,
+        "iptm": 0.46,
+        "ptm": 0.42,
+        "has_clash": 0.0,
+        "nonlocal_CA_pairs_under2A": 0,
+        "adjacent_CA_median": 3.8361033608397612
+      },
+      {
+        "case": "user-r10-s400",
+        "seconds": 21.505839834000653,
+        "exit_code": 0,
+        "mean_plddt": 72.29,
+        "iptm": 0.46,
+        "ptm": 0.43,
+        "has_clash": 0.0,
+        "nonlocal_CA_pairs_under2A": 0,
+        "adjacent_CA_median": 3.8408469115821324
+      },
+      {
+        "case": "pilot-r3-s200",
+        "seconds": 6.524235124998086,
+        "exit_code": 0,
+        "mean_plddt": 95.81,
+        "iptm": 0.93,
+        "ptm": 0.94,
+        "has_clash": 0.0,
+        "nonlocal_CA_pairs_under2A": 0,
+        "adjacent_CA_median": 3.8116938491961814
+      },
+      {
+        "case": "pilot-r10-s200",
+        "seconds": 6.340798291999818,
+        "exit_code": 0,
+        "mean_plddt": 95.87,
+        "iptm": 0.93,
+        "ptm": 0.94,
+        "has_clash": 0.0,
+        "nonlocal_CA_pairs_under2A": 0,
+        "adjacent_CA_median": 3.811004329569831
+      }
+    ],
+    "standard-check": [
+      {
+        "case": "user-standard",
+        "seconds": 24.734836457999336,
+        "exit_code": 0,
+        "mean_plddt": 72.03,
+        "iptm": 0.46,
+        "ptm": 0.43,
+        "has_clash": 0.0,
+        "nonlocal_CA_pairs_under2A": 0,
+        "adjacent_CA_median": 3.840763721038379
+      },
+      {
+        "case": "pilot-standard",
+        "seconds": 10.317567583002528,
+        "exit_code": 0,
+        "mean_plddt": 95.78,
+        "iptm": 0.93,
+        "ptm": 0.94,
+        "has_clash": 0.0,
+        "nonlocal_CA_pairs_under2A": 0,
+        "adjacent_CA_median": 3.801729869414711
+      }
+    ]
+  }
+}
