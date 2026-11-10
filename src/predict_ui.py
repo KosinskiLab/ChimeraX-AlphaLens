@@ -126,6 +126,30 @@ def import_result(session, job):
     return structure, comparison
 
 
+def show_prediction_report(session, directory):
+    from Qt.QtCore import Qt
+    from .predict_report import report_text
+    text = report_text(directory)
+    dialog = QDialog(session.ui.main_window)
+    dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+    dialog.setWindowTitle('AlphaLens prediction report')
+    dialog.resize(760, 480)
+    layout = QVBoxLayout(dialog)
+    content = QPlainTextEdit(text); content.setReadOnly(True)
+    layout.addWidget(content)
+    buttons = QHBoxLayout(); layout.addLayout(buttons)
+    copy = QPushButton('Copy report'); copy.clicked.connect(lambda: QApplication.clipboard().setText(text))
+    close = QPushButton('Close'); close.clicked.connect(dialog.close)
+    buttons.addWidget(copy); buttons.addStretch(1); buttons.addWidget(close)
+    reports = getattr(session, '_alphalens_prediction_reports', None)
+    if reports is None:
+        reports = session._alphalens_prediction_reports = []
+    reports.append(dialog)
+    dialog.finished.connect(lambda: reports.remove(dialog) if dialog in reports else None)
+    dialog.show(); dialog.raise_()
+    return dialog
+
+
 class PredictionDialog(QDialog):
     def __init__(self, plot=None, session=None):
         session = plot.session if plot is not None else session
@@ -167,7 +191,11 @@ class PredictionDialog(QDialog):
         self.af3_steps = QSpinBox(); self.af3_steps.setRange(1, 1000); self.af3_steps.setValue(200)
         self.af3_steps_label = QLabel('AF3 diffusion steps')
         form.addRow(self.af3_steps_label, self.af3_steps)
-        for widget in (self.af3_terms, self.af3_terms_links, self.af3_steps, self.af3_steps_label):
+        self.af3_samples = QSpinBox(); self.af3_samples.setRange(1, 10); self.af3_samples.setValue(5)
+        self.af3_samples_label = QLabel('AF3 diffusion samples')
+        form.addRow(self.af3_samples_label, self.af3_samples)
+        for widget in (self.af3_terms, self.af3_terms_links, self.af3_steps, self.af3_steps_label,
+                       self.af3_samples, self.af3_samples_label):
             widget.hide()
         self.flanks = QSpinBox(self); self.flanks.setRange(0, 100); self.flanks.setValue(10)
         if plot is not None:
@@ -228,7 +256,11 @@ class PredictionDialog(QDialog):
         buttons = QHBoxLayout(); layout.addLayout(buttons)
         self.start_button = QPushButton('Predict'); self.cancel_button = QPushButton('Cancel job')
         self.cancel_button.setEnabled(False)
+        self.report_button = QPushButton('Prediction report…'); self.report_button.setEnabled(False)
+        self.report_directory = None
+        self.report_button.clicked.connect(lambda: show_prediction_report(self.session, self.report_directory))
         buttons.addWidget(self.start_button); buttons.addWidget(self.cancel_button)
+        buttons.addWidget(self.report_button)
         self.start_button.clicked.connect(self.start)
         self.cancel_button.clicked.connect(self.cancel)
         self.flanks.valueChanged.connect(self.refresh)
@@ -252,7 +284,9 @@ class PredictionDialog(QDialog):
     def backend_changed(self):
         backend = self.backend.currentData()
         self.executable.setText(predict.default_executable(backend))
-        for widget in (self.af3_terms, self.af3_terms_links, self.af3_steps, self.af3_steps_label):
+        self.recycles.setValue(10 if backend == 'af3' else 3)
+        for widget in (self.af3_terms, self.af3_terms_links, self.af3_steps, self.af3_steps_label,
+                       self.af3_samples, self.af3_samples_label):
             widget.setVisible(backend == 'af3')
         self.refresh()
 
@@ -386,7 +420,8 @@ class PredictionDialog(QDialog):
                           msa=msa, msa_crop=crop, seed=self.seed.value(),
                           recycles=self.recycles.value(), source=source,
                           timeout=self.time_limit.value()*60 or None, backend=self.backend.currentData(),
-                          accept_af3_terms=self.af3_terms.isChecked(), diffusion_steps=self.af3_steps.value()).start()
+                          accept_af3_terms=self.af3_terms.isChecked(), diffusion_steps=self.af3_steps.value(),
+                          diffusion_samples=self.af3_samples.value()).start()
             if self.backend.currentData() == 'af3':
                 try:
                     predict.record_af3_terms_acceptance()
@@ -396,7 +431,8 @@ class PredictionDialog(QDialog):
             self.set_progress('Could not start', 0, 100)
             self.show_error(str(e)); return
         for widget in (self.flanks, self.executable, self.output, self.msa, self.reuse, self.search, self.seed, self.recycles,
-                       self.time_limit, self.randomize_seed, self.backend, self.af3_terms, self.af3_steps, self.start_button):
+                       self.time_limit, self.randomize_seed, self.backend, self.af3_terms, self.af3_steps,
+                       self.af3_samples, self.start_button):
             widget.setEnabled(False)
         for widget in self.input_widgets:
             widget.setEnabled(False)
@@ -424,6 +460,13 @@ class PredictionDialog(QDialog):
                 self.set_progress('Opening prediction…')
                 self.output_model, self.comparison = import_result(self.session, self.job)
                 self.set_progress('Complete', 100, 100)
+                from .predict_report import save_report
+                report = save_report(self.job.directory)
+                self.report_directory = self.job.directory
+                self.report_button.setEnabled(True)
+                self.session.logger.info(report)
+                # Opening the result plot can cover this dialog; keep its comparison visible.
+                self.raise_()
                 if self.comparison is None:
                     score = (f'ipTM {self.job.result["iptm"]:.3f}' if len(self.job.chains) > 1
                              else f'pTM {self.job.result["ptm"]:.3f}')
@@ -462,7 +505,7 @@ class PredictionDialog(QDialog):
             if self.job.state != 'running':
                 for widget in (self.flanks, self.executable, self.output, self.msa, self.search, self.seed,
                                self.recycles, self.time_limit, self.randomize_seed, self.backend,
-                               self.af3_terms, self.af3_steps, self.start_button):
+                               self.af3_terms, self.af3_steps, self.af3_samples, self.start_button):
                     widget.setEnabled(True)
                 self.reuse.setEnabled(self.source_msa is not None)
                 self.seed.setEnabled(not self.randomize_seed.isChecked())

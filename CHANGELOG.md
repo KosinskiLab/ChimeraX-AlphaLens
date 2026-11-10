@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.2
+
+* Fix collapsed local AF3 predictions on M5 hardware by disabling the pinned
+  LocalFold engine's tensor fast path for AF3. Additional recycles or diffusion
+  steps did not fix this backend failure. Conventional Metal kernels recover
+  normal geometry; the barnase–barstar control is 0.59 Å Cα RMSD from its crystal.
+* Use 10 recycles, 200 diffusion steps and five samples by default for AF3;
+  expose the sample count. AF2 defaults are unchanged.
+* Reject grossly overlapping or broken Cα geometry before importing a prediction,
+  independently of pLDDT. Preserve the output files for inspection.
+* Keep score comparisons accessible after closing the prediction dialog. Save
+  `prediction_report.txt`, log the full report, and add Prediction report buttons
+  to the dialog and result plot's context menu. Reports also reconstruct older jobs.
+* AF3 results made with 1.1.0/1.1.1 on the affected M5 path need to be re-predicted.
+  Those releases verified execution, not structural accuracy of this backend.
+
 ## 1.1.1
 
 * Fix the plot window growing in several steps as the pointer moves across PAE
