@@ -514,6 +514,7 @@ class AlphaLensPlot(ToolInstance):
         self._pair_cache = None             # (pairs, probs) with P >= SLIDER_MIN, strongest first
         self._struct_contacts = False       # Contacts drawn on the structure
         self._struct_region = None
+        self._prediction_region = None
         self._picked = None                 # (i, j) contact picked by clicking a dot
         self._zoom_to_pick = False
         self._pae_colormap = pae_colormap
@@ -755,6 +756,7 @@ class AlphaLensPlot(ToolInstance):
         if same_size and pae.agreement is None:
             pae.agreement = self._pae.agreement     # Seeds / models are shared by all models
         self._pae = pae
+        self._prediction_region = None
         self._attach_structure()
         self._pair_cache = None
         if not same_size:
@@ -1700,6 +1702,7 @@ class AlphaLensPlot(ToolInstance):
             ranges = [(r1, r2), (r3, r4)] if off_diagonal else [(min(r1, r3), max(r2, r4))]
             self._select_rows(ranges)
         tiny = (r2 - r1) < 3 and (r4 - r3) < 3
+        self._prediction_region = None if on_track or tiny else (r3, r4, r1, r2)
         if on_track and tiny:
             self.session.selection.clear()      # A click on the track deselects
         elif on_track:
@@ -1819,7 +1822,13 @@ class AlphaLensPlot(ToolInstance):
             menu.addSeparator()
             menu.addAction('Log agreement table', self._log_agreement)
         menu.addSeparator()
+        predict_action = menu.addAction('Re-predict selected interface…', self._predict_interface)
+        predict_action.setEnabled(self._prediction_region is not None)
         menu.addAction('Save image', self._save_image)
+
+    def _predict_interface(self):
+        from .predict_ui import show_prediction_dialog
+        return show_prediction_dialog(self)
 
     def _reset_contact_region(self):
         self._struct_region = None
