@@ -35,7 +35,8 @@ P ≥ 0.5.*
 
 ## Install
 
-Version 1.1.1 fixes plot growth during mouse hover and includes local AF3 prediction,
+Version 1.1.2 fixes collapsed local AF3 predictions on M5, preserves score reports,
+and includes the hover-resizing fix and local AF3 prediction,
 multi-chain inputs, random seeds and contact-probability reports. Large inputs show
 a warning without a residue-count cap.
 
@@ -48,7 +49,7 @@ Apple Silicon macOS 13 or newer and is tested with ChimeraX 1.12.
    pip needs it.
 2. In the ChimeraX command line:
 
-       toolshed install ~/Downloads/chimerax_alphalens-1.1.1-py3-none-any.whl
+       toolshed install ~/Downloads/chimerax_alphalens-1.1.2-py3-none-any.whl
 
 3. Restart ChimeraX.
 
@@ -75,8 +76,8 @@ ChimeraX builds a `pyproject.toml` bundle from its current directory, whatever p
 
 ### Optional local prediction engine (Apple Silicon)
 
-Download [setup_localfold.py](https://github.com/KosinskiLab/AlphaLens/releases/download/v1.1.1/setup_localfold.py)
-from the 1.1.1 release. With Python 3, Git and Xcode Command Line Tools installed, run in Terminal:
+Download [setup_localfold.py](https://github.com/KosinskiLab/AlphaLens/releases/download/v1.1.2/setup_localfold.py)
+from the 1.1.2 release. With Python 3, Git and Xcode Command Line Tools installed, run in Terminal:
 
 ```sh
 python3 ~/Downloads/setup_localfold.py
@@ -299,13 +300,15 @@ FASTA or UniProt IDs using `alphalens predict` (also under Tools → Structure P
 → AlphaLens Prediction). It can also re-predict regions spanning multiple protein chains.
 Drag an interface box, then right-click **Re-predict selected interface…**.
 Choose **AlphaFold 2** (monomer or multimer automatically) or **AlphaFold 3** in the model
-selector. AF3 uses 200 diffusion steps and one sample by default. Seeds are randomized
+selector. AF3 uses 10 recycles, 200 diffusion steps and five samples by default. Seeds are randomized
 for each prediction; uncheck the random-seed option to enter a reproducible seed.
 Reuse/crop an existing MSA or explicitly choose a
 remote ColabFold search. Results open in a new plot with PAE/pLDDT comparisons over the
 same residues, contact counts, top-ten mean contact probability and strongest residue
 pairs. `region_contacts.csv` records source/new probabilities and model distances with
-original residue labels. The original structure is retained. There is no fixed residue-count cap;
+original residue labels. The full score comparison is saved as `prediction_report.txt`
+and can be reopened through **Prediction report…** in the dialog or result plot’s context menu.
+The original structure is retained. There is no fixed residue-count cap;
 inputs above 1,024 total residues (including flanks) show a warning and can still run.
 The engine checks its estimated GPU-memory requirement. The optional time limit defaults
 to **No limit**; **Cancel job** remains available. This integration uses native Metal;

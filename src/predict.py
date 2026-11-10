@@ -205,7 +205,7 @@ def validate_result(directory, chains):
             raise ValueError(f'Invalid prediction confidence: {key}.')
     # Check the structure independently of the confidence file, including sequence identity.
     three = dict(zip('ALA CYS ASP GLU PHE GLY HIS ILE LYS LEU MET ASN PRO GLN ARG SER THR VAL TRP TYR'.split(), AMINO_ACIDS))
-    residues = {}
+    residues, coordinates = {}, {}
     for line in (d / 'fold.pdb').read_text().splitlines():
         if line.startswith('ATOM'):
             xyz = [float(line[a:b]) for a, b in ((30, 38), (38, 46), (46, 54))]
@@ -213,9 +213,12 @@ def validate_result(directory, chains):
                 raise ValueError('Prediction contains nonfinite coordinates.')
             if line[12:16].strip() == 'CA':
                 residues[(line[21], int(line[22:26]))] = three.get(line[17:20], 'X')
+                coordinates[(line[21], int(line[22:26]))] = xyz
     expected = {(cid, i + 1): aa for cid, c in zip(ids, chains) for i, aa in enumerate(c['sequence'])}
     if residues != expected:
         raise ValueError('Returned structure sequence or numbering does not match the job.')
+    from .predict_geometry import check_ca_geometry
+    geometry = check_ca_geometry([coordinates[key] for key in expected], [key[0] for key in expected])
     cross_sum, cross_count = 0., 0
     for i, row in enumerate(pae):
         for j, value in enumerate(row):
@@ -228,7 +231,7 @@ def validate_result(directory, chains):
         raise ValueError('The returned contact-probability matrix is invalid.')
     if len(chains) == 1:
         summary['iptm'] = None  # There is no interface score for a monomer.
-    return dict(summary, mean_cross_chain_pae=cross_sum/cross_count if cross_count else None,
+    return dict(summary, geometry=geometry, mean_cross_chain_pae=cross_sum/cross_count if cross_count else None,
                 has_contact_probabilities='contact_probs' in confidences)
 
 
@@ -270,9 +273,9 @@ class PredictionProgress:
 class PredictionJob:
     """One cancellable process; poll() is nonblocking and called by the GUI timer."""
     def __init__(self, directory, chains, *, executable=None, search=False, msa=None,
-                 seed=None, recycles=3, max_msa=512, max_extra=1024, source=None,
+                 seed=None, recycles=None, max_msa=512, max_extra=1024, source=None,
                  cache=None, timeout=None, msa_crop=None, backend='af2', accept_af3_terms=False,
-                 diffusion_steps=200):
+                 diffusion_steps=200, diffusion_samples=5):
         validate_chains(chains)
         if backend not in ('af2', 'af3'):
             raise ValueError('Choose the AF2 or AF3 prediction model.')
@@ -280,6 +283,10 @@ class PredictionJob:
             raise ValueError('Confirm acceptance of DeepMind’s AF3 parameter terms before predicting with AF3.')
         if not isinstance(diffusion_steps, int) or not 1 <= diffusion_steps <= 1000:
             raise ValueError('AF3 diffusion steps must be between 1 and 1000.')
+        if not isinstance(diffusion_samples, int) or not 1 <= diffusion_samples <= 10:
+            raise ValueError('AF3 diffusion samples must be between 1 and 10.')
+        if recycles is None:
+            recycles = 10 if backend == 'af3' else 3
         if seed is None:
             seed = random_seed()
         if search and msa:
@@ -314,7 +321,7 @@ class PredictionJob:
         self.options = dict(seed=seed, recycles=recycles, max_msa=max_msa, max_extra=max_extra)
         if backend == 'af3':
             self.options.pop('max_extra')
-            self.options.update(steps=diffusion_steps, samples=1, update='euler', schedule='karras')
+            self.options.update(steps=diffusion_steps, samples=diffusion_samples, update='euler', schedule='karras')
         self.source = source or {}
         self.search = search
         self.msa = Path(msa).expanduser().resolve() if msa else None
@@ -381,7 +388,12 @@ class PredictionJob:
             env = os.environ.copy()
             if self.backend == 'af3':
                 env['LOCALFOLD_ACCEPT_MODEL_TERMS'] = 'alphafold3'
+                # The pinned engine's M5 tensor path collapses AF3 coordinates.
+                # Its conventional Metal kernels pass the 1BRS crystal control.
+                env['LOCALFOLD_GEMM_TENSOR'] = '0'
+                env['LOCALFOLD_ATTN_TENSOR'] = '0'
                 self.manifest['af3_terms_accepted'] = True
+                self.manifest['runtime_environment'] = dict(LOCALFOLD_GEMM_TENSOR='0', LOCALFOLD_ATTN_TENSOR='0')
             launch = args
             if self.model == MODEL and revision == ENGINE_REVISION:
                 from .predict_weights import HEAD_SHA256

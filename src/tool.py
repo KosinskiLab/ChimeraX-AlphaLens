@@ -1831,6 +1831,11 @@ class AlphaLensPlot(ToolInstance):
         menu.addSeparator()
         predict_action = menu.addAction('Re-predict selected interface…', self._predict_interface)
         predict_action.setEnabled(self._prediction_region is not None)
+        from pathlib import Path
+        filename = getattr(self._pae.structure, 'filename', None)
+        if filename and (Path(filename).parent / 'job.json').is_file():
+            from .predict_ui import show_prediction_report
+            menu.addAction('Prediction report…', lambda: show_prediction_report(self.session, Path(filename).parent))
         menu.addAction('Save image', self._save_image)
 
     def _predict_interface(self):
