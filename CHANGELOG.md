@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.3
+
+* Show actual prediction stages and elapsed time instead of repeatedly showing the
+  MSA source during inference. Flush AF3 progress output while prediction runs.
+* Append stage updates, errors and the identical full score/contact report to both
+  the prediction window and ChimeraX Log. Keep earlier runs visible when predicting
+  again; avoid repeated messages on every timer tick.
+
 ## 1.1.2
 
 * Fix collapsed local AF3 predictions on M5 hardware by disabling the pinned

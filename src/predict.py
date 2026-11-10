@@ -392,8 +392,11 @@ class PredictionJob:
                 # Its conventional Metal kernels pass the 1BRS crystal control.
                 env['LOCALFOLD_GEMM_TENSOR'] = '0'
                 env['LOCALFOLD_ATTN_TENSOR'] = '0'
+                # Foundation otherwise buffers AF3 stdout until inference finishes.
+                env['NSUnbufferedIO'] = 'YES'
                 self.manifest['af3_terms_accepted'] = True
-                self.manifest['runtime_environment'] = dict(LOCALFOLD_GEMM_TENSOR='0', LOCALFOLD_ATTN_TENSOR='0')
+                self.manifest['runtime_environment'] = dict(LOCALFOLD_GEMM_TENSOR='0', LOCALFOLD_ATTN_TENSOR='0',
+                                                            NSUnbufferedIO='YES')
             launch = args
             if self.model == MODEL and revision == ENGINE_REVISION:
                 from .predict_weights import HEAD_SHA256
