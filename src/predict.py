@@ -4,6 +4,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -13,6 +14,8 @@ ENGINE_REVISION = '68c59196fa7d32c6edfc061ed369889c1cdb680b'
 MODEL = 'model_1_multimer_v3'
 MONOMER_MODEL = 'model_1_ptm'
 AMINO_ACIDS = 'ACDEFGHIKLMNPQRSTVWY'
+# A UI warning threshold only. LocalFold checks the GPU working-set budget.
+LARGE_JOB_RESIDUES = 1024
 
 
 def data_directory():
@@ -48,8 +51,14 @@ def validate_chains(chains):
             raise ValueError('Use nonempty protein sequences with the 20 standard amino acids.')
         if len(chain['residue_map']) != len(seq):
             raise ValueError('The sequence and residue mapping have different lengths.')
-    if sum(len(c['sequence']) for c in chains) > 400:
-        raise ValueError('The prototype is limited to 400 total residues; select a smaller interface.')
+
+
+def size_warning(chains):
+    total = sum(len(c['sequence']) for c in chains)
+    if total > LARGE_JOB_RESIDUES:
+        return (f'Large prediction: {total:,} residues including flanks. More GPU memory '
+                'and time may be needed. You can proceed.')
+    return ''
 
 
 def crop_chains(rows, region, flanks=10):
@@ -182,11 +191,44 @@ def validate_result(directory, chains):
                 has_contact_probabilities='contact_probs' in confidences)
 
 
+class PredictionProgress:
+    """Read reported engine milestones; never estimate end-to-end percentages."""
+    def __init__(self):
+        self.stage = 'Preparing model and alignment'
+        self.completed = 0
+        self.total = None
+        self._pending = ''
+
+    def feed(self, text):
+        lines = (self._pending + text).split('\n')
+        self._pending = lines.pop()[-4096:]
+        for line in lines:
+            line = line.strip()
+            passed = re.match(r'pass (\d+)/(\d+):', line)
+            header = re.match(r'AF2 (?:monomer|multimer): .*?, (\d+) passes$', line)
+            if passed:
+                completed, total = map(int, passed.groups())
+                if 0 < completed <= total:
+                    self.completed = completed
+                    self.total = total if completed < total else None
+                    self.stage = 'Predicting' if completed < total else 'Writing prediction files'
+            elif header and int(header[1]) > 0:
+                self.stage, self.completed, self.total = 'Predicting', 0, int(header[1])
+            elif line.startswith('search:'):
+                self.stage = 'MSA search · ' + line[len('search:'):].strip()[:160]
+                self.total = None
+            elif re.match(r'(?:monomer|multimer)(?:-\d+)?:', line):
+                self.stage, self.total = 'Downloading model weights', None
+            elif (re.match(r'\d+ residues, .* passes ->', line)
+                  or line.startswith('loaded in ')):
+                self.stage, self.total = 'Loading model and preparing GPU', None
+
+
 class PredictionJob:
     """One cancellable process; poll() is nonblocking and called by the GUI timer."""
     def __init__(self, directory, chains, *, executable=None, search=False, msa=None,
                  seed=0, recycles=3, max_msa=512, max_extra=1024, source=None,
-                 cache=None, timeout=300, msa_crop=None):
+                 cache=None, timeout=None, msa_crop=None):
         validate_chains(chains)
         if search and msa:
             raise ValueError('Choose remote search or an existing merged MSA, not both.')
@@ -203,12 +245,17 @@ class PredictionJob:
         self.executable = Path(executable or default_executable()).expanduser().resolve()
         if not self.executable.is_file() or not os.access(self.executable, os.X_OK):
             raise ValueError('LocalFold is not installed. Run scripts/setup_localfold.py or choose localfold-af2.')
+        if timeout is not None and (not isinstance(timeout, (float, int)) or
+                                    not math.isfinite(timeout) or timeout <= 0):
+            raise ValueError('The time limit must be positive, or None for no limit.')
         self.timeout = timeout
         self.process = self.lock = self.log = None
         self.cancelled_at = None
         self.state = 'prepared'
         self.result = None
         self.error = None
+        self.progress = PredictionProgress()
+        self._log_offset = 0
         self.options = dict(seed=seed, recycles=recycles, max_msa=max_msa, max_extra=max_extra)
         self.source = source or {}
         self.search = search
@@ -260,6 +307,7 @@ class PredictionJob:
                                  executable_sha256=binary_hash, model=self.model,
                                  weights=f'LocalFold AF2 {self.model} int5 bundle (CC BY 4.0)',
                                  source=self.source, options=self.options, args=args,
+                                 timeout_seconds=self.timeout,
                                  msa_crop=self.msa_crop,
                                  source_msa_sha256=digest(alignment) if alignment else None,
                                  msa_source=('supplied' if self.msa else 'cache') if alignment else self.api,
@@ -301,11 +349,22 @@ class PredictionJob:
             except ProcessLookupError:
                 pass
 
+    def read_progress(self):
+        # Read only new bytes, bounded per GUI tick. Keep milestones across long
+        # diagnostic lines and partial writes instead of repeatedly tailing the log.
+        with (self.directory / 'prediction.log').open('rb') as log:
+            log.seek(self._log_offset)
+            chunk = log.read(64 * 1024)
+            self._log_offset = log.tell()
+        self.progress.feed(chunk.decode(errors='replace'))
+        return self.progress
+
     def poll(self):
         if self.state != 'running':
             return self.state
-        if time.monotonic()-self.started > self.timeout and self.cancelled_at is None:
-            self.error = f'Prediction exceeded the {self.timeout}-second prototype limit.'
+        if (self.timeout is not None and time.monotonic()-self.started > self.timeout
+                and self.cancelled_at is None):
+            self.error = f'Prediction exceeded the configured {self.timeout}-second time limit.'
             self.cancel()
         if self.cancelled_at and time.monotonic()-self.cancelled_at > 1 and self.process.poll() is None:
             try:

@@ -4,12 +4,44 @@ import sys
 import time
 
 import pytest
-from alphalens.predict import PredictionJob, crop_chains, validate_a3m, validate_chains, validate_result
+from alphalens.predict import PredictionJob, PredictionProgress, crop_chains, size_warning, validate_a3m, validate_chains, validate_result
 
 
 def rows():
     return [dict(chain_id=c, chain_index=i, aa='A', number=i + 10, insertion_code='')
             for c in 'AB' for i in range(8)]
+
+
+def test_progress_reports_engine_milestones_and_preserves_partial_lines():
+    progress = PredictionProgress()
+    assert progress.total is None
+    progress.feed('  multimer: weights.bin (1/8)\n')
+    assert progress.stage == 'Downloading model weights' and progress.total is None
+    progress.feed('search: chain search 1 of 2: queued\n')
+    assert 'queued' in progress.stage and progress.total is None
+    progress.feed('search: paired search: downloading\n')
+    assert 'downloading' in progress.stage and progress.total is None
+    progress.feed('799 residues, 512 MSA rows, 1024 extra, 4 passes -> /tmp/in\n')
+    assert progress.stage == 'Loading model and preparing GPU'
+    progress.feed('AF2 multimer: 799 residues, 512 MSA rows, 1024 extra, 4 passes\n  pass 1/')
+    assert (progress.completed, progress.total) == (0, 4)
+    progress.feed('4: mean pLDDT 59.02\n' + 'metal: long diagnostics ' * 500 + '\n')
+    assert (progress.completed, progress.total) == (1, 4)
+    progress.feed('  pass 2/4: mean pLDDT 56.99\n  pass 3/4: mean pLDDT 58.04\n')
+    assert (progress.completed, progress.total) == (3, 4)
+    progress.feed('  pass 4/4: mean pLDDT 58.02\n')
+    assert progress.stage == 'Writing prediction files' and progress.total is None
+
+
+def test_progress_ignores_unknown_and_invalid_messages():
+    progress = PredictionProgress()
+    progress.feed('pass 2/0: invalid\npass 5/4: invalid\nAF2 monomer: invalid, 0 passes\n')
+    assert progress.total is None
+    progress.feed('AF2 monomer: 108 residues, 512 MSA rows, 1024 extra, 1 passes\n')
+    assert (progress.completed, progress.total) == (0, 1)
+    progress.feed('unknown output without newline' * 1000)
+    assert len(progress._pending) <= 4096
+    assert (progress.completed, progress.total) == (0, 1)
 
 
 def test_crop_extends_contiguously_and_preserves_numbering():
@@ -32,11 +64,26 @@ def test_crop_rejects_missing_sequence_positions():
         crop_chains(r, (2, 4, 9, 12), 0)
 
 
-def test_sequence_limits():
-    with pytest.raises(ValueError, match='400'):
-        validate_chains([dict(sequence='A'*201, residue_map=[{}]*201)]*2)
+def test_sequence_validation_has_no_residue_count_cap():
+    validate_chains([dict(sequence='A'*410, residue_map=[{}]*410),
+                     dict(sequence='A'*389, residue_map=[{}]*389)])
+    validate_chains([dict(sequence='A'*512, residue_map=[{}]*512)]*2)
+    validate_chains([dict(sequence='A'*1024, residue_map=[{}]*1024)])
+    validate_chains([dict(sequence='A'*10000, residue_map=[{}]*10000)]*2)
     with pytest.raises(ValueError, match='standard'):
         validate_chains([dict(sequence='AX', residue_map=[{}, {}])]*2)
+
+
+def test_large_crop_is_allowed_with_nonblocking_warning():
+    r = [dict(chain_id=c, chain_index=i, aa='A', number=i+1, insertion_code='')
+         for c in 'AB' for i in range(600)]
+    small = crop_chains(r, (50, 549, 650, 1149), 6)
+    large = crop_chains(r, (50, 549, 650, 1149), 7)
+    assert sum(len(c['sequence']) for c in small) == 1024
+    assert sum(len(c['sequence']) for c in large) == 1028
+    assert not size_warning(small)
+    assert '1,028 residues including flanks' in size_warning(large)
+    assert 'You can proceed' in size_warning(large)
 
 
 def test_a3m_query_validation(tmp_path):
@@ -119,6 +166,22 @@ def test_timeout_and_engine_errors(runner):
     assert timed.state == 'failed' and 'limit' in timed.error
     failed = finish(runner('failed', search=True, seed=98).start())
     assert failed.state == 'failed' and 'status 7' in failed.error
+
+
+def test_default_has_no_timeout_but_manual_cancel_still_works(runner):
+    job = runner(search=True, seed=99).start()
+    job.started -= 3600
+    assert job.poll() == 'running'
+    assert job.cancelled_at is None
+    assert job.manifest['timeout_seconds'] is None
+    job.cancel(); finish(job)
+    assert job.state == 'cancelled'
+
+
+@pytest.mark.parametrize('timeout', [0, -1, float('inf'), float('nan')])
+def test_invalid_time_limit(runner, timeout):
+    with pytest.raises(ValueError, match='time limit'):
+        runner(search=True, timeout=timeout)
 
 
 def test_existing_output_preserved(runner):
