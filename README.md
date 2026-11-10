@@ -35,8 +35,9 @@ P ≥ 0.5.*
 
 ## Install
 
-Version 1.1.2 fixes collapsed local AF3 predictions on M5, preserves score reports,
-and includes the hover-resizing fix and local AF3 prediction,
+Version 1.1.3 shows live prediction stages and the same complete score report in
+both the prediction window and ChimeraX Log. It includes the AF3 coordinate fix,
+hover-resizing fix, local AF3 prediction,
 multi-chain inputs, random seeds and contact-probability reports. Large inputs show
 a warning without a residue-count cap.
 
@@ -49,7 +50,7 @@ Apple Silicon macOS 13 or newer and is tested with ChimeraX 1.12.
    pip needs it.
 2. In the ChimeraX command line:
 
-       toolshed install ~/Downloads/chimerax_alphalens-1.1.2-py3-none-any.whl
+       toolshed install ~/Downloads/chimerax_alphalens-1.1.3-py3-none-any.whl
 
 3. Restart ChimeraX.
 
@@ -76,8 +77,8 @@ ChimeraX builds a `pyproject.toml` bundle from its current directory, whatever p
 
 ### Optional local prediction engine (Apple Silicon)
 
-Download [setup_localfold.py](https://github.com/KosinskiLab/AlphaLens/releases/download/v1.1.2/setup_localfold.py)
-from the 1.1.2 release. With Python 3, Git and Xcode Command Line Tools installed, run in Terminal:
+Download [setup_localfold.py](https://github.com/KosinskiLab/AlphaLens/releases/download/v1.1.3/setup_localfold.py)
+from the 1.1.3 release. With Python 3, Git and Xcode Command Line Tools installed, run in Terminal:
 
 ```sh
 python3 ~/Downloads/setup_localfold.py

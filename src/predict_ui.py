@@ -89,13 +89,7 @@ def import_result(session, job):
         job.contact_report = predict_contacts.export(job.directory, job.chains, contact_pairs,
             predict_contacts.measure(pae, contact_pairs), job.source.get('contact_snapshot'))
         predict.write_json(job.directory / 'contact_report.json', job.contact_report)
-        session.logger.info(predict_contacts.summary(job.contact_report))
     if job.source.get('input_mode') == 'sequence':
-        confidence = (f'ipTM {job.result["iptm"]:.3f}' if len(job.chains) > 1
-                      else f'pTM {job.result["ptm"]:.3f}')
-        session.logger.info(f'Local prediction: {job.directory}\n{confidence}; '
-                            f'mean pLDDT {job.result["mean_plddt"]:.1f}. '
-                            'Predicted from sequence; no source-model comparison is available.')
         return structure, None
     # Superpose on the first selected chain only, preserving the predicted interface.
     # Snapshot coordinates remain valid even if the source model has been closed.
@@ -119,10 +113,6 @@ def import_result(session, job):
                       predicted_core_mean_plddt=float(np.mean(pae.row_plddt()[np.unique(contact_pairs)])),
                       contacts=job.contact_report)
     predict.write_json(job.directory / 'comparison.json', comparison)
-    session.logger.info(f'Local prediction: {job.directory}\nipTM {job.result["iptm"]:.3f}; '
-                        f'mean pLDDT {job.result["mean_plddt"]:.1f}. '
-                        f'Same selected pairs: mean PAE {job.source["core_mean_pae"]:.2f} → '
-                        f'{comparison["predicted_core_mean_pae"]:.2f} Å.')
     return structure, comparison
 
 
@@ -317,8 +307,21 @@ class PredictionDialog(QDialog):
 
     def show_error(self, message):
         self.status.setStyleSheet('color: #c43b36; font-weight: bold;')
-        self.set_status(message)
-        self.session.logger.warning(message)
+        self.log_message(message, warning=True)
+
+    def log_message(self, message, *, warning=False, show_start=False):
+        """Keep the same prediction messages in this window and ChimeraX's Log."""
+        start = 0 if self.status.document().isEmpty() else self.status.document().characterCount()
+        self.status.appendPlainText(message)
+        if show_start:
+            # Long paths at the end must not hide the scores at the start.
+            cursor = self.status.textCursor()
+            cursor.setPosition(start)
+            self.status.setTextCursor(cursor)
+            self.status.ensureCursorVisible()
+            self.status.verticalScrollBar().setValue(cursor.block().firstLineNumber())
+        logger = self.session.logger.warning if warning else self.session.logger.info
+        logger(message)
 
     def cancel(self):
         if self.job and self.job.state == 'running':
@@ -345,7 +348,7 @@ class PredictionDialog(QDialog):
         self.entries = None
         self.input_text.setEnabled(False); self.load_button.setEnabled(False)
         self.start_button.setEnabled(False)
-        self.set_status('Resolving sequences…')
+        self.log_message('Resolving sequences…')
         threading.Thread(target=resolve, daemon=True, name='AlphaLens UniProt lookup').start()
         self.lookup_timer.start()
 
@@ -369,9 +372,9 @@ class PredictionDialog(QDialog):
             self.input_widgets.extend(self.ranges)
             self.resolved.setPlainText('\n'.join(f'>{e["label"]} ({len(e["sequence"])} residues)\n{e["sequence"]}'
                                                  for e in self.entries))
-            self.set_status('Review the resolved sequences, choose ranges/MSA, then click Predict.')
+            self.log_message('Review the resolved sequences, choose ranges/MSA, then click Predict.')
         except Exception as e:
-            self.set_status(str(e))
+            self.show_error(str(e))
         self.lookup_future = None
         self.refresh()
 
@@ -426,7 +429,7 @@ class PredictionDialog(QDialog):
                 try:
                     predict.record_af3_terms_acceptance()
                 except OSError as error:
-                    self.session.logger.warning(f'Could not remember AF3 terms acceptance: {error}')
+                    self.log_message(f'Could not remember AF3 terms acceptance: {error}', warning=True)
         except Exception as e:
             self.set_progress('Could not start', 0, 100)
             self.show_error(str(e)); return
@@ -437,8 +440,11 @@ class PredictionDialog(QDialog):
         for widget in self.input_widgets:
             widget.setEnabled(False)
         self.cancel_button.setEnabled(True)
+        self._logged_stage = None
+        self.log_message(f'Starting {self.job.backend.upper()} prediction · Seed: {self.job.options["seed"]}\n'
+                         f'Alignment source: {self.job.manifest["msa_source"]}\n'
+                         f'Results: {self.job.directory}')
         self.timer.start()
-        self.set_status('Running…')
 
     def poll(self):
         try:
@@ -450,10 +456,11 @@ class PredictionDialog(QDialog):
                 if progress.total:
                     stage += f' · {progress.completed}/{progress.total} passes completed'
                 if self.job.cancelled_at is not None:
-                    self.set_progress('Cancelling…')
-                else:
-                    self.set_progress(stage, progress.completed, progress.total)
-                self.set_status(f'Running · {elapsed:.1f} s · MSA: {self.job.manifest["msa_source"]}')
+                    stage = 'Cancelling…'
+                self.set_progress(f'{stage} · {elapsed:.1f} s', progress.completed, progress.total)
+                if stage != self._logged_stage:
+                    self.log_message(f'{elapsed:.1f} s · {stage}')
+                    self._logged_stage = stage
                 return
             self.timer.stop(); self.cancel_button.setEnabled(False)
             if state == 'complete':
@@ -464,34 +471,15 @@ class PredictionDialog(QDialog):
                 report = save_report(self.job.directory)
                 self.report_directory = self.job.directory
                 self.report_button.setEnabled(True)
-                self.session.logger.info(report)
+                self.log_message(report, show_start=True)
                 # Opening the result plot can cover this dialog; keep its comparison visible.
                 self.raise_()
-                if self.comparison is None:
-                    score = (f'ipTM {self.job.result["iptm"]:.3f}' if len(self.job.chains) > 1
-                             else f'pTM {self.job.result["ptm"]:.3f}')
-                    self.set_status(f'Complete in {time.monotonic()-self.job.started:.1f} s · {score}\n'
-                                        f'Mean pLDDT {self.job.result["mean_plddt"]:.1f}\n'
-                                        f'Seed: {self.job.options["seed"]}\n'
-                                        + (predict_contacts.summary(self.job.contact_report)+'\n' if self.job.contact_report else '')
-                                        + f'Results: {self.job.directory}')
-                    return
-                old = self.job.source['core_mean_pae']; new = self.comparison['predicted_core_mean_pae']
-                before = self.job.source['core_mean_plddt']
-                plddt = (f'Same residues: pLDDT {before:.1f} → '
-                         f'{self.comparison["predicted_core_mean_plddt"]:.1f}\n') if before is not None else ''
-                self.set_status(f'Complete in {time.monotonic()-self.job.started:.1f} s · '
-                                    f'ipTM {self.job.result["iptm"]:.3f}\n'
-                                    f'Same selected pairs: mean PAE {old:.2f} → {new:.2f} Å\n'
-                                    + plddt + f'Seed: {self.job.options["seed"]}\n'
-                                    + predict_contacts.summary(self.job.contact_report) + '\n' +
-                                    f'Results: {self.job.directory}')
             else:
                 self.set_progress('Failed' if self.job.error else 'Cancelled', 0, 100)
                 if self.job.error:
                     self.show_error(self.job.error)
                 else:
-                    self.set_status('Cancelled. Partial files retained in the results directory.')
+                    self.log_message(f'Cancelled. Partial files retained in {self.job.directory}')
         except Exception as e:
             self.timer.stop(); self.cancel_button.setEnabled(False)
             # A log/read failure must not leave an unpolled GPU job running.
@@ -529,7 +517,7 @@ class PredictionDialog(QDialog):
     def closeEvent(self, event):
         if self.job and self.job.state == 'running':
             self.cancel()
-            self.set_status('Cancelling… Close again when the process stops.')
+            self.log_message('Cancelling… Close again when the process stops.')
             event.ignore()
         else:
             self.lookup_timer.stop()

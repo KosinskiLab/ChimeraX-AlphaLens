@@ -189,7 +189,8 @@ def test_af3_terms_gate_options_and_cross_model_msa_cache(runner):
     assert af3.manifest['msa_source'] == 'cache'
     assert '--steps=200' in af3.manifest['args']
     assert '--recycles=10' in af3.manifest['args'] and '--samples=5' in af3.manifest['args']
-    assert af3.manifest['runtime_environment'] == dict(LOCALFOLD_GEMM_TENSOR='0', LOCALFOLD_ATTN_TENSOR='0')
+    assert af3.manifest['runtime_environment'] == dict(LOCALFOLD_GEMM_TENSOR='0', LOCALFOLD_ATTN_TENSOR='0',
+                                                      NSUnbufferedIO='YES')
     assert '--update=euler' in af3.manifest['args'] and '--schedule=karras' in af3.manifest['args']
     assert not any(a.startswith('--max-extra') for a in af3.manifest['args'])
     assert af3.manifest['af3_terms_accepted'] is True

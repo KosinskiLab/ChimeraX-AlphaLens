@@ -45,6 +45,12 @@ def pump(predicate, seconds=30):
 def main():
     dialog = None
     try:
+        logged = []
+        for name in ('info', 'warning'):
+            def record(message, *args, original=getattr(session.logger, name), **kwargs):
+                logged.append(str(message))
+                return original(message, *args, **kwargs)
+            setattr(session.logger, name, record)
         structure = cmd._open_structure(session, str(root / 'fold.pdb'))
         pae = cmd.alphalens(session, structure, pae_file=str(root / 'fold_confidences.json'), wait=True)
         sequences = [chain.characters for chain in structure.chains]
@@ -102,11 +108,19 @@ def main():
         dialog.start_button.click()
         assert dialog.job and dialog.job.state == 'running', dialog.status.toPlainText()
         pump(lambda: 'queued' in dialog.progress_label.text())
+        assert 'queued' in dialog.status.toPlainText()
+        assert any('queued' in message for message in logged)
         assert dialog.progress_bar.maximum() == 0
         assert dialog.cancel_button.isEnabled() and not dialog.start_button.isEnabled()
         dialog.grab().save(str(out / 'queued.png'))
         pump(lambda: dialog.progress_bar.maximum() == 4)
         assert dialog.progress_bar.value() == 1
+        assert 'Predicting' in dialog.status.toPlainText().splitlines()[-1]
+        assert 'MSA:' not in dialog.status.toPlainText().splitlines()[-1]
+        history = dialog.status.toPlainText(); message_count = len(logged)
+        for tick in range(20):
+            dialog.poll()
+        assert dialog.status.toPlainText() == history and len(logged) == message_count
         dialog.grab().save(str(out / 'inference.png'))
         dialog.cancel_button.click()
         pump(lambda: not dialog.timer.isActive())
@@ -122,7 +136,8 @@ def main():
         assert dialog.progress_bar.value() == 0 and dialog.start_button.isEnabled()
 
         results = []
-        for mode in ('sequence', 'region'):
+        previous_report = None
+        for mode in ('sequence', 'sequence-repeat', 'region'):
             if mode == 'region':
                 dialog.close()
                 plot = structure._alphalens_plot
@@ -152,6 +167,13 @@ def main():
             assert any(0 < value < total == 4 for _, _, value, total in observations), observations
             assert max(b[0]-a[0] for a, b in zip(observations, observations[1:])) < 2
             assert not dialog.status.styleSheet(), 'Stale error styling'
+            report = (dialog.job.directory/'prediction_report.txt').read_text(encoding='utf-8').strip()
+            assert dialog.status.toPlainText().endswith(report)
+            assert dialog.status.firstVisibleBlock().text().startswith('Local prediction')
+            assert logged.count(report) == 1
+            if mode == 'sequence-repeat':
+                assert previous_report in dialog.status.toPlainText()
+            previous_report = report
             dialog.grab().save(str(out / f'{mode}-complete.png'))
             results.append(dict(mode=mode, seconds=time.monotonic()-started,
                                 iptm=dialog.job.result['iptm'], progress=observations))
