@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1
+
+* Fix the plot window growing in several steps as the pointer moves across PAE
+  cells. Hover statistics now wrap in a fixed-height area and do not enlarge the
+  window or refit the matrix. Full text remains selectable and available as a tooltip.
+* Verify repeated hover updates keep window size, viewport size and zoom unchanged,
+  including after zooming and manually resizing the window.
+
 ## 1.1.0
 
 * Choose AlphaFold 2 or AlphaFold 3 for local prediction on Apple Silicon. The setup
