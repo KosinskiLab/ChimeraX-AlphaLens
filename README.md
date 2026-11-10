@@ -80,7 +80,9 @@ one structure is open) or `alphalens #1`.
 The plot reads the PAE file next to the structure, plus the distogram if the prediction kept it.
 If the distogram is missing, you get the PAE view and, for AF3, the contact view from
 `contact_probs` from the same seed. A missing seed distogram is never replaced by another seed's
-distogram. The tabs that need unavailable data are greyed out with a tooltip saying why.
+distogram. A top-level AF3 model needs a readable `ranking_scores.csv` to identify its seed;
+without it, open the specific `seed-S_sample-K/model.cif` or supply a known matching
+`distogram` explicitly. The tabs that need unavailable data are greyed out with a tooltip saying why.
 A readable PAE file is required; an unreadable optional distogram still leaves the PAE view usable.
 Explicit requests for views, contacts or CSV export fail if their required data cannot be loaded.
 
