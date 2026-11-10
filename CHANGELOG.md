@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.1a1
+
+* Raise the local prediction limit from 400 to 1,024 total residues, including flanks,
+  for selected regions and sequence/UniProt inputs. The UI and validator share one limit.
+* Retain the native engine’s GPU-memory check and the existing cancellation/timeout.
+* Add combined-chain and flank boundary regressions. A real 799-residue pair completed
+  in 25.9 seconds on the tested M5 Max with a supplied MSA (3.26 GB engine buffer peak).
+* Clarify that AlphaLens uses the native Metal engine; the browser WebGPU backend is
+  not integrated. This is a test build; performance at the full cap is not yet measured.
+
 ## 1.0.0
 
 * **Local prediction on Apple Silicon:** predict one or two proteins from raw sequence,

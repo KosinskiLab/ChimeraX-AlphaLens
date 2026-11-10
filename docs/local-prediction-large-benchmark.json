@@ -1,0 +1,54 @@
+{
+  "date": "2026-11-10",
+  "hardware": "Apple M5 Max, 64 GB unified memory",
+  "chimerax": "1.12",
+  "engine": "LocalFold native Metal",
+  "engine_revision": "68c59196fa7d32c6edfc061ed369889c1cdb680b",
+  "input": {
+    "accessions": [
+      "P13473",
+      "Q9NP31"
+    ],
+    "chain_lengths": [
+      410,
+      389
+    ],
+    "msa": "Saved AF3 unpaired alignments, merged block-diagonally; no remote search",
+    "recycles": 3,
+    "max_msa": 512,
+    "max_extra": 1024,
+    "seed": 0
+  },
+  "region": {
+    "residues": 799,
+    "elapsed_seconds": 25.87730116700186,
+    "max_heartbeat_gap_seconds": 0.1782908339991991,
+    "heartbeat_ticks": 504,
+    "result": {
+      "ptm": 0.3106,
+      "iptm": 0.211528,
+      "mean_plddt": 58.02,
+      "mean_cross_chain_pae": 28.924066869396814,
+      "has_contact_probabilities": false
+    }
+  },
+  "engine_peak_buffer_GB": 3.26,
+  "notes": [
+    "Capacity check, not an accuracy benchmark.",
+    "Peak is the native engine allocation counter, not total system memory.",
+    "Real inference was measured at 799 residues; 1024 is an input-validation boundary."
+  ],
+  "installed_sequence": {
+    "residues": 799,
+    "elapsed_seconds": 24.837165083998116,
+    "max_heartbeat_gap_seconds": 0.1737577500025509,
+    "heartbeat_ticks": 494,
+    "result": {
+      "ptm": 0.3106,
+      "iptm": 0.211528,
+      "mean_plddt": 58.02,
+      "mean_cross_chain_pae": 28.924066869396814,
+      "has_contact_probabilities": false
+    }
+  }
+}

@@ -125,7 +125,7 @@ class PredictionDialog(QDialog):
         self.setWindowTitle('Local protein prediction · experimental')
         self.resize(660, 400)
         layout = QVBoxLayout(self)
-        intro = QLabel('Local AF2 on Apple Silicon • one or two protein chains • ≤400 total residues\n'
+        intro = QLabel(f'Local AF2 on Apple Silicon • one or two protein chains • ≤{predict.MAX_RESIDUES} total residues\n'
                        'The first run of each model downloads public AF2 weights.')
         intro.setWordWrap(True); layout.addWidget(intro)
         self.input_widgets = []
