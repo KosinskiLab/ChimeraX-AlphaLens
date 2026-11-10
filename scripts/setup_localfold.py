@@ -1,49 +1,7 @@
 #!/usr/bin/env python3
-"""Build a pinned native Metal engine outside ChimeraX's Python environment."""
-import argparse
-import hashlib
-import json
+"""Repository entry point; release downloads use the self-contained src/predict_setup.py."""
 from pathlib import Path
-import platform
-import shutil
-import subprocess
-
-REVISION = '68c59196fa7d32c6edfc061ed369889c1cdb680b'
-REPOSITORY = 'https://github.com/sokrypton/localfold.git'
-
-
-def main():
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--prefix', type=Path, default=Path.home() / '.local/share/alphalens')
-    p.add_argument('--source', type=Path, help='Use an existing clean checkout at the pinned revision')
-    p.add_argument('--models', nargs='+', choices=['af2', 'af3'], default=['af2', 'af3'],
-                   help='Native engines to build (default: both AF2 and AF3)')
-    args = p.parse_args()
-    if platform.system() != 'Darwin' or platform.machine() != 'arm64':
-        p.error('This prototype requires Apple Silicon macOS and Xcode Command Line Tools.')
-    prefix = args.prefix.expanduser().resolve()
-    source = args.source or prefix / 'engine' / REVISION
-    if not source.exists():
-        source.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(['git', 'clone', '--filter=blob:none', '--no-checkout', REPOSITORY, str(source)], check=True)
-        subprocess.run(['git', '-C', str(source), 'checkout', '--detach', REVISION], check=True)
-    head = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
-    changed = subprocess.check_output(['git', '-C', str(source), 'status', '--porcelain', '--untracked-files=no'], text=True)
-    if head != REVISION or changed:
-        p.error('The source must be clean and at the pinned revision; existing files were preserved.')
-    subprocess.run(['bash', 'metal/build.sh', *args.models], cwd=source, check=True)
-    for model in args.models:
-        target = prefix / 'bin' / f'localfold-{model}'
-        target.parent.mkdir(parents=True, exist_ok=True)
-        temporary = target.with_suffix('.part')
-        shutil.copy2(source / f'metal/{model}/localfold-{model}', temporary)
-        temporary.replace(target)
-        shutil.copy2(source / 'LICENSE', target.parent / 'LocalFold-LICENSE.txt')
-        target.with_suffix('.json').write_text(json.dumps(dict(repository=REPOSITORY, revision=head,
-                                       sha256=hashlib.sha256(target.read_bytes()).hexdigest()), indent=2) + '\n')
-        print(f'Installed {target}.')
-    print('Weights download on the first prediction. AF3 requires acceptance of DeepMind’s terms in the dialog.')
-
+import runpy
 
 if __name__ == '__main__':
-    main()
+    runpy.run_path(str(Path(__file__).resolve().parents[1] / 'src' / 'predict_setup.py'), run_name='__main__')

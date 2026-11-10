@@ -1,6 +1,6 @@
 # Experimental local protein and interface prediction
 
-AlphaLens 1.1.3 can predict protein complexes from sequences or UniProt IDs, or re-predict
+AlphaLens 1.2.0 can predict protein complexes from sequences or UniProt IDs, or re-predict
 selected regions spanning multiple protein chains, with AlphaFold 2 or AlphaFold 3 on
 Apple Silicon, using [LocalFold's native Metal implementation](https://github.com/sokrypton/localfold/tree/68c59196fa7d32c6edfc061ed369889c1cdb680b/metal).
 The prediction runs in a separate process; ChimeraX remains interactive. The original
@@ -10,22 +10,34 @@ are not yet connected to AlphaLens.
 
 ## Setup
 
-Install the AlphaLens 1.1.3 wheel. The local prediction feature remains experimental.
-The engine requires Apple Silicon, macOS 13 or newer, Git, Python 3 and Xcode Command
-Line Tools. It does not require a Python ML environment inside ChimeraX.
+Install the AlphaLens 1.2.0 wheel. The local prediction feature remains experimental.
+The engine requires Apple Silicon, macOS 13 or newer and Xcode Command Line Tools.
+No separate Python ML environment is needed. With a missing default engine, the button
+reads **Install & Predict**. Clicking it downloads and builds only the selected backend
+in the background, then runs the prediction using the input/settings captured at that
+click. **Cancel setup** cancels installation without starting a prediction; retry the
+button after an error or cancellation. Opening the dialog or installing the plugin does
+not trigger setup. Existing engines and custom executable paths are preserved.
 
-Download `setup_localfold.py` from the GitHub release and run `python3 ~/Downloads/setup_localfold.py`.
-Alternatively, from an AlphaLens checkout, run in Terminal:
+Install missing Xcode Command Line Tools with `xcode-select --install`, then retry.
+Setup logs are retained in `~/.local/share/alphalens/setup-logs/`. A lock prevents two
+installers from building concurrently; another dialog can retry when setup finishes.
 
-```sh
-python3 scripts/setup_localfold.py
-```
+Manual setup is optional: download `setup_localfold.py` from the release and run
+`python3 ~/Downloads/setup_localfold.py`, or use `python3 scripts/setup_localfold.py`
+from a checkout. This builds both engines by default. `--models af2` or `--models af3`
+selects one. `--prefix /path` changes the installation directory; `--source /path/to/clean/localfold`
+uses a clean checkout at the pinned revision. The release script is the self-contained
+`src/predict_setup.py`; `scripts/setup_localfold.py` is a repository entry point.
 
-The script builds LocalFold at commit `68c59196fa7d32c6edfc061ed369889c1cdb680b`,
-installs `~/.local/share/alphalens/bin/localfold-af2` and `localfold-af3`, and records each
-revision and binary SHA-256 beside it. Run setup again when upgrading from 1.0.
-Use `--models af2` or `--models af3` to build just one engine. `--prefix /path` changes the installation directory;
-`--source /path/to/clean/localfold` uses an existing checkout at that exact revision.
+LocalFold is pinned at `68c59196fa7d32c6edfc061ed369889c1cdb680b`.
+Executables go in `~/.local/share/alphalens/bin`, with revision and SHA-256 receipts.
+
+A fresh AF3 engine download and build took **30.4 seconds** on the tested M5 Max,
+with Xcode Command Line Tools already installed. The following 195-residue prediction
+took 10.6 seconds with cached weights and MSA; the GUI's longest heartbeat gap was
+0.27 seconds. An uncached first prediction also downloads model weights and may wait
+for a remote MSA search. Those costs are separate from engine setup.
 The dialog also accepts an explicit executable path (`ALPHALENS_LOCALFOLD` sets its default).
 `ALPHALENS_LOCALFOLD_AF3` sets the AF3 executable default. An executable without a
 matching provenance sidecar is recorded as unverified.
@@ -221,6 +233,15 @@ See [the recorded model/head benchmark](local-prediction-models-benchmark.json).
 
 ## Regression checks
 
+`tests/chimerax_prediction_mapping_check.py` needs no GPU, engine or network. Set
+`ALPHALENS_MAPPING_SOURCE` to a prediction folder with contact probabilities and two chains
+in contact, and `ALPHALENS_TEST_OUTPUT` to a new folder. A stand-in engine returns the
+cropped source structure, rigidly moved, with the source PAE and contact probabilities, so
+the reported comparisons must be identical before and after, the prediction must land on
+the source, and every CSV row must hold the values of the residues it names. It also covers
+both box orientations, a box dragged while the dialog is open, reopening a job folder,
+sequence input and a saved session (`ALPHALENS_SOURCE=installed`).
+
 `tests/chimerax_prediction_models_check.py` runs real AF2 and AF3 predictions in a
 disposable ChimeraX window. It covers three-chain sequence input, a region spanning
 three chains, random seeds, AF3 terms gating, probability imports, contact CSV mapping,
@@ -276,6 +297,9 @@ PDB 1BRS without a template. This supports the corrected implementation on these
 cases; a high score still does not establish a biologically valid interaction.
 The [recorded AF3 quality checks](local-prediction-af3-quality.json) include the
 settings grid, backend comparison, geometry counts and cached-MSA timings.
+
+A job folder opens again like any other prediction: `alphalens open <job folder>`
+(`rank 1`, `rank 2`, … for the other AF3 samples) or `alphalens open <job folder>/fold.pdb`.
 
 Results now include `prediction_report.txt`. **Prediction report…** in the dialog or
 the result plot's context menu reopens the full comparison, including after restarting
