@@ -35,7 +35,7 @@ P ≥ 0.5.*
 
 ## Install
 
-This branch contains the 1.0.1a1 test build with the increased prediction limit.
+This branch contains the 1.0.1a2 test build with a warning for large predictions.
 Build it from source or use its test wheel; the published 1.0.0 release retains
 the 400-residue limit.
 
@@ -48,7 +48,7 @@ Apple Silicon macOS 13 or newer and is tested with ChimeraX 1.12.
    pip needs it.
 2. In the ChimeraX command line:
 
-       toolshed install ~/Downloads/chimerax_alphalens-1.0.1a1-py3-none-any.whl
+       toolshed install ~/Downloads/chimerax_alphalens-1.0.1a2-py3-none-any.whl
 
 3. Restart ChimeraX.
 
@@ -299,10 +299,11 @@ LocalFold's native AF2-Multimer engine. Drag an interface box, then right-click
 **Re-predict selected interface…**. Single proteins use AF2-monomer; pairs use multimer.
 Reuse/crop an existing MSA or explicitly choose a
 remote ColabFold search. Results open in a new plot with PAE/pLDDT comparisons over the
-same residues. The original structure is retained. The local prediction limit is 1,024
-residues total across both chains, including flanks (raised from 400 in 1.0.0).
-The engine also checks its estimated GPU-memory requirement. This integration uses
-native Metal; LocalFold’s browser WebGPU backend is not connected to AlphaLens.
+same residues. The original structure is retained. There is no fixed residue-count cap;
+inputs above 1,024 total residues (including flanks) show a warning and can still run.
+The engine checks its estimated GPU-memory requirement. The optional time limit defaults
+to **No limit**; **Cancel job** remains available. This integration uses native Metal;
+LocalFold’s browser WebGPU backend is not connected to AlphaLens.
 Tested 175–195-residue predictions
 took about 2–3 seconds with cached MSAs on an M5 Max. A full 799-residue pair took
 25.9 seconds with a supplied MSA and a 3.26 GB engine-reported buffer peak. Fresh

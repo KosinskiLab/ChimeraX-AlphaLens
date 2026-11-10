@@ -1,6 +1,6 @@
 # Experimental local protein and interface prediction
 
-AlphaLens 1.0.1a1 can predict one or two protein sequences, or re-predict two
+AlphaLens 1.0.1a2 can predict one or two protein sequences, or re-predict two
 selected protein intervals, with AlphaFold2 on
 Apple Silicon, using [LocalFold's native Metal implementation](https://github.com/sokrypton/localfold/tree/68c59196fa7d32c6edfc061ed369889c1cdb680b/metal).
 The prediction runs in a separate process; ChimeraX remains interactive. The original
@@ -10,7 +10,7 @@ are not yet connected to AlphaLens.
 
 ## Setup
 
-Install the AlphaLens wheel. Version 1.0.1a1 is a test build of the increased limit;
+Install the AlphaLens wheel. Version 1.0.1a2 is a test build with the length cap removed;
 the published 1.0.0 release still has the 400-residue limit. The local prediction feature remains experimental.
 The engine requires Apple Silicon, macOS 13 or newer, Git, Python 3 and Xcode Command
 Line Tools. It does not require a Python ML environment inside ChimeraX.
@@ -55,8 +55,8 @@ Click **Load / resolve sequences**. UniProt retrieval uses its
 [official FASTA endpoint](https://github.com/ebi-uniprot/uniprot-manual/blob/main/help/api_retrieve_entries.md)
 in a background thread, sending only the identifiers. Review the resolved headers and
 sequences. Optional chain A/B ranges are **1-based and inclusive** (e.g. `50-157` for
-the tested barnase segment from `P00648`). Ranges are applied before the 1,024-residue
-limit, so longer UniProt proteins can supply a domain. Residue maps
+the tested barnase segment from `P00648`). Optional ranges select domains from longer UniProt proteins; there is no fixed
+residue-count cap. Residue maps
 retain positions in the original input sequence. Nonstandard amino acids in the
 selected ranges are rejected.
 
@@ -75,7 +75,7 @@ header, release, retrieval time, original sequence hash and selected ranges.
 2. Right-click the plot and choose **Re-predict selected interface…**.
 3. Choose flanks (default 10 residues on each side). The crop preserves contiguous
    sequence intervals, clips at chain ends, and rejects gaps in the source sequence,
-   nonstandard amino acids, and more than 1,024 total residues.
+   and nonstandard amino acids. Large inputs show a warning without disabling Predict.
 4. Choose an MSA source. **Reuse and crop the source MSA** is selected automatically
    when a matching `<structure-stem>.a3m` or `input.a3m` is found beside the source.
    Its first query must exactly match the plotted protein tokens. Cropping preserves
@@ -86,8 +86,8 @@ header, release, retrieval time, original sequence hash and selected ranges.
    query already exists in the local MSA cache. `LOCALFOLD_MMSEQS_API` can select a
    compatible private endpoint; the dialog displays the configured endpoint.
 6. Click **Predict**. Use **Cancel job** to stop it. A process-wide file lock serializes
-   jobs across AlphaLens windows and instances. The prototype cancels jobs exceeding
-   five minutes, including MSA search. Closing a running dialog cancels its job;
+   jobs across AlphaLens windows and instances. The optional **Time limit (minutes)**
+   defaults to **No limit**. A positive value covers the whole job, including MSA search. Closing a running dialog cancels its job;
    closing the source model does not interrupt an already-started prediction.
 
 A result opens automatically, superposed on the first selected chain's Cα atoms at
@@ -109,14 +109,18 @@ positions and matrix rows. Prediction chains are renamed A/B and renumbered from
 MSA caches include the ordered sequences, configured endpoint and engine/model version.
 Cache hits reuse existing alignments; they do not claim a new database search.
 
-## Size and memory limits
+## Large inputs and time limits
 
-The limit is **1,024 total residues** across one or two chains, including flanks.
-It is an AlphaLens guard, not an AF2 architectural limit. The pinned native engine
-also checks its estimated allocations against Metal's recommended working-set budget
-and refuses an input that does not fit. The existing five-minute timeout and job
-cancellation remain in force. Larger inputs take substantially longer; the cap does
-not guarantee a particular runtime or available memory on every Mac.
+There is **no fixed residue-count cap**. Above 1,024 total residues across the one or
+two chains (including flanks), the dialog shows a non-blocking warning about runtime
+and GPU memory. Predict remains enabled. The pinned native engine checks its estimated
+allocations against Metal's recommended working-set budget and refuses an input that
+does not fit; removing the count cap does not remove physical memory requirements.
+
+The optional **Time limit (minutes)** defaults to **No limit**. Set a positive number
+to cancel after that duration, including MSA search. **Cancel job** and closing the
+running dialog still cancel the process. Larger inputs can take substantially longer.
+The selected time limit is recorded in `job.json` (`null` means no limit).
 
 A real 799-residue LAMP2–SH2D2A prediction (410 + 389 residues), three recycles,
 512 MSA + 1024 extra rows, completed through the region dialog in **25.9 seconds**
@@ -125,8 +129,8 @@ on the M5 Max/64 GB with its saved unpaired MSA. The native engine reported a
 largest observed GUI heartbeat gap was 0.18 s. The prediction passed sequence,
 coordinate and confidence-file validation. This is a capacity check, not an accuracy
 benchmark: its ipTM was 0.212. Larger input is not evidence of better predictions.
-The 1,024 boundary is covered by input/flank validation tests; this machine's real
-prediction measurement covers 799 residues. The installed-build sequence-input check
+Validation tests accept inputs beyond the former cap and cover the warning threshold
+with flanks. This machine's real prediction measurement covers 799 residues. The installed-build sequence-input check
 also completed in 24.8 seconds; see the [recorded capacity checks](local-prediction-large-benchmark.json).
 
 ## What is verified, and what is not

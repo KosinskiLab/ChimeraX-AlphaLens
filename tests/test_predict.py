@@ -4,7 +4,7 @@ import sys
 import time
 
 import pytest
-from alphalens.predict import PredictionJob, crop_chains, validate_a3m, validate_chains, validate_result
+from alphalens.predict import PredictionJob, crop_chains, size_warning, validate_a3m, validate_chains, validate_result
 
 
 def rows():
@@ -32,25 +32,26 @@ def test_crop_rejects_missing_sequence_positions():
         crop_chains(r, (2, 4, 9, 12), 0)
 
 
-def test_sequence_limits():
-    # The budget covers the combined sequence, not a separate budget per chain.
+def test_sequence_validation_has_no_residue_count_cap():
     validate_chains([dict(sequence='A'*410, residue_map=[{}]*410),
                      dict(sequence='A'*389, residue_map=[{}]*389)])
     validate_chains([dict(sequence='A'*512, residue_map=[{}]*512)]*2)
     validate_chains([dict(sequence='A'*1024, residue_map=[{}]*1024)])
-    with pytest.raises(ValueError, match='1024'):
-        validate_chains([dict(sequence='A'*513, residue_map=[{}]*513),
-                         dict(sequence='A'*512, residue_map=[{}]*512)])
+    validate_chains([dict(sequence='A'*10000, residue_map=[{}]*10000)]*2)
     with pytest.raises(ValueError, match='standard'):
         validate_chains([dict(sequence='AX', residue_map=[{}, {}])]*2)
 
 
-def test_crop_limit_includes_flanks():
+def test_large_crop_is_allowed_with_nonblocking_warning():
     r = [dict(chain_id=c, chain_index=i, aa='A', number=i+1, insertion_code='')
          for c in 'AB' for i in range(600)]
-    assert sum(len(c['sequence']) for c in crop_chains(r, (50, 549, 650, 1149), 6)) == 1024
-    with pytest.raises(ValueError, match='including flanks'):
-        crop_chains(r, (50, 549, 650, 1149), 7)
+    small = crop_chains(r, (50, 549, 650, 1149), 6)
+    large = crop_chains(r, (50, 549, 650, 1149), 7)
+    assert sum(len(c['sequence']) for c in small) == 1024
+    assert sum(len(c['sequence']) for c in large) == 1028
+    assert not size_warning(small)
+    assert '1,028 residues including flanks' in size_warning(large)
+    assert 'You can proceed' in size_warning(large)
 
 
 def test_a3m_query_validation(tmp_path):
@@ -133,6 +134,22 @@ def test_timeout_and_engine_errors(runner):
     assert timed.state == 'failed' and 'limit' in timed.error
     failed = finish(runner('failed', search=True, seed=98).start())
     assert failed.state == 'failed' and 'status 7' in failed.error
+
+
+def test_default_has_no_timeout_but_manual_cancel_still_works(runner):
+    job = runner(search=True, seed=99).start()
+    job.started -= 3600
+    assert job.poll() == 'running'
+    assert job.cancelled_at is None
+    assert job.manifest['timeout_seconds'] is None
+    job.cancel(); finish(job)
+    assert job.state == 'cancelled'
+
+
+@pytest.mark.parametrize('timeout', [0, -1, float('inf'), float('nan')])
+def test_invalid_time_limit(runner, timeout):
+    with pytest.raises(ValueError, match='time limit'):
+        runner(search=True, timeout=timeout)
 
 
 def test_existing_output_preserved(runner):

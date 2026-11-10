@@ -36,7 +36,7 @@
   "notes": [
     "Capacity check, not an accuracy benchmark.",
     "Peak is the native engine allocation counter, not total system memory.",
-    "Real inference was measured at 799 residues; 1024 is an input-validation boundary."
+    "Real inference was measured at 799 residues; 1024 is a warning threshold only; no fixed count cap remains."
   ],
   "installed_sequence": {
     "residues": 799,
