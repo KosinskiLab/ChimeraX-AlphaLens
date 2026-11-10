@@ -173,3 +173,38 @@ def test_progress_message_and_time_left(monkeypatch):
     progress.computed = 0.5
     assert progress.fraction() == pytest.approx(0.95)
     assert progress.seconds_left() is None
+
+
+@pytest.mark.parametrize('ranking', [None, 'seed,sample,ranking_score\n',
+                                    'seed,sample,ranking_score\n1,0,invalid\n'])
+@pytest.mark.parametrize('distogram_seeds', [(1,), (1, 2)])
+def test_top_af3_model_does_not_infer_seed_from_directory_order(tmp_path, ranking, distogram_seeds):
+    model = tmp_path / 'test_model.cif'
+    model.touch()
+    (tmp_path / 'test_confidences.json').write_text('{"pae": [[1]], "contact_probs": [[0.1]]}')
+    for seed in (1, 2):
+        (tmp_path / f'seed-{seed}_sample-0').mkdir()
+    for seed in distogram_seeds:
+        folder = tmp_path / f'seed-{seed}_distogram'
+        folder.mkdir()
+        (folder / 'd.npz').touch()
+    if ranking is not None:
+        (tmp_path / 'ranking_scores.csv').write_text(ranking)
+    files = data.find_prediction_files(str(model))
+    assert files.model_name == 'top'
+    assert files.distogram_path is None
+    assert data.read_pae(files.pae_path)[1][0, 0] == pytest.approx(0.1)
+    assert len(data._af3_ranked_samples(str(tmp_path))) == 2
+
+
+def test_top_af3_model_uses_ranked_seed(tmp_path):
+    model = tmp_path / 'test_model.cif'
+    model.touch()
+    (tmp_path / 'ranking_scores.csv').write_text('seed,sample,ranking_score\n1,0,0.1\n2,0,0.9\n')
+    for seed in (1, 2):
+        folder = tmp_path / f'seed-{seed}_distogram'
+        folder.mkdir()
+        (folder / 'd.npz').touch()
+    files = data.find_prediction_files(str(model))
+    assert files.model_name == 'seed-2_sample-0'
+    assert files.distogram_path == str(tmp_path / 'seed-2_distogram' / 'd.npz')
