@@ -672,8 +672,14 @@ class AlphaLensPlot(ToolInstance):
         pdt.timeout.connect(self._apply_plddt_threshold)
 
         self._info = QLabel(parent)
+        # Hover text must not change the window's minimum size: refitting the
+        # matrix after a resize changes the hovered residue and repeats the cycle.
+        self._info.setTextFormat(Qt.TextFormat.PlainText)
+        self._info.setWordWrap(True)
+        self._info.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self._info.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self._info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._info.setMinimumHeight(self._info.fontMetrics().height() + 2)
+        self._info.setFixedHeight(3 * self._info.fontMetrics().lineSpacing() + 4)
         layout.addWidget(self._info)
 
         bw = QWidget(parent)
@@ -1681,6 +1687,7 @@ class AlphaLensPlot(ToolInstance):
         elif self._track_offset is not None and y >= self._track_offset and 0 <= x < n:
             msg = f'{pae.row_residue_or_atom_name(x)}:  pLDDT {self._plddt[x]:.1f}'
         self._info.setText(msg)
+        self._info.setToolTip(msg)
 
     def _rectangle_select(self, xy1, xy2):
         n = self._pae.matrix_size
