@@ -1,0 +1,113 @@
+{
+  "hardware": "Apple M5 Max, 40 GPU cores, 64 GB",
+  "os": "macOS 27.2",
+  "chimerax": "1.12",
+  "date": "2026-11-10",
+  "engine_revision": "68c59196fa7d32c6edfc061ed369889c1cdb680b",
+  "native_cached_seeds": [
+    {
+      "seed": 0,
+      "wall_seconds": 2.8092405829993368,
+      "exit_code": 0,
+      "ptm": 0.9332,
+      "iptm": 0.922759,
+      "mean_plddt": 97.36,
+      "crystal_comparison": "complex CA RMSD 0.603 A over 195; alone: A 0.292 A over 108 (CA-CA median 3.797), D 0.636 A over 87 (CA-CA median 3.789)"
+    },
+    {
+      "seed": 1,
+      "wall_seconds": 2.255633167000269,
+      "exit_code": 0,
+      "ptm": 0.933,
+      "iptm": 0.922057,
+      "mean_plddt": 97.42,
+      "crystal_comparison": "complex CA RMSD 0.618 A over 195; alone: A 0.284 A over 108 (CA-CA median 3.793), D 0.646 A over 87 (CA-CA median 3.788)"
+    },
+    {
+      "seed": 2,
+      "wall_seconds": 2.5169928340001206,
+      "exit_code": 0,
+      "ptm": 0.9326,
+      "iptm": 0.922241,
+      "mean_plddt": 97.33,
+      "crystal_comparison": "complex CA RMSD 0.620 A over 195; alone: A 0.294 A over 108 (CA-CA median 3.793), D 0.640 A over 87 (CA-CA median 3.790)"
+    }
+  ],
+  "gui_runs": [
+    {
+      "case": "full",
+      "elapsed_seconds": 2.4097438330009027,
+      "residues": 195,
+      "result": {
+        "ptm": 0.9327,
+        "iptm": 0.922388,
+        "mean_plddt": 97.32,
+        "mean_cross_chain_pae": 3.199008620689634,
+        "has_contact_probabilities": false
+      },
+      "comparison": {
+        "source": {
+          "model": "pilot-first fold",
+          "model_id": "1",
+          "core_mean_pae": 3.1681690216064453,
+          "core_mean_plddt": 97.36420440673828
+        },
+        "aligned_source_chain": "A",
+        "aligned_chain_ca_rmsd": 0.037558270363151805,
+        "predicted_core_mean_pae": 3.1990084648132324,
+        "predicted_core_mean_plddt": 97.32051086425781
+      },
+      "heartbeat_ticks": 46
+    },
+    {
+      "case": "crop",
+      "elapsed_seconds": 2.1022742920013116,
+      "residues": 175,
+      "result": {
+        "ptm": 0.9114,
+        "iptm": 0.897577,
+        "mean_plddt": 95.53,
+        "mean_cross_chain_pae": 3.7660025178902785,
+        "has_contact_probabilities": false
+      },
+      "comparison": {
+        "source": {
+          "model": "pilot-first fold",
+          "model_id": "1",
+          "core_mean_pae": 2.860340118408203,
+          "core_mean_plddt": 97.38032531738281
+        },
+        "aligned_source_chain": "A",
+        "aligned_chain_ca_rmsd": 0.35262502915377286,
+        "predicted_core_mean_pae": 3.5212645530700684,
+        "predicted_core_mean_plddt": 95.74935913085938
+      },
+      "heartbeat_ticks": 40
+    },
+    {
+      "case": "cached_crop",
+      "elapsed_seconds": 2.13412716700077,
+      "residues": 175,
+      "result": {
+        "ptm": 0.8727,
+        "iptm": 0.834546,
+        "mean_plddt": 94.25,
+        "mean_cross_chain_pae": 4.324422873045319,
+        "has_contact_probabilities": false
+      },
+      "comparison": {
+        "source": {
+          "model": "pilot-first fold",
+          "model_id": "1",
+          "core_mean_pae": 2.860340118408203,
+          "core_mean_plddt": 97.38032531738281
+        },
+        "aligned_source_chain": "A",
+        "aligned_chain_ca_rmsd": 0.2880214024505374,
+        "predicted_core_mean_pae": 4.063865661621094,
+        "predicted_core_mean_plddt": 94.56302642822266
+      },
+      "heartbeat_ticks": 42
+    }
+  ]
+}
