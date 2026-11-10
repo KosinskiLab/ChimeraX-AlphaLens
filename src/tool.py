@@ -1440,7 +1440,8 @@ class AlphaLensPlot(ToolInstance):
                 return
         if self._struct_contacts:
             contacts.show_contacts(self._pae, min_p=self._threshold, region=self._struct_region,
-                                   candidates=self._candidates() if self._threshold >= SLIDER_MIN else None)
+                                   candidates=(self._candidates() if self._struct_region is None
+                                               and self._threshold >= SLIDER_MIN else None))
         else:
             contacts.hide_contacts(self._pae.structure)
         self._hider.apply()                 # Drawing lines can switch the model to cartoon
