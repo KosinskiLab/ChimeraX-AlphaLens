@@ -1,6 +1,6 @@
 # Experimental local protein and interface prediction
 
-AlphaLens 1.0.1a3 can predict one or two protein sequences, or re-predict two
+AlphaLens 1.0.1a4 can predict one or two protein sequences, or re-predict two
 selected protein intervals, with AlphaFold2 on
 Apple Silicon, using [LocalFold's native Metal implementation](https://github.com/sokrypton/localfold/tree/68c59196fa7d32c6edfc061ed369889c1cdb680b/metal).
 The prediction runs in a separate process; ChimeraX remains interactive. The original
@@ -10,7 +10,7 @@ are not yet connected to AlphaLens.
 
 ## Setup
 
-Install the AlphaLens wheel. Version 1.0.1a3 is a test build with progress reporting and the length cap removed;
+Install the AlphaLens wheel. Version 1.0.1a4 is a test build with progress reporting and the length cap removed;
 the published 1.0.0 release still has the 400-residue limit. The local prediction feature remains experimental.
 The engine requires Apple Silicon, macOS 13 or newer, Git, Python 3 and Xcode Command
 Line Tools. It does not require a Python ML environment inside ChimeraX.

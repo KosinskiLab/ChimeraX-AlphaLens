@@ -35,7 +35,7 @@ P ≥ 0.5.*
 
 ## Install
 
-This branch contains the 1.0.1a3 test build with prediction progress and a warning for large predictions.
+This branch contains the 1.0.1a4 test build with prediction progress and a warning for large predictions.
 Build it from source or use its test wheel; the published 1.0.0 release retains
 the 400-residue limit.
 
@@ -48,7 +48,7 @@ Apple Silicon macOS 13 or newer and is tested with ChimeraX 1.12.
    pip needs it.
 2. In the ChimeraX command line:
 
-       toolshed install ~/Downloads/chimerax_alphalens-1.0.1a3-py3-none-any.whl
+       toolshed install ~/Downloads/chimerax_alphalens-1.0.1a4-py3-none-any.whl
 
 3. Restart ChimeraX.
 

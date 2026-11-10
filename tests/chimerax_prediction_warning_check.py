@@ -68,14 +68,14 @@ def main():
             if minutes == 0:
                 dialog.grab().save(str(out / 'warning.png'))
             dialog.start_button.click()
-            assert dialog.job and dialog.job.state == 'running', dialog.status.text()
+            assert dialog.job and dialog.job.state == 'running', dialog.status.toPlainText()
             expected = minutes * 60 or None
             assert dialog.job.timeout == expected
             assert dialog.job.manifest['timeout_seconds'] == expected
             assert not dialog.time_limit.isEnabled()
             dialog.cancel_button.click()
             pump(lambda: not dialog.timer.isActive())
-            assert dialog.job.state == 'cancelled', dialog.status.text()
+            assert dialog.job.state == 'cancelled', dialog.status.toPlainText()
             assert dialog.progress_bar.maximum() == 100
             assert dialog.progress_bar.value() == 0
             assert dialog.progress_label.text() == 'Cancelled'

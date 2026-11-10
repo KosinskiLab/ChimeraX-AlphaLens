@@ -189,7 +189,9 @@ class PredictionDialog(QDialog):
         note = QLabel('Region predictions compare PAE/pLDDT on the same residues. Higher confidence after\n'
                       'cropping is not proof of better accuracy. The multimer bundle has no contact-probability head.')
         note.setWordWrap(True); layout.addWidget(note)
-        self.status = QLabel('Ready'); self.status.setWordWrap(True); layout.addWidget(self.status)
+        self.status = QPlainTextEdit('Ready'); self.status.setReadOnly(True)
+        self.status.setFixedHeight(5*self.status.fontMetrics().lineSpacing()+16)
+        layout.addWidget(self.status)
         self.progress_label = QLabel('Not started'); self.progress_label.setWordWrap(True)
         layout.addWidget(self.progress_label)
         self.progress_bar = QProgressBar(); self.progress_bar.setRange(0, 100)
@@ -238,10 +240,9 @@ class PredictionDialog(QDialog):
             self.progress_bar.setValue(completed)
 
     def set_status(self, message):
-        self.status.setText(message)
-        # Qt may keep a wrapped QLabel at its old one-line height after its text
-        # changes. Reserve the actual height so results and errors stay readable.
-        self.status.setMinimumHeight(self.status.heightForWidth(max(100, self.width()-40))+4)
+        # A fixed viewport keeps timer updates from resizing the configuration
+        # dialog. Long errors and result paths remain selectable and scrollable.
+        self.status.setPlainText(message)
 
     def show_error(self, message):
         self.status.setStyleSheet('color: #c43b36; font-weight: bold;')
