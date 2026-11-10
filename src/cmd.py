@@ -443,6 +443,8 @@ def prepare_prediction(session, structure, pae_file=None, distogram=None, cutoff
     else:
         dpath = files.distogram_path
 
+    pae._distogram_file = dpath
+
     kind = {'af2': 'AlphaFold2', 'af3': 'AlphaFold3', 'colabfold': 'ColabFold'}.get(files.kind, '')
     model = f' {files.model_name}' if files.model_name else ''
     msg = f'AlphaLens {structure}: {kind}{model}, PAE from {pae_path}'
