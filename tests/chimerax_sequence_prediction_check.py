@@ -51,13 +51,14 @@ def main():
                 dialog.msa.setText(str(mono_msa))
             else:
                 text = 'RNBR_BACAM'
-                dialog.ranges[0].setText('50-157')
                 dialog.search.setChecked(True)  # The monomer MSA from the previous case is cached.
             dialog.input_text.setPlainText(text)
             assert not dialog.start_button.isEnabled(), 'Unresolved input could be submitted'
             dialog.load_button.click()
             pump(lambda: not dialog.lookup_timer.isActive(), seconds=50)
             assert dialog.entries, dialog.status.toPlainText()
+            if case == 'uniprot_monomer':
+                dialog.ranges[0].setText('50-157')
             assert dialog.start_button.isEnabled(), dialog.preview.text()
             if case == 'uniprot_monomer':
                 assert dialog.entries[0]['accession'] == 'P00648'

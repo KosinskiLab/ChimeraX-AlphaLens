@@ -44,6 +44,7 @@ def main():
             dialog = plot._predict_interface()
             dialog.flanks.setValue(5)
             dialog.output.setText(str(output/case))
+            dialog.randomize_seed.setChecked(False)
             dialog.seed.setValue(4 if case == 'cached_crop' else 3)
             if case == 'full':
                 dialog.reuse.setChecked(False)

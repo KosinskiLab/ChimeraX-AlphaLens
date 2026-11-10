@@ -16,6 +16,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--prefix', type=Path, default=Path.home() / '.local/share/alphalens')
     p.add_argument('--source', type=Path, help='Use an existing clean checkout at the pinned revision')
+    p.add_argument('--models', nargs='+', choices=['af2', 'af3'], default=['af2', 'af3'],
+                   help='Native engines to build (default: both AF2 and AF3)')
     args = p.parse_args()
     if platform.system() != 'Darwin' or platform.machine() != 'arm64':
         p.error('This prototype requires Apple Silicon macOS and Xcode Command Line Tools.')
@@ -29,16 +31,18 @@ def main():
     changed = subprocess.check_output(['git', '-C', str(source), 'status', '--porcelain', '--untracked-files=no'], text=True)
     if head != REVISION or changed:
         p.error('The source must be clean and at the pinned revision; existing files were preserved.')
-    subprocess.run(['bash', 'metal/build.sh', 'af2'], cwd=source, check=True)
-    target = prefix / 'bin' / 'localfold-af2'
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_suffix('.part')
-    shutil.copy2(source / 'metal/af2/localfold-af2', temporary)
-    temporary.replace(target)
-    shutil.copy2(source / 'LICENSE', target.parent / 'LocalFold-LICENSE.txt')
-    target.with_suffix('.json').write_text(json.dumps(dict(repository=REPOSITORY, revision=head,
-                                   sha256=hashlib.sha256(target.read_bytes()).hexdigest()), indent=2) + '\n')
-    print(f'Installed {target}. AF2 weights download automatically on the first prediction.')
+    subprocess.run(['bash', 'metal/build.sh', *args.models], cwd=source, check=True)
+    for model in args.models:
+        target = prefix / 'bin' / f'localfold-{model}'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_suffix('.part')
+        shutil.copy2(source / f'metal/{model}/localfold-{model}', temporary)
+        temporary.replace(target)
+        shutil.copy2(source / 'LICENSE', target.parent / 'LocalFold-LICENSE.txt')
+        target.with_suffix('.json').write_text(json.dumps(dict(repository=REPOSITORY, revision=head,
+                                       sha256=hashlib.sha256(target.read_bytes()).hexdigest()), indent=2) + '\n')
+        print(f'Installed {target}.')
+    print('Weights download on the first prediction. AF3 requires acceptance of DeepMind’s terms in the dialog.')
 
 
 if __name__ == '__main__':

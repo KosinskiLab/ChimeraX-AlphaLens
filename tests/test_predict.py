@@ -52,7 +52,7 @@ def test_crop_extends_contiguously_and_preserves_numbering():
     assert chains[0]['core_rows'] == [2, 3, 4]
 
 
-@pytest.mark.parametrize('region', [None, (0, 3, 4, 6), (0, 8, 9, 11), (0, 2, 14, 19)])
+@pytest.mark.parametrize('region', [None, (0, 3, 4, 6), (0, 2, 14, 19)])
 def test_crop_rejects_ambiguous_regions(region):
     with pytest.raises(ValueError):
         crop_chains(rows(), region)
@@ -62,6 +62,32 @@ def test_crop_rejects_missing_sequence_positions():
     r = rows(); r[3]['chain_index'] = 99
     with pytest.raises(ValueError, match='missing residues'):
         crop_chains(r, (2, 4, 9, 12), 0)
+
+
+def test_crop_spans_multiple_chains_and_unions_overlapping_axes():
+    r = [dict(chain_id=c, chain_index=i, aa='A', number=i+1, insertion_code='')
+         for c in 'ABC' for i in range(4)]
+    chains = crop_chains(r, (2, 6, 5, 10), 1)
+    assert [c['source_chain'] for c in chains] == list('ABC')
+    assert [c['core_rows'] for c in chains] == [[2, 3], [4, 5, 6, 7], [8, 9, 10]]
+    assert [len(c['sequence']) for c in chains] == [3, 4, 4]
+
+
+def test_chain_labels_do_not_collide_after_26_chains():
+    from alphalens.predict import chain_ids
+    assert chain_ids(28) == 'ABCDEFGHIJKLMNOPQRSTUVWXYZab'
+    assert len(set(chain_ids(62))) == 62
+    with pytest.raises(ValueError, match='PDB'):
+        chain_ids(63)
+
+
+def test_default_seed_is_random_per_job_and_explicit_seed_is_retained(runner, monkeypatch):
+    from alphalens import predict
+    seeds = iter([1234, 2345])
+    monkeypatch.setattr(predict, 'random_seed', lambda: next(seeds))
+    assert runner(search=True).options['seed'] == 1234
+    assert runner(search=True).options['seed'] == 2345
+    assert runner(search=True, seed=0).options['seed'] == 0
 
 
 def test_sequence_validation_has_no_residue_count_cap():
@@ -149,6 +175,35 @@ def test_real_process_and_msa_cache(runner):
 def test_no_implicit_sequence_upload(runner):
     with pytest.raises(ValueError, match='Choose remote'):
         runner()
+
+
+def test_af3_terms_gate_options_and_cross_model_msa_cache(runner):
+    with pytest.raises(ValueError, match='terms'):
+        runner(search=True, backend='af3')
+    first = finish(runner(search=True).start())
+    af3 = runner('af3', search=True, backend='af3', accept_af3_terms=True)
+    assert af3.model == 'af3'
+    assert af3.msa_cache == first.msa_cache
+    finish(af3.start())
+    assert af3.state == 'complete', af3.error
+    assert af3.manifest['msa_source'] == 'cache'
+    assert '--steps=200' in af3.manifest['args']
+    assert '--update=euler' in af3.manifest['args'] and '--schedule=karras' in af3.manifest['args']
+    assert not any(a.startswith('--max-extra') for a in af3.manifest['args'])
+    assert af3.manifest['af3_terms_accepted'] is True
+
+
+def test_invalid_contact_matrix_is_rejected(runner):
+    job = finish(runner(search=True).start())
+    path = job.directory/'fold_confidences.json'
+    data = json.loads(path.read_text())
+    data['contact_probs'] = [[.5]*4 for _ in range(4)]
+    path.write_text(json.dumps(data))
+    assert validate_result(job.directory, job.chains)['has_contact_probabilities']
+    data['contact_probs'][0][1] = 1.5
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match='contact-probability'):
+        validate_result(job.directory, job.chains)
 
 
 def test_cancel_reaps_process_and_releases_lock(runner):

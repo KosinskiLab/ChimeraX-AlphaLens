@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.0
+
+* Choose AlphaFold 2 or AlphaFold 3 for local prediction on Apple Silicon. The setup
+  script builds both engines; AF3 weights download after accepting DeepMind's terms.
+  AF3 defaults to three recycles, 200 diffusion steps, Euler/Karras sampling and one sample.
+* Predict multiple chains from FASTA/UniProt or a selected region spanning multiple chains.
+  Remove the two-chain restriction; PDB output supports up to 62 distinct chain IDs.
+* Generate a fresh random seed for each run, with a manual seed option for reproducibility.
+* Report contacts in the selected region: source/new counts at P ≥ 0.5, top-ten mean
+  contact probability, strongest residue pairs, and a CSV with original residue labels,
+  probabilities and model distances. Include genuine AF2-Multimer contact probabilities
+  using its matching distogram head. On the tested 291-residue crop this added 0.14 s
+  (2.9%) to median inference runtime, without changing coordinates, PAE or scores.
+* Share cached MSAs across AF2 and AF3; retain earlier cached alignments.
+* Include the preview-build fixes: no hard residue-count cap, optional time limit,
+  prediction progress, clearer MSA selection and a stable, scrollable result area.
+* Remove the region-comparison explanatory paragraph from the prediction dialog.
+
 ## 1.0.1a4
 
 * Fix the prediction dialog growing taller with every status update. Status and

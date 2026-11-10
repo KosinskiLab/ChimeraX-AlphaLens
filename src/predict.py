@@ -1,13 +1,15 @@
-"""Experimental local AF2 monomer/multimer jobs. No ChimeraX imports or shell commands."""
+"""Experimental local AF2/AF3 jobs. No ChimeraX imports or shell commands."""
 import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import signal
 import subprocess
+import sys
 import time
 
 ENGINE_REVISION = '68c59196fa7d32c6edfc061ed369889c1cdb680b'
@@ -16,15 +18,43 @@ MONOMER_MODEL = 'model_1_ptm'
 AMINO_ACIDS = 'ACDEFGHIKLMNPQRSTVWY'
 # A UI warning threshold only. LocalFold checks the GPU working-set budget.
 LARGE_JOB_RESIDUES = 1024
+CHAIN_IDS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+
+
+def chain_ids(count):
+    if not 1 <= count <= len(CHAIN_IDS):
+        raise ValueError('Choose at least one chain. PDB output supports at most 62 distinct chain IDs.')
+    return CHAIN_IDS[:count]
+
+
+def random_seed():
+    return secrets.randbelow(2**31 - 1) + 1
 
 
 def data_directory():
     return Path.home() / '.local' / 'share' / 'alphalens'
 
 
-def default_executable():
-    return os.environ.get('ALPHALENS_LOCALFOLD', '') or shutil.which('localfold-af2') or str(
-        data_directory() / 'bin' / 'localfold-af2')
+def af3_terms_accepted():
+    try:
+        return json.loads((data_directory() / 'af3_terms.json').read_text()).get('accepted') is True
+    except (OSError, ValueError):
+        return False
+
+
+def record_af3_terms_acceptance():
+    from datetime import datetime, timezone
+    root = data_directory()
+    root.mkdir(parents=True, exist_ok=True)
+    write_json(root / 'af3_terms.json', dict(accepted=True, accepted_at=datetime.now(timezone.utc).isoformat(),
+        terms='https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_TERMS_OF_USE.md',
+        policy='https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_PROHIBITED_USE_POLICY.md'))
+
+
+def default_executable(backend='af2'):
+    name = f'localfold-{backend}'
+    variable = 'ALPHALENS_LOCALFOLD_AF3' if backend == 'af3' else 'ALPHALENS_LOCALFOLD'
+    return os.environ.get(variable, '') or shutil.which(name) or str(data_directory() / 'bin' / name)
 
 
 def digest(path):
@@ -43,8 +73,7 @@ def write_json(path, obj):
 
 
 def validate_chains(chains):
-    if not 1 <= len(chains) <= 2:
-        raise ValueError('The prototype needs one or two protein chains.')
+    chain_ids(len(chains))
     for chain in chains:
         seq = chain['sequence']
         if not seq or any(c not in AMINO_ACIDS for c in seq):
@@ -62,35 +91,38 @@ def size_warning(chains):
 
 
 def crop_chains(rows, region, flanks=10):
-    """Crop two contiguous protein intervals; retain source indices for comparison."""
+    """Crop every protein chain touched by either axis; retain the exact core rows."""
     if region is None:
         raise ValueError('Drag a box across two chains in the PAE plot first.')
     if not isinstance(flanks, int) or not 0 <= flanks <= 100:
         raise ValueError('Flanks must be between 0 and 100 residues.')
     y0, y1, x0, x1 = region
-    chains = []
+    selected_cores = {}
     for lo, hi in ((y0, y1), (x0, x1)):
         if not 0 <= lo <= hi < len(rows):
             raise ValueError('The selected region no longer matches the structure.')
         core = rows[lo:hi + 1]
-        if any(r is None for r in core) or len({r['chain_id'] for r in core}) != 1:
-            raise ValueError('Each axis of the box must cover one protein chain.')
-        cid = core[0]['chain_id']
-        start, end = lo, hi
+        if any(r is None for r in core):
+            raise ValueError('The selected box must contain protein residues only.')
+        for i in range(lo, hi + 1):
+            selected_cores.setdefault(rows[i]['chain_id'], set()).add(i)
+    if len(selected_cores) < 2:
+        raise ValueError('Select an interface between different protein chains.')
+    chains = []
+    for cid, core_rows in selected_cores.items():
+        start, end = min(core_rows), max(core_rows)
         for _ in range(flanks):
             if start and rows[start - 1] and rows[start - 1]['chain_id'] == cid:
                 start -= 1
             if end + 1 < len(rows) and rows[end + 1] and rows[end + 1]['chain_id'] == cid:
                 end += 1
         selected = rows[start:end + 1]
-        if any(r is None for r in selected) or any(
+        if any(r is None or r['chain_id'] != cid for r in selected) or any(
                 b['chain_index'] != a['chain_index'] + 1 for a, b in zip(selected, selected[1:])):
             raise ValueError('The crop crosses missing residues; choose a complete contiguous interval.')
         chains.append(dict(source_chain=cid, sequence=''.join(r['aa'] for r in selected),
                            residue_map=[dict(r, source_row=i) for i, r in enumerate(selected, start)],
-                           core_rows=list(range(lo, hi + 1))))
-    if chains[0]['source_chain'] == chains[1]['source_chain']:
-        raise ValueError('Select an interface between two different protein chains.')
+                           core_rows=sorted(core_rows)))
     validate_chains(chains)
     return chains
 
@@ -157,7 +189,8 @@ def validate_result(directory, chains):
     summary = json.loads((d / 'fold_summary_confidences.json').read_text())
     sizes = [len(c['sequence']) for c in chains]
     n = sum(sizes)
-    expected_ids = [cid for cid, size in zip('AB', sizes) for _ in range(size)]
+    ids = chain_ids(len(chains))
+    expected_ids = [cid for cid, size in zip(ids, sizes) for _ in range(size)]
     expected_res = [i for size in sizes for i in range(1, size + 1)]
     if confidences.get('token_chain_ids') != expected_ids or confidences.get('token_res_ids') != expected_res:
         raise ValueError('Prediction token order does not match the requested chains and residues.')
@@ -166,7 +199,7 @@ def validate_result(directory, chains):
         raise ValueError('The returned PAE matrix has the wrong dimensions.')
     if any(not math.isfinite(v) or v < 0 for row in pae for v in row):
         raise ValueError('The returned PAE matrix contains invalid values.')
-    for key in ('ptm', 'mean_plddt') + (('iptm',) if len(chains) == 2 else ()):
+    for key in ('ptm', 'mean_plddt') + (('iptm',) if len(chains) > 1 else ()):
         v = summary.get(key)
         if not isinstance(v, (float, int)) or not math.isfinite(v) or not 0 <= v <= (100 if key == 'mean_plddt' else 1):
             raise ValueError(f'Invalid prediction confidence: {key}.')
@@ -180,14 +213,22 @@ def validate_result(directory, chains):
                 raise ValueError('Prediction contains nonfinite coordinates.')
             if line[12:16].strip() == 'CA':
                 residues[(line[21], int(line[22:26]))] = three.get(line[17:20], 'X')
-    expected = {(cid, i + 1): aa for cid, c in zip('AB', chains) for i, aa in enumerate(c['sequence'])}
+    expected = {(cid, i + 1): aa for cid, c in zip(ids, chains) for i, aa in enumerate(c['sequence'])}
     if residues != expected:
         raise ValueError('Returned structure sequence or numbering does not match the job.')
-    cross = [pae[i][j] for i in range(sizes[0]) for j in range(sizes[0], n)]
-    cross += [pae[j][i] for i in range(sizes[0]) for j in range(sizes[0], n)]
+    cross_sum, cross_count = 0., 0
+    for i, row in enumerate(pae):
+        for j, value in enumerate(row):
+            if expected_ids[i] != expected_ids[j]:
+                cross_sum += value; cross_count += 1
+    contact = confidences.get('contact_probs')
+    if contact is not None and (len(contact) != n or any(len(row) != n for row in contact)
+            or any(not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 <= v <= 1
+                   for row in contact for v in row)):
+        raise ValueError('The returned contact-probability matrix is invalid.')
     if len(chains) == 1:
         summary['iptm'] = None  # There is no interface score for a monomer.
-    return dict(summary, mean_cross_chain_pae=sum(cross) / len(cross) if cross else None,
+    return dict(summary, mean_cross_chain_pae=cross_sum/cross_count if cross_count else None,
                 has_contact_probabilities='contact_probs' in confidences)
 
 
@@ -217,8 +258,10 @@ class PredictionProgress:
             elif line.startswith('search:'):
                 self.stage = 'MSA search · ' + line[len('search:'):].strip()[:160]
                 self.total = None
-            elif re.match(r'(?:monomer|multimer)(?:-\d+)?:', line):
+            elif re.match(r'(?:af3|monomer|multimer)(?:-\d+)?:', line):
                 self.stage, self.total = 'Downloading model weights', None
+            elif line.startswith(('input:', 'trunk:')):
+                self.stage, self.total = 'Predicting with AF3', None
             elif (re.match(r'\d+ residues, .* passes ->', line)
                   or line.startswith('loaded in ')):
                 self.stage, self.total = 'Loading model and preparing GPU', None
@@ -227,9 +270,18 @@ class PredictionProgress:
 class PredictionJob:
     """One cancellable process; poll() is nonblocking and called by the GUI timer."""
     def __init__(self, directory, chains, *, executable=None, search=False, msa=None,
-                 seed=0, recycles=3, max_msa=512, max_extra=1024, source=None,
-                 cache=None, timeout=None, msa_crop=None):
+                 seed=None, recycles=3, max_msa=512, max_extra=1024, source=None,
+                 cache=None, timeout=None, msa_crop=None, backend='af2', accept_af3_terms=False,
+                 diffusion_steps=200):
         validate_chains(chains)
+        if backend not in ('af2', 'af3'):
+            raise ValueError('Choose the AF2 or AF3 prediction model.')
+        if backend == 'af3' and not accept_af3_terms:
+            raise ValueError('Confirm acceptance of DeepMind’s AF3 parameter terms before predicting with AF3.')
+        if not isinstance(diffusion_steps, int) or not 1 <= diffusion_steps <= 1000:
+            raise ValueError('AF3 diffusion steps must be between 1 and 1000.')
+        if seed is None:
+            seed = random_seed()
         if search and msa:
             raise ValueError('Choose remote search or an existing merged MSA, not both.')
         if not search and not msa:
@@ -240,11 +292,12 @@ class PredictionJob:
                 raise ValueError(f'Invalid {label}: {value}.')
         self.directory = Path(directory).expanduser().resolve()
         self.chains = chains
-        self.model = MODEL if len(chains) == 2 else MONOMER_MODEL
+        self.backend = backend
+        self.model = 'af3' if backend == 'af3' else MODEL if len(chains) > 1 else MONOMER_MODEL
         self.cache = Path(cache or Path.home() / '.cache' / 'alphalens' / 'localfold')
-        self.executable = Path(executable or default_executable()).expanduser().resolve()
+        self.executable = Path(executable or default_executable(backend)).expanduser().resolve()
         if not self.executable.is_file() or not os.access(self.executable, os.X_OK):
-            raise ValueError('LocalFold is not installed. Run scripts/setup_localfold.py or choose localfold-af2.')
+            raise ValueError(f'LocalFold is not installed. Run scripts/setup_localfold.py or choose localfold-{backend}.')
         if timeout is not None and (not isinstance(timeout, (float, int)) or
                                     not math.isfinite(timeout) or timeout <= 0):
             raise ValueError('The time limit must be positive, or None for no limit.')
@@ -253,10 +306,15 @@ class PredictionJob:
         self.cancelled_at = None
         self.state = 'prepared'
         self.result = None
+        self.contact_report = None
         self.error = None
         self.progress = PredictionProgress()
+        self.weights_cache = self.cache
         self._log_offset = 0
         self.options = dict(seed=seed, recycles=recycles, max_msa=max_msa, max_extra=max_extra)
+        if backend == 'af3':
+            self.options.pop('max_extra')
+            self.options.update(steps=diffusion_steps, samples=1, update='euler', schedule='karras')
         self.source = source or {}
         self.search = search
         self.msa = Path(msa).expanduser().resolve() if msa else None
@@ -264,8 +322,12 @@ class PredictionJob:
         if msa_crop and not msa:
             raise ValueError('An MSA crop requires a source alignment.')
         self.api = os.environ.get('LOCALFOLD_MMSEQS_API', 'https://api.colabfold.com').rstrip('/')
-        key = json.dumps([ENGINE_REVISION, self.model, self.api, [c['sequence'] for c in chains]])
+        sequences = [c['sequence'] for c in chains]
+        key = json.dumps([ENGINE_REVISION, self.api, sequences])
         self.msa_cache = self.cache / 'msa' / (hashlib.sha256(key.encode()).hexdigest() + '.a3m')
+        self.legacy_msa_caches = [self.cache / 'msa' / (hashlib.sha256(json.dumps(
+            [ENGINE_REVISION, model, self.api, sequences]).encode()).hexdigest() + '.a3m')
+            for model in (self.model, MODEL if len(chains) > 1 else MONOMER_MODEL)]
 
     def start(self):
         import fcntl
@@ -282,7 +344,8 @@ class PredictionJob:
             self.directory.mkdir(parents=True, exist_ok=False)
             self.started = time.monotonic()
             query = ''.join(c['sequence'] for c in self.chains)
-            alignment = self.msa or (self.msa_cache if self.search and self.msa_cache.is_file() else None)
+            cached = next((p for p in [self.msa_cache, *self.legacy_msa_caches] if p.is_file()), None)
+            alignment = self.msa or (cached if self.search else None)
             if alignment:
                 if self.msa_crop:
                     crop_a3m(alignment, self.directory / 'input.a3m', **self.msa_crop)
@@ -292,7 +355,8 @@ class PredictionJob:
                 validate_a3m(self.directory / 'input.a3m', query)
             job = dict(name=self.directory.name, dialect='alphafold3', version=1,
                        modelSeeds=[self.options['seed']], sequences=[
-                           {'protein': {'id': cid, 'sequence': c['sequence']}} for cid, c in zip('AB', self.chains)])
+                           {'protein': {'id': cid, 'sequence': c['sequence']}}
+                           for cid, c in zip(chain_ids(len(self.chains)), self.chains)])
             write_json(self.directory / 'input.json', job)
             write_json(self.directory / 'residue_map.json', self.chains)
             args = [str(self.executable), f'--job={self.directory}/input.json', f'--model={self.model}',
@@ -305,7 +369,8 @@ class PredictionJob:
             revision = engine_info.get('revision') if engine_info.get('sha256') == binary_hash else 'unverified'
             self.manifest = dict(engine='LocalFold native Metal', revision=revision,
                                  executable_sha256=binary_hash, model=self.model,
-                                 weights=f'LocalFold AF2 {self.model} int5 bundle (CC BY 4.0)',
+                                 weights=('LocalFold AF3 int8 parameters (DeepMind AF3 terms)'
+                                          if self.backend == 'af3' else f'LocalFold AF2 {self.model} int5 bundle (CC BY 4.0)'),
                                  source=self.source, options=self.options, args=args,
                                  timeout_seconds=self.timeout,
                                  msa_crop=self.msa_crop,
@@ -313,8 +378,26 @@ class PredictionJob:
                                  msa_source=('supplied' if self.msa else 'cache') if alignment else self.api,
                                  input_sha256=digest(self.directory / 'input.json'))
             self.log = (self.directory / 'prediction.log').open('w')
-            self.process = subprocess.Popen(args, stdout=self.log, stderr=subprocess.STDOUT,
-                                            stdin=subprocess.DEVNULL, start_new_session=True)
+            env = os.environ.copy()
+            if self.backend == 'af3':
+                env['LOCALFOLD_ACCEPT_MODEL_TERMS'] = 'alphafold3'
+                self.manifest['af3_terms_accepted'] = True
+            launch = args
+            if self.model == MODEL and revision == ENGINE_REVISION:
+                from .predict_weights import HEAD_SHA256
+                python = Path(sys.executable)
+                if not python.name.startswith('python'):
+                    python = Path(sys.exec_prefix) / 'bin' / f'python{sys.version_info.major}.{sys.version_info.minor}'
+                if not python.is_file():
+                    raise ValueError('Could not locate the ChimeraX Python interpreter for weight preparation.')
+                launch = [str(python), '-B', str(Path(__file__).with_name('predict_weights.py')), str(self.cache), *args]
+                self.weights_cache = self.cache / 'alphalens-contacts'
+                self.manifest['contact_head_sha256'] = HEAD_SHA256
+                self.manifest['weights_directory'] = str(self.weights_cache)
+                self.manifest['args'] = [f'--weights-dir={self.weights_cache}'
+                                        if a.startswith('--weights-dir=') else a for a in args]
+            self.process = subprocess.Popen(launch, stdout=self.log, stderr=subprocess.STDOUT,
+                                            stdin=subprocess.DEVNULL, start_new_session=True, env=env)
             self.state = 'running'
             self._save()
         except Exception as e:
@@ -391,9 +474,15 @@ class PredictionJob:
                 part = self.msa_cache.with_suffix('.part')
                 shutil.copyfile(alignment, part); part.replace(self.msa_cache)
                 self.manifest['msa_sha256'] = digest(alignment)
-                weights = self.cache / ('model-multimer' if len(self.chains) == 2 else 'model') / 'manifest.json'
-                if weights.is_file():
+                weights = self.weights_cache / ('model-multimer' if len(self.chains) > 1 else 'model') / 'manifest.json'
+                if self.backend == 'af2' and weights.is_file():
                     self.manifest['weights_manifest_sha256'] = digest(weights)
+                if self.backend == 'af3':
+                    blob = self.cache / 'af3am-af3' / 'af3.int8.bin.zst'
+                    if blob.is_file():
+                        self.manifest['weights_sha256'] = digest(blob)
+                        provenance = blob.parent / '.source'
+                        self.manifest['weights_source'] = provenance.read_text() if provenance.exists() else None
                 self.state = 'complete'
         except Exception as e:
             self.state, self.error = 'failed', str(e)
