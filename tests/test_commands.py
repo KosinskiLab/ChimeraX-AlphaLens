@@ -287,6 +287,29 @@ def test_bad_distogram_af3_fallback_is_only_used_for_supported_operations(sessio
         assert rows[0]['p_contact'] == '0.900'
 
 
+@pytest.mark.parametrize('success', [True, False])
+def test_agreement_completion_after_source_model_closed(session, tmp_path, success):
+    structure, _ = prediction(tmp_path)
+    old = PAE('', structure, np.zeros((2, 2)))
+    new = PAE('', types.SimpleNamespace(deleted=False), np.zeros((2, 2)))
+    plot = Plot(new)
+    failures = []
+    plot.agreement_failed = failures.append
+    callbacks = []
+    old._agreement_pending = [(True, lambda: callbacks.append('deleted model'))]
+    structure.deleted = True
+    agr = agreement.Agreement(['seed 1', 'seed 2'], 'seed', np.ones((2, 2, 2)), 8.)
+    if success:
+        cmd._agreement_loaded(session, old, plot, 2, agr, [], None, 0.)
+        assert new.agreement is agr and plot.loaded == 1
+    else:
+        with pytest.raises(UserError, match='read failed'):
+            cmd._agreement_loaded(session, old, plot, 2, None, [], 'read failed', 0.)
+        assert failures == ['read failed']
+    assert not callbacks
+    assert old._agreement_pending is None
+
+
 @pytest.mark.parametrize('min_prob', [None, 0.8])
 def test_command_export_passes_active_region(session, tmp_path, monkeypatch, min_prob):
     structure, _ = prediction(tmp_path)
