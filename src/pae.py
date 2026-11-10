@@ -40,6 +40,7 @@ class AlphaLensPAE(AlphaFoldPAE):
         self._full_size = pae_matrix.shape[0]
         self._rows = None               # Matrix rows kept after trimming deleted residues
         self.distogram_path = None
+        self._distogram_file = None     # Requested source, retained while loading or on failure
         self.metrics = None             # dict from data.distogram_metrics, trimmed like PAE
         self.agreement = None           # agreement.Agreement over the seeds / models
         self._agreement_pending = None  # Callbacks while the agreement data load
