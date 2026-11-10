@@ -4,6 +4,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -190,6 +191,39 @@ def validate_result(directory, chains):
                 has_contact_probabilities='contact_probs' in confidences)
 
 
+class PredictionProgress:
+    """Read reported engine milestones; never estimate end-to-end percentages."""
+    def __init__(self):
+        self.stage = 'Preparing model and alignment'
+        self.completed = 0
+        self.total = None
+        self._pending = ''
+
+    def feed(self, text):
+        lines = (self._pending + text).split('\n')
+        self._pending = lines.pop()[-4096:]
+        for line in lines:
+            line = line.strip()
+            passed = re.match(r'pass (\d+)/(\d+):', line)
+            header = re.match(r'AF2 (?:monomer|multimer): .*?, (\d+) passes$', line)
+            if passed:
+                completed, total = map(int, passed.groups())
+                if 0 < completed <= total:
+                    self.completed = completed
+                    self.total = total if completed < total else None
+                    self.stage = 'Predicting' if completed < total else 'Writing prediction files'
+            elif header and int(header[1]) > 0:
+                self.stage, self.completed, self.total = 'Predicting', 0, int(header[1])
+            elif line.startswith('search:'):
+                self.stage = 'MSA search · ' + line[len('search:'):].strip()[:160]
+                self.total = None
+            elif re.match(r'(?:monomer|multimer)(?:-\d+)?:', line):
+                self.stage, self.total = 'Downloading model weights', None
+            elif (re.match(r'\d+ residues, .* passes ->', line)
+                  or line.startswith('loaded in ')):
+                self.stage, self.total = 'Loading model and preparing GPU', None
+
+
 class PredictionJob:
     """One cancellable process; poll() is nonblocking and called by the GUI timer."""
     def __init__(self, directory, chains, *, executable=None, search=False, msa=None,
@@ -220,6 +254,8 @@ class PredictionJob:
         self.state = 'prepared'
         self.result = None
         self.error = None
+        self.progress = PredictionProgress()
+        self._log_offset = 0
         self.options = dict(seed=seed, recycles=recycles, max_msa=max_msa, max_extra=max_extra)
         self.source = source or {}
         self.search = search
@@ -312,6 +348,16 @@ class PredictionJob:
                 os.killpg(self.process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
+
+    def read_progress(self):
+        # Read only new bytes, bounded per GUI tick. Keep milestones across long
+        # diagnostic lines and partial writes instead of repeatedly tailing the log.
+        with (self.directory / 'prediction.log').open('rb') as log:
+            log.seek(self._log_offset)
+            chunk = log.read(64 * 1024)
+            self._log_offset = log.tell()
+        self.progress.feed(chunk.decode(errors='replace'))
+        return self.progress
 
     def poll(self):
         if self.state != 'running':

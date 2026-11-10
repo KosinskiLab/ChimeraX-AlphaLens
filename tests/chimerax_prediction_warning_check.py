@@ -57,11 +57,13 @@ def main():
             pump(lambda: not dialog.lookup_timer.isActive())
             assert '2,000 residues' in dialog.size_warning.text()
             assert not dialog.size_warning.isHidden()
-            assert dialog.start_button.isEnabled(), dialog.preview.text()
+            assert not dialog.start_button.isEnabled(), 'MSA choice must be explicit'
+            assert not dialog.msa_hint.isHidden()
             assert dialog.time_limit.value() == 0
             dialog.time_limit.setValue(minutes)
             dialog.executable.setText(str(engine))
             dialog.msa.setText(str(msa))
+            assert dialog.start_button.isEnabled(), dialog.preview.text()
             dialog.output.setText(str(out / f'timeout-{minutes}'))
             if minutes == 0:
                 dialog.grab().save(str(out / 'warning.png'))
@@ -74,6 +76,9 @@ def main():
             dialog.cancel_button.click()
             pump(lambda: not dialog.timer.isActive())
             assert dialog.job.state == 'cancelled', dialog.status.text()
+            assert dialog.progress_bar.maximum() == 100
+            assert dialog.progress_bar.value() == 0
+            assert dialog.progress_label.text() == 'Cancelled'
             assert dialog.time_limit.isEnabled()
             dialog.close()
             dialog = None

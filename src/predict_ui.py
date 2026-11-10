@@ -8,7 +8,7 @@ import uuid
 
 from Qt.QtCore import QTimer
 from Qt.QtWidgets import (QApplication, QCheckBox, QDialog, QFormLayout, QHBoxLayout,
-                          QLabel, QLineEdit, QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout)
+                          QLabel, QLineEdit, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox, QVBoxLayout)
 from . import predict
 
 
@@ -162,15 +162,24 @@ class PredictionDialog(QDialog):
         self.executable = QLineEdit(predict.default_executable()); form.addRow('LocalFold executable', self.executable)
         self.output = QLineEdit(str(predict.data_directory() / 'predictions')); form.addRow('Results directory', self.output)
         self.msa = QLineEdit(); self.msa.setPlaceholderText('Existing A3M for exactly the selected sequence(s)')
-        form.addRow('MSA file (optional)', self.msa)
+        form.addRow('Existing MSA (A3M)', self.msa)
         self.reuse = QCheckBox('Reuse and crop the source MSA (no upload)')
         self.reuse.setEnabled(self.source_msa is not None)
         self.reuse.setChecked(self.source_msa is not None)
+        if self.source_msa is None:
+            self.reuse.setToolTip('No matching .a3m or input.a3m beside this structure. '
+                                 'MSAs embedded in AF3 JSON are not imported automatically.')
         if plot is not None:
             form.addRow(self.reuse)
         api = os.environ.get('LOCALFOLD_MMSEQS_API', 'https://api.colabfold.com').rstrip('/')
         self.search = QCheckBox(f'Search remotely if uncached: send sequences to {api}')
         form.addRow(self.search)
+        self.msa_hint = QLabel('Choose an MSA to enable Predict: enter an A3M file above '
+                              'or check “Search remotely if uncached”.')
+        self.msa_hint.setWordWrap(True)
+        self.msa_hint.setStyleSheet('color: #a65c00; font-weight: bold;')
+        self.msa_hint.setMinimumHeight(2*self.msa_hint.fontMetrics().lineSpacing()+4)
+        form.addRow(self.msa_hint)
         self.seed = QSpinBox(); self.seed.setRange(0, 2147483647); form.addRow('Random seed', self.seed)
         self.recycles = QSpinBox(); self.recycles.setRange(0, 10); self.recycles.setValue(3)
         form.addRow('Recycles', self.recycles)
@@ -181,12 +190,17 @@ class PredictionDialog(QDialog):
                       'cropping is not proof of better accuracy. The multimer bundle has no contact-probability head.')
         note.setWordWrap(True); layout.addWidget(note)
         self.status = QLabel('Ready'); self.status.setWordWrap(True); layout.addWidget(self.status)
+        self.progress_label = QLabel('Not started'); self.progress_label.setWordWrap(True)
+        layout.addWidget(self.progress_label)
+        self.progress_bar = QProgressBar(); self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0); self.progress_bar.setTextVisible(False)
+        layout.addWidget(self.progress_bar)
         buttons = QHBoxLayout(); layout.addLayout(buttons)
         self.start_button = QPushButton('Predict'); self.cancel_button = QPushButton('Cancel job')
         self.cancel_button.setEnabled(False)
         buttons.addWidget(self.start_button); buttons.addWidget(self.cancel_button)
         self.start_button.clicked.connect(self.start)
-        self.cancel_button.clicked.connect(lambda: self.job.cancel() if self.job else None)
+        self.cancel_button.clicked.connect(self.cancel)
         self.flanks.valueChanged.connect(self.refresh)
         self.lookup_timer = QTimer(self); self.lookup_timer.setInterval(100)
         self.lookup_timer.timeout.connect(self.poll_lookup)
@@ -197,6 +211,7 @@ class PredictionDialog(QDialog):
         self.search.toggled.connect(lambda checked: self.reuse.setChecked(False) if checked else None)
         self.reuse.toggled.connect(self.msa_controls)
         self.search.toggled.connect(self.msa_controls)
+        self.msa.textChanged.connect(self.refresh)
         self.timer = QTimer(self); self.timer.setInterval(100); self.timer.timeout.connect(self.poll)
         QApplication.instance().aboutToQuit.connect(self.shutdown)
         self.msa_controls()
@@ -212,6 +227,31 @@ class PredictionDialog(QDialog):
 
     def msa_controls(self, *args):
         self.msa.setEnabled(not self.reuse.isChecked() and not self.search.isChecked())
+        self.refresh()
+
+    def set_progress(self, stage, completed=None, total=None):
+        self.progress_label.setText(stage)
+        if total is None:
+            self.progress_bar.setRange(0, 0)
+        else:
+            self.progress_bar.setRange(0, total)
+            self.progress_bar.setValue(completed)
+
+    def set_status(self, message):
+        self.status.setText(message)
+        # Qt may keep a wrapped QLabel at its old one-line height after its text
+        # changes. Reserve the actual height so results and errors stay readable.
+        self.status.setMinimumHeight(self.status.heightForWidth(max(100, self.width()-40))+4)
+
+    def show_error(self, message):
+        self.status.setStyleSheet('color: #c43b36; font-weight: bold;')
+        self.set_status(message)
+        self.session.logger.warning(message)
+
+    def cancel(self):
+        if self.job and self.job.state == 'running':
+            self.job.cancel()
+            self.set_progress('Cancelling…')
 
     def invalidate_input(self):
         self.entries = None
@@ -233,7 +273,7 @@ class PredictionDialog(QDialog):
         self.entries = None
         self.input_text.setEnabled(False); self.load_button.setEnabled(False)
         self.start_button.setEnabled(False)
-        self.status.setText('Resolving sequences…')
+        self.set_status('Resolving sequences…')
         threading.Thread(target=resolve, daemon=True, name='AlphaLens UniProt lookup').start()
         self.lookup_timer.start()
 
@@ -246,9 +286,9 @@ class PredictionDialog(QDialog):
             self.entries = self.lookup_future.result()
             self.resolved.setPlainText('\n'.join(f'>{e["label"]} ({len(e["sequence"])} residues)\n{e["sequence"]}'
                                                  for e in self.entries))
-            self.status.setText('Review the resolved sequences, choose ranges/MSA, then click Predict.')
+            self.set_status('Review the resolved sequences, choose ranges/MSA, then click Predict.')
         except Exception as e:
-            self.status.setText(str(e))
+            self.set_status(str(e))
         self.lookup_future = None
         self.refresh()
 
@@ -261,18 +301,23 @@ class PredictionDialog(QDialog):
         return sequence_chains(self.entries, [field.text() for field in self.ranges])
 
     def refresh(self, *args):
+        msa_ready = self.reuse.isChecked() or self.search.isChecked() or bool(self.msa.text().strip())
+        self.msa_hint.setVisible(not msa_ready)
         try:
             chains, _ = self.prediction_input()
             self.preview.setText(' + '.join(f'{c["source_chain"]}: {len(c["sequence"])} residues' for c in chains))
             self.preview.setToolTip('\n'.join(c['sequence'] for c in chains))
             warning = predict.size_warning(chains)
             self.size_warning.setText(warning); self.size_warning.setVisible(bool(warning))
-            self.start_button.setEnabled(True)
+            running = self.job is not None and self.job.state == 'running'
+            self.start_button.setEnabled(msa_ready and not running)
         except Exception as e:
             self.size_warning.clear(); self.size_warning.hide()
             self.preview.setText(str(e)); self.start_button.setEnabled(False)
 
     def start(self):
+        self.status.setStyleSheet('')
+        self.set_progress('Preparing prediction…')
         try:
             chains, source = self.prediction_input()
             name = datetime.now().strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:6]
@@ -287,7 +332,8 @@ class PredictionDialog(QDialog):
                           recycles=self.recycles.value(), source=source,
                           timeout=self.time_limit.value()*60 or None).start()
         except Exception as e:
-            self.status.setText(str(e)); return
+            self.set_progress('Could not start', 0, 100)
+            self.show_error(str(e)); return
         for widget in (self.flanks, self.executable, self.output, self.msa, self.reuse, self.search, self.seed, self.recycles,
                        self.time_limit, self.start_button):
             widget.setEnabled(False)
@@ -295,26 +341,32 @@ class PredictionDialog(QDialog):
             widget.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.timer.start()
-        self.status.setText('Running…')
+        self.set_status('Running…')
 
     def poll(self):
         try:
             state = self.job.poll()
             if state == 'running':
                 elapsed = time.monotonic() - self.job.started
-                with (self.job.directory / 'prediction.log').open('rb') as log:
-                    log.seek(0, 2); size = log.tell(); log.seek(max(0, size - 1500))
-                    lines = log.read().decode(errors='replace').splitlines()
-                latest = lines[-1][-200:] if lines else 'Starting LocalFold…'
-                self.status.setText(f'Running · {elapsed:.1f} s · MSA: {self.job.manifest["msa_source"]}\n{latest}')
+                progress = self.job.read_progress()
+                stage = progress.stage
+                if progress.total:
+                    stage += f' · {progress.completed}/{progress.total} passes completed'
+                if self.job.cancelled_at is not None:
+                    self.set_progress('Cancelling…')
+                else:
+                    self.set_progress(stage, progress.completed, progress.total)
+                self.set_status(f'Running · {elapsed:.1f} s · MSA: {self.job.manifest["msa_source"]}')
                 return
             self.timer.stop(); self.cancel_button.setEnabled(False)
             if state == 'complete':
+                self.set_progress('Opening prediction…')
                 self.output_model, self.comparison = import_result(self.session, self.job)
+                self.set_progress('Complete', 100, 100)
                 if self.comparison is None:
                     score = (f'ipTM {self.job.result["iptm"]:.3f}' if len(self.job.chains) == 2
                              else f'pTM {self.job.result["ptm"]:.3f}')
-                    self.status.setText(f'Complete in {time.monotonic()-self.job.started:.1f} s · {score}\n'
+                    self.set_status(f'Complete in {time.monotonic()-self.job.started:.1f} s · {score}\n'
                                         f'Mean pLDDT {self.job.result["mean_plddt"]:.1f}\n'
                                         f'Results: {self.job.directory}')
                     return
@@ -322,13 +374,17 @@ class PredictionDialog(QDialog):
                 before = self.job.source['core_mean_plddt']
                 plddt = (f'Same residues: pLDDT {before:.1f} → '
                          f'{self.comparison["predicted_core_mean_plddt"]:.1f}\n') if before is not None else ''
-                self.status.setText(f'Complete in {time.monotonic()-self.job.started:.1f} s · '
+                self.set_status(f'Complete in {time.monotonic()-self.job.started:.1f} s · '
                                     f'ipTM {self.job.result["iptm"]:.3f}\n'
                                     f'Same selected pairs: mean PAE {old:.2f} → {new:.2f} Å\n'
                                     + plddt +
                                     f'Results: {self.job.directory}')
             else:
-                self.status.setText(self.job.error or 'Cancelled. Partial files retained in the results directory.')
+                self.set_progress('Failed' if self.job.error else 'Cancelled', 0, 100)
+                if self.job.error:
+                    self.show_error(self.job.error)
+                else:
+                    self.set_status('Cancelled. Partial files retained in the results directory.')
         except Exception as e:
             self.timer.stop(); self.cancel_button.setEnabled(False)
             # A log/read failure must not leave an unpolled GPU job running.
@@ -336,7 +392,8 @@ class PredictionDialog(QDialog):
                 self.shutdown()
             except Exception:
                 self.job._release()
-            self.status.setText(f'Could not load prediction: {e}. Files: {self.job.directory}')
+            self.set_progress('Failed', 0, 100)
+            self.show_error(f'Could not load prediction: {e}. Files: {self.job.directory}')
         finally:
             if self.job.state != 'running':
                 for widget in (self.flanks, self.executable, self.output, self.msa, self.search, self.seed,
@@ -349,7 +406,7 @@ class PredictionDialog(QDialog):
 
     def shutdown(self):
         if self.job and self.job.state == 'running':
-            self.job.cancel()
+            self.cancel()
             try:
                 self.job.process.wait(timeout=1)
             except Exception:
@@ -362,8 +419,8 @@ class PredictionDialog(QDialog):
 
     def closeEvent(self, event):
         if self.job and self.job.state == 'running':
-            self.job.cancel()
-            self.status.setText('Cancelling… Close again when the process stops.')
+            self.cancel()
+            self.set_status('Cancelling… Close again when the process stops.')
             event.ignore()
         else:
             self.lookup_timer.stop()

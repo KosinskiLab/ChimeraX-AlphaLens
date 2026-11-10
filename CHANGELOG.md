@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.1a3
+
+* Add prediction progress: an activity bar during model/alignment preparation and
+  remote MSA search, completed inference passes during folding, and a completion
+  state after the result opens. Elapsed time remains visible; queue time has no ETA.
+* Explain the required MSA choice beside its controls and enable Predict only after
+  an alignment source is chosen. Startup failures are highlighted and logged.
+
 ## 1.0.1a2
 
 * Remove the fixed local prediction length cap. Inputs above 1,024 total residues,

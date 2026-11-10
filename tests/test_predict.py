@@ -4,12 +4,44 @@ import sys
 import time
 
 import pytest
-from alphalens.predict import PredictionJob, crop_chains, size_warning, validate_a3m, validate_chains, validate_result
+from alphalens.predict import PredictionJob, PredictionProgress, crop_chains, size_warning, validate_a3m, validate_chains, validate_result
 
 
 def rows():
     return [dict(chain_id=c, chain_index=i, aa='A', number=i + 10, insertion_code='')
             for c in 'AB' for i in range(8)]
+
+
+def test_progress_reports_engine_milestones_and_preserves_partial_lines():
+    progress = PredictionProgress()
+    assert progress.total is None
+    progress.feed('  multimer: weights.bin (1/8)\n')
+    assert progress.stage == 'Downloading model weights' and progress.total is None
+    progress.feed('search: chain search 1 of 2: queued\n')
+    assert 'queued' in progress.stage and progress.total is None
+    progress.feed('search: paired search: downloading\n')
+    assert 'downloading' in progress.stage and progress.total is None
+    progress.feed('799 residues, 512 MSA rows, 1024 extra, 4 passes -> /tmp/in\n')
+    assert progress.stage == 'Loading model and preparing GPU'
+    progress.feed('AF2 multimer: 799 residues, 512 MSA rows, 1024 extra, 4 passes\n  pass 1/')
+    assert (progress.completed, progress.total) == (0, 4)
+    progress.feed('4: mean pLDDT 59.02\n' + 'metal: long diagnostics ' * 500 + '\n')
+    assert (progress.completed, progress.total) == (1, 4)
+    progress.feed('  pass 2/4: mean pLDDT 56.99\n  pass 3/4: mean pLDDT 58.04\n')
+    assert (progress.completed, progress.total) == (3, 4)
+    progress.feed('  pass 4/4: mean pLDDT 58.02\n')
+    assert progress.stage == 'Writing prediction files' and progress.total is None
+
+
+def test_progress_ignores_unknown_and_invalid_messages():
+    progress = PredictionProgress()
+    progress.feed('pass 2/0: invalid\npass 5/4: invalid\nAF2 monomer: invalid, 0 passes\n')
+    assert progress.total is None
+    progress.feed('AF2 monomer: 108 residues, 512 MSA rows, 1024 extra, 1 passes\n')
+    assert (progress.completed, progress.total) == (0, 1)
+    progress.feed('unknown output without newline' * 1000)
+    assert len(progress._pending) <= 4096
+    assert (progress.completed, progress.total) == (0, 1)
 
 
 def test_crop_extends_contiguously_and_preserves_numbering():
