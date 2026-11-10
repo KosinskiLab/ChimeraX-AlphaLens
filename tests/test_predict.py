@@ -100,7 +100,7 @@ def test_real_process_and_msa_cache(runner):
 
 
 def test_no_implicit_sequence_upload(runner):
-    with pytest.raises(ValueError, match='Choose Search'):
+    with pytest.raises(ValueError, match='Choose remote'):
         runner()
 
 
