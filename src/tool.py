@@ -508,7 +508,7 @@ class AlphaLensPlot(ToolInstance):
         self._dots_on = True
         self._dots_all_views = True         # Contact dots on every matrix, not only the contact view
         self._load_progress = None          # data.LoadProgress while a distogram is being read
-        self._distogram_file = None         # Distogram of the shown model, saved in sessions
+        self._distogram_file = getattr(pae, '_distogram_file', None)
         self._agreement_progress = None     # The same while the seeds or models are being read
         self._mask_matrix = False           # Also blank matrix pixels below the threshold
         self._pair_cache = None             # (pairs, probs) with P >= SLIDER_MIN, strongest first
@@ -747,7 +747,7 @@ class AlphaLensPlot(ToolInstance):
         '''Show another model (same prediction) in this window.'''
         same_size = pae.matrix_size == self._pae.matrix_size
         self._end_progress()                # A read for the previous model is no longer shown
-        self._distogram_file = None
+        self._distogram_file = getattr(pae, '_distogram_file', None)
         self._detach_structure()
         self._restore_hidden()
         from . import contacts
