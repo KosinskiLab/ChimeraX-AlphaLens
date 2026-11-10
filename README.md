@@ -2,7 +2,7 @@
 
 *Formerly DistoPAE (up to version 0.4). The `distopae` command still works.*
 
-AlphaLens 1.0 is a [ChimeraX](https://www.cgl.ucsf.edu/chimerax/) tool for inspecting
+AlphaLens is a [ChimeraX](https://www.cgl.ucsf.edu/chimerax/) tool for inspecting
 AlphaFold2/AlphaFold3 predictions and running small local protein predictions. Like
 ChimeraX's built-in AlphaFold error plot, it shows the PAE matrix with a pLDDT track. It adds views
 computed from the predicted distogram, compares the predicted contacts with the contacts in the
@@ -20,7 +20,7 @@ higher P. The one ringed in gold was clicked; its values are in the line under t
 | View | Matrix | Colors (dark = confident) |
 |---|---|---|
 | PAE | predicted aligned error (Å) | 0–30 Å |
-| Contact probability | predicted P(d < 8 Å) from the distogram, or AF3 `contact_probs` if there is no distogram | √P scale, so weak contacts show |
+| Contact probability | predicted P(d < 8 Å) from the distogram, or `contact_probs` in the confidences JSON (AlphaFold3 and local predictions) if there is no distogram | √P scale, so weak contacts show |
 | Model distances | CB–CB distances in the shown model; the pairs closer than 8 Å (contacts in the model) colored by the predicted P | distances grey, 8 Å dark to 40 Å and beyond white; contacts as the contact-probability view |
 | Spread σ / H | standard deviation (Å) or entropy (bits) of the predicted distance distribution | 0 to the 99th percentile of the model |
 | Agreement | number of AF3 seeds or AF2 models in which the pair has P ≥ the slider threshold | 0 to the number of seeds or models |
@@ -35,11 +35,9 @@ P ≥ 0.5.*
 
 ## Install
 
-Version 1.1.3 shows live prediction stages and the same complete score report in
-both the prediction window and ChimeraX Log. It includes the AF3 coordinate fix,
-hover-resizing fix, local AF3 prediction,
-multi-chain inputs, random seeds and contact-probability reports. Large inputs show
-a warning without a residue-count cap.
+Version 1.2.0 sets up LocalFold when you first predict, reopens saved local prediction
+folders, and keeps the selected-region preview in sync with the plot. It includes all
+AF3, progress, score-report and hover fixes from 1.1.3.
 
 Requires ChimeraX 1.6 or newer; tested with 1.10 and 1.12. The bundle is pure Python, so one wheel works on
 macOS, Linux and Windows. The optional local prediction engine currently requires
@@ -50,7 +48,7 @@ Apple Silicon macOS 13 or newer and is tested with ChimeraX 1.12.
    pip needs it.
 2. In the ChimeraX command line:
 
-       toolshed install ~/Downloads/chimerax_alphalens-1.1.3-py3-none-any.whl
+       toolshed install ~/Downloads/chimerax_alphalens-1.2.0-py3-none-any.whl
 
 3. Restart ChimeraX.
 
@@ -77,16 +75,19 @@ ChimeraX builds a `pyproject.toml` bundle from its current directory, whatever p
 
 ### Optional local prediction engine (Apple Silicon)
 
-Download [setup_localfold.py](https://github.com/KosinskiLab/AlphaLens/releases/download/v1.1.3/setup_localfold.py)
-from the 1.1.3 release. With Python 3, Git and Xcode Command Line Tools installed, run in Terminal:
+Open **AlphaLens Prediction**, choose the model and input, then click **Install & Predict**
+if that engine is missing. AlphaLens downloads and builds the selected LocalFold engine
+in the background, then starts the prediction with the submitted input and settings.
+**Cancel setup** stops installation; retry the same button when ready. Setup requires
+Xcode Command Line Tools (`xcode-select --install` if missing). A fresh AF3 engine build
+took about 30 seconds on the tested M5 Max, excluding model weights and MSA search. The plugin installation
+and opening its prediction dialog do not install engines. Existing engines are reused.
 
-```sh
-python3 ~/Downloads/setup_localfold.py
-```
-
-This builds both pinned LocalFold Metal engines outside ChimeraX's Python. Run it again
-when upgrading from 1.0 to add AF3. The first run of each AF2 model downloads about 77 MB
-of weights; AF3 downloads about 277 MB after you accept DeepMind's terms in the dialog.
+For optional manual installation of both engines, download
+[setup_localfold.py](https://github.com/KosinskiLab/AlphaLens/releases/download/v1.2.0/setup_localfold.py)
+and run `python3 ~/Downloads/setup_localfold.py`. First-use setup uses ChimeraX's bundled
+Python. The first AF2 prediction downloads about 77 MB of model weights; AF3 downloads
+about 277 MB after you accept DeepMind's terms in the dialog.
 Existing MSAs stay local;
 remote MSA search sends sequences to ColabFold only when explicitly selected.
 See the [prediction guide](docs/local-prediction.md) for details and measured limits.
@@ -268,7 +269,7 @@ not saved.
 |---|---|
 | `paeFile`, `distogram` | files with non-standard names; otherwise they are found next to the structure |
 | `mode` | view to show: `contact` the predicted contact probability, `distance` the distances and contacts in the model (`model` also works), `std` / `entropy` the spread; `agreement` reads every seed or model first and logs the agreement table |
-| `cutoff` | contact distance in Å (default 8), also for the contacts in the Model distances view; needs a distogram, because AF3 `contact_probs` are fixed at 8 Å |
+| `cutoff` | contact distance in Å (default 8), also for the contacts in the Model distances view; needs a distogram, because `contact_probs` are fixed at 8 Å |
 | `contacts`, `minProb` | draw or remove the contacts with P ≥ minProb on the structure (default 0.5; also moves the slider) |
 | `saveContacts` | write the contacts to a CSV file as Export CSV does, with P ≥ minProb if given, otherwise the slider threshold (0.2 without a plot) |
 | `palette`, `range` | PAE color map, as in `alphafold pae` |
@@ -296,7 +297,7 @@ contacts reached in any seed, with P per seed:
 
 ## Local protein and interface prediction (experimental)
 
-On Apple Silicon, AlphaLens 1.1.0 predicts protein complexes from raw sequences,
+On Apple Silicon, AlphaLens predicts protein complexes from raw sequences,
 FASTA or UniProt IDs using `alphalens predict` (also under Tools → Structure Prediction
 → AlphaLens Prediction). It can also re-predict regions spanning multiple protein chains.
 Drag an interface box, then right-click **Re-predict selected interface…**.
@@ -309,6 +310,7 @@ same residues, contact counts, top-ten mean contact probability and strongest re
 pairs. `region_contacts.csv` records source/new probabilities and model distances with
 original residue labels. The full score comparison is saved as `prediction_report.txt`
 and can be reopened through **Prediction report…** in the dialog or result plot’s context menu.
+A job folder opens again later with `alphalens open <job folder>`.
 The original structure is retained. There is no fixed residue-count cap;
 inputs above 1,024 total residues (including flanks) show a warning and can still run.
 The engine checks its estimated GPU-memory requirement. The optional time limit defaults
@@ -336,7 +338,7 @@ large; without them the AF2 plot shows PAE only.
 
 ## Limitations
 
-* AF3 `contact_probs` are fixed at 8 Å; another `cutoff` needs the distogram.
+* `contact_probs` (AlphaFold3 and local predictions) are fixed at 8 Å; another `cutoff` needs the distogram.
 * The agreement view keeps N × N values per seed or model in memory (2 bytes each) and refuses
   more than 4 GB: five seeds work up to about 20,000 residues, twenty up to about 10,000.
 * ColabFold layouts are untested, and have no model switching or agreement view.
