@@ -4,7 +4,7 @@ build-backend = "chimerax.bundle_builder.cx_pep517"
 
 [project]
 name = "ChimeraX-AlphaLens"
-version = "1.0.1a4"
+version = "1.1.0"
 license = { text = "MIT" }
 authors = [{ name = "Dmitry Molodenskiy" }]
 description = "AlphaFold PAE, contact-probability, model-distance, distogram-spread and seed-agreement plot (formerly DistoPAE)"
@@ -27,6 +27,9 @@ min-session-version = 1
 max-session-version = 1
 categories = ["Structure Prediction"]
 classifiers = ["Development Status :: 3 - Alpha"]
+
+[tool.chimerax.package-data]
+"src/" = ["weights/*.f32", "weights/*.txt"]
 
 [tool.chimerax.tool."AlphaLens"]
 category = "Structure Prediction"
