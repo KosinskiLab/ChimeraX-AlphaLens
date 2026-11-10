@@ -18,7 +18,7 @@ def test_raw_sequence_and_fasta_preserve_positions():
     assert chains[1]['residue_map'][0]['source_row'] == 4
 
 
-@pytest.mark.parametrize('text', ['', '>empty\n', '>a\nAA\n>b\nAA\n>c\nAA', 'P69905 P68871 P00648', 'TP53', 'https://example.org'])
+@pytest.mark.parametrize('text', ['', '>empty\n', 'TP53', 'https://example.org'])
 def test_invalid_input(text):
     with pytest.raises(ValueError):
         inputs.resolve_entries(text)
@@ -33,6 +33,20 @@ def test_uniprot_accessions_isoforms_and_entry_ids():
     assert seen == ['P05067-2', 'HBA_HUMAN']
     inputs.resolve_entries('A0A024RBG1', fetch)
     assert seen[-1] == 'A0A024RBG1'
+
+
+def test_multiple_chains_from_fasta_and_uniprot():
+    entries = inputs.resolve_entries('>a\nACDE\n>b\nFGHI\n>c\nKLMN')
+    chains, _ = inputs.sequence_chains(entries, ['', '2-3', '3-4'])
+    assert [c['sequence'] for c in chains] == ['ACDE', 'GH', 'MN']
+    assert [c['source_chain'] for c in chains] == list('ABC')
+    assert chains[2]['residue_map'][0]['source_row'] == 10
+    seen = []
+    def fetch(identifier):
+        seen.append(identifier)
+        return dict(label=identifier, sequence='ACDE', input_kind='uniprot')
+    assert len(inputs.resolve_entries('P69905 P68871 P00648', fetch)) == 3
+    assert seen == ['P69905', 'P68871', 'P00648']
 
 
 @pytest.mark.parametrize('interval', ['0-3', '3-2', '1-999', '1:3', '-3'])

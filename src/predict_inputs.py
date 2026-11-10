@@ -5,7 +5,7 @@ import re
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from .predict import validate_chains
+from .predict import chain_ids, validate_chains
 
 _ACCESSION = r'(?:[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9](?:[A-Z][A-Z0-9]{2}[0-9]){1,2})(?:-[1-9][0-9]*)?'
 _IDENTIFIER = re.compile(r'(?:' + _ACCESSION + r'|[A-Z0-9]{1,15}_[A-Z0-9]{1,10})\Z')
@@ -64,10 +64,10 @@ def fetch_uniprot(identifier):
 
 
 def resolve_entries(text, fetcher=None):
-    """One raw sequence, one/two FASTA entries, or one/two whitespace-separated IDs."""
+    """One raw sequence, FASTA entries, or whitespace-separated UniProt IDs."""
     text = text.strip()
     if not text:
-        raise ValueError('Paste a protein sequence, FASTA, or one/two UniProt IDs.')
+        raise ValueError('Paste a protein sequence, FASTA entries, or UniProt IDs.')
     if len(text) > 1024 * 1024:
         raise ValueError('Input is too large for this prototype.')
     if text.startswith('>'):
@@ -75,25 +75,27 @@ def resolve_entries(text, fetcher=None):
     else:
         words = text.upper().split()
         if all(_IDENTIFIER.fullmatch(w) for w in words):
-            if len(words) > 2:
-                raise ValueError('Use one or two UniProt IDs.')
+            chain_ids(len(words))
             fetch = fetcher or fetch_uniprot
             entries = [fetch(w) for w in words]
         else:
             sequence = ''.join(words)
             if not sequence.isalpha() or not sequence.isascii():
-                raise ValueError('Use a raw amino-acid sequence, FASTA, or valid UniProt IDs. Use FASTA for two sequences.')
+                raise ValueError('Use a raw amino-acid sequence, FASTA, or valid UniProt IDs. Use FASTA for multiple sequences.')
             entries = [dict(label='sequence_A', sequence=sequence, input_kind='sequence')]
-    if not 1 <= len(entries) <= 2:
-        raise ValueError('The prototype accepts one or two protein sequences.')
+    chain_ids(len(entries))
     return entries
 
 
-def sequence_chains(entries, ranges=('', '')):
+def sequence_chains(entries, ranges=None):
     """Apply optional 1-based inclusive ranges and record original sequence positions."""
     chains, provenance = [], []
+    ranges = list(ranges or [])
+    if any(interval.strip() for interval in ranges[len(entries):]):
+        raise ValueError('A range was supplied for a missing chain.')
+    ranges += [''] * max(0, len(entries)-len(ranges))
     offset = 0
-    for cid, entry, interval in zip('AB', entries, ranges):
+    for cid, entry, interval in zip(chain_ids(len(entries)), entries, ranges):
         seq = entry['sequence']
         start, end = 1, len(seq)
         if interval.strip():
@@ -112,7 +114,5 @@ def sequence_chains(entries, ranges=('', '')):
                     full_sequence_sha256=hashlib.sha256(seq.encode()).hexdigest())
         provenance.append(info)
         offset += len(seq)
-    if len(chains) != len(entries) or (len(entries) == 1 and len(ranges) > 1 and ranges[1].strip()):
-        raise ValueError('A range was supplied for a missing chain.')
     validate_chains(chains)
     return chains, dict(input_mode='sequence', inputs=provenance)

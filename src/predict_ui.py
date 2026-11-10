@@ -1,4 +1,4 @@
-"""ChimeraX dialog for the experimental local AF2-Multimer runner."""
+"""ChimeraX dialog for experimental local AF2 and AF3 prediction."""
 from datetime import datetime
 from pathlib import Path
 import signal
@@ -7,9 +7,11 @@ import time
 import uuid
 
 from Qt.QtCore import QTimer
-from Qt.QtWidgets import (QApplication, QCheckBox, QDialog, QFormLayout, QHBoxLayout,
-                          QLabel, QLineEdit, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox, QVBoxLayout)
+from Qt.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFormLayout, QHBoxLayout,
+                          QLabel, QLineEdit, QPlainTextEdit, QProgressBar, QPushButton,
+                          QScrollArea, QSpinBox, QVBoxLayout, QWidget)
 from . import predict
+from . import predict_contacts
 
 
 def snapshot(plot, flanks):
@@ -34,13 +36,20 @@ def snapshot(plot, flanks):
         for entry in c['residue_map']:
             ca = rra[entry['source_row']].find_atom('CA')
             entry['source_ca_scene'] = [float(v) for v in ca.scene_coord] if ca is not None else None
-    a, b = [c['core_rows'] for c in chains]
+    output_pairs = predict_contacts.region_pairs(chains, plot._prediction_region)
+    if not len(output_pairs):
+        raise ValueError('Select a region containing inter-chain residue pairs.')
+    source_rows = np.array([r['source_row'] for c in chains for r in c['residue_map']])
+    source_pairs = source_rows[output_pairs]
+    a, b = source_pairs.T
     matrix = pae.matrix('pae')
     plddt = pae.row_plddt()
     source = dict(model=pae.structure.name, model_id=pae.structure.id_string,
                   file=getattr(pae.structure, 'filename', None),
-                  core_mean_pae=float((matrix[np.ix_(a, b)].mean() + matrix[np.ix_(b, a)].mean()) / 2),
-                  core_mean_plddt=float(np.nanmean(plddt[a + b])))
+                  region=plot._prediction_region,
+                  contact_snapshot=predict_contacts.measure(pae, source_pairs),
+                  core_mean_pae=float((matrix[a, b].mean() + matrix[b, a].mean()) / 2),
+                  core_mean_plddt=float(np.nanmean(plddt[np.unique(source_pairs)])))
     if not np.isfinite(source['core_mean_plddt']):
         source['core_mean_plddt'] = None
     return chains, source
@@ -71,12 +80,18 @@ def import_result(session, job):
     from . import cmd
     import numpy as np
     structure = cmd._open_structure(session, str(job.directory / 'fold.pdb'))
-    model_name = 'AF2-Multimer' if len(job.chains) == 2 else 'AF2-monomer'
+    model_name = 'AF3' if job.backend == 'af3' else 'AF2-Multimer' if len(job.chains) > 1 else 'AF2-monomer'
     structure.name = f'{job.directory.name} LocalFold {model_name}'
     pae = cmd.alphalens(session, structure, pae_file=str(job.directory / 'fold_confidences.json'), wait=True)
     pae.color_plddt(log_command=False)
+    contact_pairs = predict_contacts.region_pairs(job.chains, job.source.get('region'))
+    if len(contact_pairs):
+        job.contact_report = predict_contacts.export(job.directory, job.chains, contact_pairs,
+            predict_contacts.measure(pae, contact_pairs), job.source.get('contact_snapshot'))
+        predict.write_json(job.directory / 'contact_report.json', job.contact_report)
+        session.logger.info(predict_contacts.summary(job.contact_report))
     if job.source.get('input_mode') == 'sequence':
-        confidence = (f'ipTM {job.result["iptm"]:.3f}' if len(job.chains) == 2
+        confidence = (f'ipTM {job.result["iptm"]:.3f}' if len(job.chains) > 1
                       else f'pTM {job.result["ptm"]:.3f}')
         session.logger.info(f'Local prediction: {job.directory}\n{confidence}; '
                             f'mean pLDDT {job.result["mean_plddt"]:.1f}. '
@@ -95,22 +110,19 @@ def import_result(session, job):
                                                  np.array([xyz for _, xyz in pairs]))
         structure.scene_position = transform
     # Compare the same residue pairs, excluding added flanks from the score comparison.
-    offsets = [0, len(job.chains[0]['sequence'])]
-    core = [[offset + i for i, r in enumerate(c['residue_map']) if r['source_row'] in c['core_rows']]
-            for offset, c in zip(offsets, job.chains)]
-    a, b = core
+    a, b = contact_pairs.T
     matrix = pae.matrix('pae')
     comparison = dict(source=job.source,
                       aligned_source_chain=job.chains[0]['source_chain'],
                       aligned_chain_ca_rmsd=alignment_rmsd,
-                      predicted_core_mean_pae=float((matrix[np.ix_(a, b)].mean() + matrix[np.ix_(b, a)].mean()) / 2),
-                      predicted_core_mean_plddt=float(np.mean(pae.row_plddt()[a + b])))
+                      predicted_core_mean_pae=float((matrix[a, b].mean() + matrix[b, a].mean()) / 2),
+                      predicted_core_mean_plddt=float(np.mean(pae.row_plddt()[np.unique(contact_pairs)])),
+                      contacts=job.contact_report)
     predict.write_json(job.directory / 'comparison.json', comparison)
     session.logger.info(f'Local prediction: {job.directory}\nipTM {job.result["iptm"]:.3f}; '
                         f'mean pLDDT {job.result["mean_plddt"]:.1f}. '
                         f'Same selected pairs: mean PAE {job.source["core_mean_pae"]:.2f} → '
-                        f'{comparison["predicted_core_mean_pae"]:.2f} Å. '
-                        'Cropping can change confidence; this does not establish better accuracy.')
+                        f'{comparison["predicted_core_mean_pae"]:.2f} Å.')
     return structure, comparison
 
 
@@ -125,12 +137,12 @@ class PredictionDialog(QDialog):
         self.setWindowTitle('Local protein prediction · experimental')
         self.resize(660, 400)
         layout = QVBoxLayout(self)
-        intro = QLabel('Local AF2 on Apple Silicon • one or two protein chains\n'
-                       'The first run of each model downloads public AF2 weights.')
+        intro = QLabel('Local protein prediction on Apple Silicon\n'
+                       'Model weights download on the first run and are cached locally.')
         intro.setWordWrap(True); layout.addWidget(intro)
         self.input_widgets = []
         if plot is None:
-            label = QLabel('Paste one raw sequence, one/two FASTA entries, or one/two UniProt IDs.\n'
+            label = QLabel('Paste a raw sequence, multiple FASTA entries, or UniProt IDs.\n'
                            'UniProt lookup sends only the IDs to UniProt; review the sequences before predicting.')
             label.setWordWrap(True); layout.addWidget(label)
             self.input_text = QPlainTextEdit(); self.input_text.setMaximumHeight(100)
@@ -143,17 +155,31 @@ class PredictionDialog(QDialog):
             self.input_widgets = [self.input_text, self.load_button]
         form = QFormLayout(); form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         layout.addLayout(form)
+        self.backend = QComboBox(); self.backend.addItem('AlphaFold 2 (monomer / multimer)', 'af2')
+        self.backend.addItem('AlphaFold 3', 'af3')
+        form.addRow('Model', self.backend)
+        self.af3_terms = QCheckBox('I accept DeepMind’s AF3 terms for eligible non-commercial use')
+        self.af3_terms.setChecked(predict.af3_terms_accepted())
+        form.addRow(self.af3_terms)
+        self.af3_terms_links = QLabel('<a href="https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_TERMS_OF_USE.md">AF3 parameter terms</a> · '
+                                     '<a href="https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_PROHIBITED_USE_POLICY.md">Prohibited-use policy</a>')
+        self.af3_terms_links.setOpenExternalLinks(True); form.addRow(self.af3_terms_links)
+        self.af3_steps = QSpinBox(); self.af3_steps.setRange(1, 1000); self.af3_steps.setValue(200)
+        self.af3_steps_label = QLabel('AF3 diffusion steps')
+        form.addRow(self.af3_steps_label, self.af3_steps)
+        for widget in (self.af3_terms, self.af3_terms_links, self.af3_steps, self.af3_steps_label):
+            widget.hide()
         self.flanks = QSpinBox(self); self.flanks.setRange(0, 100); self.flanks.setValue(10)
         if plot is not None:
             form.addRow('Flanking residues on each side', self.flanks)
         else:
             self.flanks.hide()
-            self.ranges = [QLineEdit(), QLineEdit()]
-            for cid, field in zip('AB', self.ranges):
-                field.setPlaceholderText('Whole sequence, or a 1-based range such as 25-120')
-                form.addRow(f'Chain {cid} range (optional)', field)
-                field.textChanged.connect(self.refresh)
-            self.input_widgets.extend(self.ranges)
+            self.ranges = []
+            self.range_area = QScrollArea(); self.range_area.setWidgetResizable(True)
+            self.range_area.setFixedHeight(100)
+            ranges_widget = QWidget(); self.range_form = QFormLayout(ranges_widget)
+            self.range_area.setWidget(ranges_widget)
+            form.addRow('Chain ranges (optional)', self.range_area)
         self.preview = QLabel(); form.addRow('Selected sequences', self.preview)
         self.size_warning = QLabel(); self.size_warning.setWordWrap(True)
         self.size_warning.setMinimumHeight(2*self.size_warning.fontMetrics().lineSpacing()+4)
@@ -180,15 +206,17 @@ class PredictionDialog(QDialog):
         self.msa_hint.setStyleSheet('color: #a65c00; font-weight: bold;')
         self.msa_hint.setMinimumHeight(2*self.msa_hint.fontMetrics().lineSpacing()+4)
         form.addRow(self.msa_hint)
-        self.seed = QSpinBox(); self.seed.setRange(0, 2147483647); form.addRow('Random seed', self.seed)
+        self.seed = QSpinBox(); self.seed.setRange(0, 2147483647); self.seed.setValue(predict.random_seed())
+        form.addRow('Seed', self.seed)
+        self.randomize_seed = QCheckBox('Generate a new random seed for each prediction')
+        self.randomize_seed.setChecked(True); self.seed.setEnabled(False)
+        self.randomize_seed.toggled.connect(lambda checked: self.seed.setEnabled(not checked))
+        form.addRow(self.randomize_seed)
         self.recycles = QSpinBox(); self.recycles.setRange(0, 10); self.recycles.setValue(3)
         form.addRow('Recycles', self.recycles)
         self.time_limit = QSpinBox(); self.time_limit.setRange(0, 10080)
         self.time_limit.setSpecialValueText('No limit'); self.time_limit.setValue(0)
         form.addRow('Time limit (minutes)', self.time_limit)
-        note = QLabel('Region predictions compare PAE/pLDDT on the same residues. Higher confidence after\n'
-                      'cropping is not proof of better accuracy. The multimer bundle has no contact-probability head.')
-        note.setWordWrap(True); layout.addWidget(note)
         self.status = QPlainTextEdit('Ready'); self.status.setReadOnly(True)
         self.status.setFixedHeight(5*self.status.fontMetrics().lineSpacing()+16)
         layout.addWidget(self.status)
@@ -214,9 +242,18 @@ class PredictionDialog(QDialog):
         self.reuse.toggled.connect(self.msa_controls)
         self.search.toggled.connect(self.msa_controls)
         self.msa.textChanged.connect(self.refresh)
+        self.backend.currentIndexChanged.connect(self.backend_changed)
+        self.af3_terms.toggled.connect(self.refresh)
         self.timer = QTimer(self); self.timer.setInterval(100); self.timer.timeout.connect(self.poll)
         QApplication.instance().aboutToQuit.connect(self.shutdown)
         self.msa_controls()
+        self.refresh()
+
+    def backend_changed(self):
+        backend = self.backend.currentData()
+        self.executable.setText(predict.default_executable(backend))
+        for widget in (self.af3_terms, self.af3_terms_links, self.af3_steps, self.af3_steps_label):
+            widget.setVisible(backend == 'af3')
         self.refresh()
 
     def display(self, shown):
@@ -285,6 +322,17 @@ class PredictionDialog(QDialog):
         self.input_text.setEnabled(True); self.load_button.setEnabled(True)
         try:
             self.entries = self.lookup_future.result()
+            for field in self.ranges:
+                self.input_widgets.remove(field)
+            while self.range_form.rowCount():
+                self.range_form.removeRow(0)
+            self.ranges = []
+            for cid in predict.chain_ids(len(self.entries)):
+                field = QLineEdit(); field.setPlaceholderText('Whole chain, or 25-120')
+                self.range_form.addRow(f'Chain {cid}', field)
+                field.textChanged.connect(self.refresh)
+                self.ranges.append(field)
+            self.input_widgets.extend(self.ranges)
             self.resolved.setPlainText('\n'.join(f'>{e["label"]} ({len(e["sequence"])} residues)\n{e["sequence"]}'
                                                  for e in self.entries))
             self.set_status('Review the resolved sequences, choose ranges/MSA, then click Predict.')
@@ -306,12 +354,16 @@ class PredictionDialog(QDialog):
         self.msa_hint.setVisible(not msa_ready)
         try:
             chains, _ = self.prediction_input()
-            self.preview.setText(' + '.join(f'{c["source_chain"]}: {len(c["sequence"])} residues' for c in chains))
+            preview = ' + '.join(f'{c["source_chain"]}: {len(c["sequence"])} residues' for c in chains[:4])
+            if len(chains) > 4:
+                preview += f' + … ({len(chains)} chains total)'
+            self.preview.setText(preview)
             self.preview.setToolTip('\n'.join(c['sequence'] for c in chains))
             warning = predict.size_warning(chains)
             self.size_warning.setText(warning); self.size_warning.setVisible(bool(warning))
             running = self.job is not None and self.job.state == 'running'
-            self.start_button.setEnabled(msa_ready and not running)
+            terms_ready = self.backend.currentData() != 'af3' or self.af3_terms.isChecked()
+            self.start_button.setEnabled(msa_ready and terms_ready and not running)
         except Exception as e:
             self.size_warning.clear(); self.size_warning.hide()
             self.preview.setText(str(e)); self.start_button.setEnabled(False)
@@ -320,6 +372,8 @@ class PredictionDialog(QDialog):
         self.status.setStyleSheet('')
         self.set_progress('Preparing prediction…')
         try:
+            if self.randomize_seed.isChecked():
+                self.seed.setValue(predict.random_seed())
             chains, source = self.prediction_input()
             name = datetime.now().strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:6]
             msa = (self.msa.text().strip() or None) if self.msa.isEnabled() else None
@@ -331,12 +385,18 @@ class PredictionDialog(QDialog):
                           executable=self.executable.text(), search=self.search.isChecked(),
                           msa=msa, msa_crop=crop, seed=self.seed.value(),
                           recycles=self.recycles.value(), source=source,
-                          timeout=self.time_limit.value()*60 or None).start()
+                          timeout=self.time_limit.value()*60 or None, backend=self.backend.currentData(),
+                          accept_af3_terms=self.af3_terms.isChecked(), diffusion_steps=self.af3_steps.value()).start()
+            if self.backend.currentData() == 'af3':
+                try:
+                    predict.record_af3_terms_acceptance()
+                except OSError as error:
+                    self.session.logger.warning(f'Could not remember AF3 terms acceptance: {error}')
         except Exception as e:
             self.set_progress('Could not start', 0, 100)
             self.show_error(str(e)); return
         for widget in (self.flanks, self.executable, self.output, self.msa, self.reuse, self.search, self.seed, self.recycles,
-                       self.time_limit, self.start_button):
+                       self.time_limit, self.randomize_seed, self.backend, self.af3_terms, self.af3_steps, self.start_button):
             widget.setEnabled(False)
         for widget in self.input_widgets:
             widget.setEnabled(False)
@@ -365,11 +425,13 @@ class PredictionDialog(QDialog):
                 self.output_model, self.comparison = import_result(self.session, self.job)
                 self.set_progress('Complete', 100, 100)
                 if self.comparison is None:
-                    score = (f'ipTM {self.job.result["iptm"]:.3f}' if len(self.job.chains) == 2
+                    score = (f'ipTM {self.job.result["iptm"]:.3f}' if len(self.job.chains) > 1
                              else f'pTM {self.job.result["ptm"]:.3f}')
                     self.set_status(f'Complete in {time.monotonic()-self.job.started:.1f} s · {score}\n'
                                         f'Mean pLDDT {self.job.result["mean_plddt"]:.1f}\n'
-                                        f'Results: {self.job.directory}')
+                                        f'Seed: {self.job.options["seed"]}\n'
+                                        + (predict_contacts.summary(self.job.contact_report)+'\n' if self.job.contact_report else '')
+                                        + f'Results: {self.job.directory}')
                     return
                 old = self.job.source['core_mean_pae']; new = self.comparison['predicted_core_mean_pae']
                 before = self.job.source['core_mean_plddt']
@@ -378,7 +440,8 @@ class PredictionDialog(QDialog):
                 self.set_status(f'Complete in {time.monotonic()-self.job.started:.1f} s · '
                                     f'ipTM {self.job.result["iptm"]:.3f}\n'
                                     f'Same selected pairs: mean PAE {old:.2f} → {new:.2f} Å\n'
-                                    + plddt +
+                                    + plddt + f'Seed: {self.job.options["seed"]}\n'
+                                    + predict_contacts.summary(self.job.contact_report) + '\n' +
                                     f'Results: {self.job.directory}')
             else:
                 self.set_progress('Failed' if self.job.error else 'Cancelled', 0, 100)
@@ -398,9 +461,11 @@ class PredictionDialog(QDialog):
         finally:
             if self.job.state != 'running':
                 for widget in (self.flanks, self.executable, self.output, self.msa, self.search, self.seed,
-                               self.recycles, self.time_limit, self.start_button):
+                               self.recycles, self.time_limit, self.randomize_seed, self.backend,
+                               self.af3_terms, self.af3_steps, self.start_button):
                     widget.setEnabled(True)
                 self.reuse.setEnabled(self.source_msa is not None)
+                self.seed.setEnabled(not self.randomize_seed.isChecked())
                 self.msa_controls()
                 for widget in self.input_widgets:
                     widget.setEnabled(True)

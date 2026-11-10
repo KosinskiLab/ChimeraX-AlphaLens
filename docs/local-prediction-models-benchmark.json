@@ -1,0 +1,105 @@
+{
+  "date": "2026-11-10",
+  "hardware": "Apple M5 Max, 40 GPU cores, 64 GB unified memory",
+  "chimerax": "1.12",
+  "engine_revision": "68c59196fa7d32c6edfc061ed369889c1cdb680b",
+  "input_residues": 291,
+  "msa": "Previously obtained merged alignment; no fresh remote query",
+  "af2_options": {
+    "seed": 42,
+    "recycles": 3,
+    "max_msa": 512,
+    "max_extra": 1024
+  },
+  "af2_head_summary": {
+    "baseline_median_seconds": 4.666343457996845,
+    "with_head_median_seconds": 4.802579125000193,
+    "added_seconds": 0.13623566700334777,
+    "overhead_percent": 2.9195379257794807,
+    "coordinates_pae_scores_unchanged": true,
+    "contact_head_sha256": "f809845f39567c829a1bf829cb44eb91c2a69e3a7f879a16a70e506c3a8258ab",
+    "source": "params_model_1_multimer_v3.npz; CC BY 4.0"
+  },
+  "af2_head_runs": [
+    {
+      "case": "baseline-0",
+      "seconds": 4.1307119999983115,
+      "peak_buffer_GB": 1.39,
+      "has_contact_probs": false,
+      "iptm": 0.565134
+    },
+    {
+      "case": "head-0",
+      "seconds": 4.391734124998038,
+      "peak_buffer_GB": 1.39,
+      "has_contact_probs": true,
+      "iptm": 0.565134
+    },
+    {
+      "case": "baseline-1",
+      "seconds": 4.666343457996845,
+      "peak_buffer_GB": 1.39,
+      "has_contact_probs": false,
+      "iptm": 0.565134
+    },
+    {
+      "case": "head-1",
+      "seconds": 4.802579125000193,
+      "peak_buffer_GB": 1.39,
+      "has_contact_probs": true,
+      "iptm": 0.565134
+    },
+    {
+      "case": "baseline-2",
+      "seconds": 4.999397499999759,
+      "peak_buffer_GB": 1.39,
+      "has_contact_probs": false,
+      "iptm": 0.565134
+    },
+    {
+      "case": "head-2",
+      "seconds": 4.912692334000894,
+      "peak_buffer_GB": 1.39,
+      "has_contact_probs": true,
+      "iptm": 0.565134
+    }
+  ],
+  "af3": {
+    "wall_seconds": 22.7703940829997,
+    "includes_first_weight_download": true,
+    "inference_seconds": 5.8232,
+    "seed": 42,
+    "recycles": 3,
+    "max_msa": 512,
+    "steps": 200,
+    "samples": 1,
+    "update": "euler",
+    "schedule": "karras",
+    "iptm": 0.15,
+    "valid_sequence_coordinates_pae_and_contact_probabilities": true
+  },
+  "gui": {
+    "result": "PASS",
+    "runs": [
+      {
+        "backend": "af2",
+        "seconds": 2.5170924160011054,
+        "chains": 3,
+        "seed": 1913235204,
+        "iptm": 0.926003,
+        "top10_mean": 1.0,
+        "heartbeat_ticks": 48
+      },
+      {
+        "backend": "af3",
+        "seconds": 3.684070999999676,
+        "chains": 3,
+        "seed": 1320073014,
+        "iptm": 0.39,
+        "top10_mean": 0.8589999973773956,
+        "heartbeat_ticks": 69
+      }
+    ]
+  },
+  "interpretation": "Execution/timing checks only; not validation of biological correctness or equivalence to full-precision AlphaFold. GUI three-chain input splits barstar into two fragments to test chain handling."
+}
