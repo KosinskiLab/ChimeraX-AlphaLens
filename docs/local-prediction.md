@@ -1,6 +1,6 @@
 # Experimental local protein and interface prediction
 
-AlphaLens 1.1.0 can predict protein complexes from sequences or UniProt IDs, or re-predict
+AlphaLens 1.1.2 can predict protein complexes from sequences or UniProt IDs, or re-predict
 selected regions spanning multiple protein chains, with AlphaFold 2 or AlphaFold 3 on
 Apple Silicon, using [LocalFold's native Metal implementation](https://github.com/sokrypton/localfold/tree/68c59196fa7d32c6edfc061ed369889c1cdb680b/metal).
 The prediction runs in a separate process; ChimeraX remains interactive. The original
@@ -10,7 +10,7 @@ are not yet connected to AlphaLens.
 
 ## Setup
 
-Install the AlphaLens 1.1.0 wheel. The local prediction feature remains experimental.
+Install the AlphaLens 1.1.2 wheel. The local prediction feature remains experimental.
 The engine requires Apple Silicon, macOS 13 or newer, Git, Python 3 and Xcode Command
 Line Tools. It does not require a Python ML environment inside ChimeraX.
 
@@ -40,9 +40,9 @@ Choose **AlphaFold 2** or **AlphaFold 3** in the model selector. Weights are cac
 - AF3 downloads about 277 MB of LocalFold's int8 parameter representation after you
   check acceptance of [DeepMind's terms](https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_TERMS_OF_USE.md)
   and [prohibited-use policy](https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_PROHIBITED_USE_POLICY.md).
-  Acceptance is remembered locally. Defaults are three recycles, 512 MSA rows,
-  200 diffusion steps, one sample and the Euler/Karras sampler. The diffusion step
-  count is editable. These settings are not DeepMind's full default sampling protocol.
+  Acceptance is remembered locally. Defaults are 10 recycles, 512 MSA rows, 200 diffusion steps, five samples and
+  the Euler/Karras sampler. The diffusion step and sample counts are editable.
+  The best-ranked sample is opened; the remaining samples stay in the result directory.
 
 These are quantized AlphaFold parameters run by LocalFold, not models trained by
 AlphaLens. AF3 weights are not bundled or redistributed in the AlphaLens wheel.
@@ -212,9 +212,11 @@ wall times of **4.666 s without** and **4.803 s with** the matching distogram he
 peak buffers were 1.39 GB in both cases. The original 134-second job spent about
 130 seconds obtaining its remote MSA. An AF3 run of this crop with the cached MSA,
 200 Euler/Karras diffusion steps and three recycles took **22.77 s including the
-first weight download**, with **5.82 s of inference**. It produced validated coordinates,
-PAE and contact probabilities; its ipTM was 0.15. This verifies execution and timing,
-not biological correctness or equivalence to DeepMind's implementation.
+first weight download**, with **5.82 s of inference**. Its files passed the earlier
+sequence and finite-value checks, but subsequent testing found collapsed coordinates
+from the M5 tensor fast path. This earlier run is an execution timing only and must
+not be used as a valid AF3 prediction. Re-predict with 1.1.2 or newer; see the quality
+correction below.
 See [the recorded model/head benchmark](local-prediction-models-benchmark.json).
 
 ## Regression checks
@@ -256,3 +258,25 @@ The bundled AF2-Multimer distogram head comes from `params_model_1_multimer_v3.n
 unmodified apart from storing its float32 weights and bias consecutively. Attribution
 and the full CC BY 4.0 license are included in `src/weights/`. AF3 parameters and
 outputs remain subject to DeepMind's separate AF3 terms linked above.
+
+## AF3 quality correction in 1.1.2
+
+The M5 tensor fast path in the pinned native engine produced collapsed AF3 coordinates.
+Increasing 3 to 10 recycles, 200 to 400 diffusion steps, or 512 to 1024 MSA rows did
+not resolve it. AlphaLens now sets `LOCALFOLD_GEMM_TENSOR=0` and
+`LOCALFOLD_ATTN_TENSOR=0` for AF3 and records these settings in `job.json`.
+AF3 jobs from 1.1.0/1.1.1 on this path should be re-predicted. Their earlier timing
+checks demonstrated execution, not structural accuracy.
+
+For a 366-residue user crop at the same seed and MSA, corrected AF3 gives pLDDT 72.0,
+ipTM 0.46 and no Cα pairs closer than 2 Å, in 24.7 s with 10 recycles and five
+200-step samples. The failed path gave pLDDT 48.1 and hundreds of overlaps. A public
+barnase–barstar control gives pLDDT 95.8, ipTM 0.93 and complex Cα RMSD 0.59 Å from
+PDB 1BRS without a template. This supports the corrected implementation on these
+cases; a high score still does not establish a biologically valid interaction.
+The [recorded AF3 quality checks](local-prediction-af3-quality.json) include the
+settings grid, backend comparison, geometry counts and cached-MSA timings.
+
+Results now include `prediction_report.txt`. **Prediction report…** in the dialog or
+the result plot's context menu reopens the full comparison, including after restarting
+ChimeraX. Older reports can be reconstructed from the existing JSON files.
