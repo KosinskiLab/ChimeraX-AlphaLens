@@ -46,7 +46,7 @@ class PredictionFiles:
     def __init__(self, structure_path, kind='unknown', model_name=None,
                  pae_path=None, distogram_path=None):
         self.structure_path = structure_path
-        self.kind = kind                    # 'af2', 'af3' or 'unknown'
+        self.kind = kind                    # 'af2', 'af3', 'colabfold', 'localfold' or 'unknown'
         self.model_name = model_name        # e.g. 'model_3_multimer_v3_pred_0' or 'seed-1_sample-0'
         self.pae_path = pae_path
         self.distogram_path = distogram_path
@@ -100,8 +100,38 @@ def structure_path_for_directory(directory, rank=0):
     if hits:
         return hits[0]
 
+    # LocalFold, as written by AlphaLens' own local predictions
+    top = _localfold_top(d)
+    if top:
+        if rank == 0:
+            return top
+        stem = os.path.splitext(top)[0]
+        ranked = _af3_ranked_samples(d, fallback=False, name=os.path.basename(stem) + '_ranking_scores.csv')
+        if rank >= len(ranked):
+            raise ValueError(f'Local prediction {d} has {max(len(ranked), 1)} sample(s), '
+                             f'rank {rank} requested')
+        p = f'{stem}_sample{ranked[rank][1]}.pdb'
+        if not os.path.exists(p):
+            raise ValueError(f'Missing {p}')
+        return p
+
     raise ValueError(f'Could not find a rank {rank} model in {d} '
-                     '(expected AlphaFold2 ranked_N.pdb/cif or AlphaFold3 *_model.cif)')
+                     '(expected AlphaFold2 ranked_N.pdb/cif, AlphaFold3 *_model.cif or an '
+                     'AlphaLens local prediction with fold.pdb)')
+
+
+def _localfold_top(d):
+    """
+    The top model of a LocalFold output directory: <stem>.pdb with <stem>_confidences.json
+    (fold.pdb in an AlphaLens job directory). Further diffusion samples are
+    <stem>_sample<k>.pdb, ranked in <stem>_ranking_scores.csv. None unless exactly one fits.
+    """
+    tops = []
+    for conf in sorted(glob.glob(os.path.join(d, '*_confidences.json'))):
+        stem = conf[:-len('_confidences.json')]
+        if not re.search(r'_sample\d+$', stem) and os.path.exists(stem + '.pdb'):
+            tops.append(stem + '.pdb')
+    return tops[0] if len(tops) == 1 else None
 
 
 def find_prediction_files(structure_path):
@@ -161,6 +191,15 @@ def find_prediction_files(structure_path):
         disto = allp if (allp and pickle_has_distogram(allp)) else None
         return PredictionFiles(path, 'colabfold', tag, pae, disto)
 
+    # ---- LocalFold (AlphaLens local prediction): fold.pdb + fold_confidences.json, further
+    #      samples fold_sample<k>.pdb + fold_sample<k>_confidences.json. No distogram is kept.
+    stem, ext = os.path.splitext(base)
+    if ext in ('.pdb', '.cif'):
+        conf = _first_existing(os.path.join(d, f'{stem}_confidences{s}') for s in JSON_SUFFIXES)
+        if conf:
+            m = re.search(r'_(sample\d+)$', stem)
+            return PredictionFiles(path, 'localfold', m.group(1) if m else None, conf, None)
+
     # ---- Fall back to ChimeraX's own PAE file guessing
     pae = None
     try:
@@ -189,10 +228,10 @@ def _af2_ranking_order(d):
         return None
 
 
-def _af3_ranked_samples(d, fallback=True):
+def _af3_ranked_samples(d, fallback=True, name='ranking_scores.csv'):
     """[(seed, sample, score), ...] best first, from ranking_scores.csv or sample dirs."""
     rows = []
-    p = os.path.join(d, 'ranking_scores.csv')
+    p = os.path.join(d, name)
     if os.path.exists(p):
         with open(p) as f:
             header = f.readline().strip().split(',')

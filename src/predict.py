@@ -12,13 +12,17 @@ import subprocess
 import sys
 import time
 
-ENGINE_REVISION = '68c59196fa7d32c6edfc061ed369889c1cdb680b'
+from .predict_setup import REVISION as ENGINE_REVISION
 MODEL = 'model_1_multimer_v3'
 MONOMER_MODEL = 'model_1_ptm'
 AMINO_ACIDS = 'ACDEFGHIKLMNPQRSTVWY'
 # A UI warning threshold only. LocalFold checks the GPU working-set budget.
 LARGE_JOB_RESIDUES = 1024
 CHAIN_IDS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+# ChimeraX's PDB reader leaves the process in the C locale, whose default text encoding is
+# ASCII: after a first result has opened, a header with any other byte would stop the next
+# job. Alignment rows are ASCII; header bytes of any encoding pass through unchanged.
+A3M_TEXT = dict(encoding='utf-8', errors='surrogateescape')
 
 
 def chain_ids(count):
@@ -130,7 +134,7 @@ def crop_chains(rows, region, flanks=10):
 def validate_a3m(path, query):
     first = []
     started = False
-    with Path(path).open() as stream:
+    with Path(path).open(**A3M_TEXT) as stream:
         for line in stream:
             if line.startswith('#') or not line.strip():
                 continue
@@ -155,7 +159,7 @@ def crop_a3m(path, destination, source_query, columns):
         raise ValueError('Invalid MSA crop column mapping.')
     records = []
     header, seq = None, []
-    for line in Path(path).read_text().splitlines() + ['>END']:
+    for line in Path(path).read_text(**A3M_TEXT).splitlines() + ['>END']:
         if line.startswith('#') or not line.strip():
             continue
         if line.startswith('>'):
@@ -179,7 +183,7 @@ def crop_a3m(path, destination, source_query, columns):
             header, seq = line, []
         elif header is not None:
             seq.append(line.strip())
-    Path(destination).write_text(''.join(records))
+    Path(destination).write_text(''.join(records), **A3M_TEXT)
     validate_a3m(destination, ''.join(source_query[i] for i in columns))
 
 

@@ -148,6 +148,7 @@ class PredictionDialog(QDialog):
         self.source_msa = source_alignment(plot) if plot is not None else None
         self.entries = self.lookup_future = None
         self.job = self.output_model = self.comparison = None
+        self.setup_job = self.pending_prediction = None
         self.setWindowTitle('Local protein prediction · experimental')
         self.resize(660, 400)
         layout = QVBoxLayout(self)
@@ -204,6 +205,8 @@ class PredictionDialog(QDialog):
         self.size_warning.setStyleSheet('color: #a65c00;')
         form.addRow(self.size_warning)
         self.executable = QLineEdit(predict.default_executable()); form.addRow('LocalFold executable', self.executable)
+        self.setup_hint = QLabel(); self.setup_hint.setWordWrap(True)
+        form.addRow(self.setup_hint)
         self.output = QLineEdit(str(predict.data_directory() / 'predictions')); form.addRow('Results directory', self.output)
         self.msa = QLineEdit(); self.msa.setPlaceholderText('Existing A3M for exactly the selected sequence(s)')
         form.addRow('Existing MSA (A3M)', self.msa)
@@ -264,6 +267,7 @@ class PredictionDialog(QDialog):
         self.reuse.toggled.connect(self.msa_controls)
         self.search.toggled.connect(self.msa_controls)
         self.msa.textChanged.connect(self.refresh)
+        self.executable.textChanged.connect(self.refresh)
         self.backend.currentIndexChanged.connect(self.backend_changed)
         self.af3_terms.toggled.connect(self.refresh)
         self.timer = QTimer(self); self.timer.setInterval(100); self.timer.timeout.connect(self.poll)
@@ -324,7 +328,10 @@ class PredictionDialog(QDialog):
         logger(message)
 
     def cancel(self):
-        if self.job and self.job.state == 'running':
+        if self.setup_job and self.setup_job.state == 'running':
+            self.setup_job.cancel()
+            self.set_progress('Cancelling setup…')
+        elif self.job and self.job.state == 'running':
             self.job.cancel()
             self.set_progress('Cancelling…')
 
@@ -348,6 +355,7 @@ class PredictionDialog(QDialog):
         self.entries = None
         self.input_text.setEnabled(False); self.load_button.setEnabled(False)
         self.start_button.setEnabled(False)
+        self.status.setStyleSheet('')   # An earlier error must not color this lookup's messages
         self.log_message('Resolving sequences…')
         threading.Thread(target=resolve, daemon=True, name='AlphaLens UniProt lookup').start()
         self.lookup_timer.start()
@@ -386,7 +394,25 @@ class PredictionDialog(QDialog):
         from .predict_inputs import sequence_chains
         return sequence_chains(self.entries, [field.text() for field in self.ranges])
 
+    def source_changed(self):
+        '''The plot's box, model or window changed: show what Predict would use now.'''
+        if not self.is_busy():
+            self.refresh()      # A running job keeps its own input; refreshed when it ends
+
+    def is_busy(self):
+        return any(job is not None and job.state == 'running' for job in (self.job, self.setup_job))
+
+    def needs_setup(self):
+        path = Path(self.executable.text()).expanduser().resolve()
+        managed = predict.data_directory() / 'bin' / f'localfold-{self.backend.currentData()}'
+        return path == managed.resolve() and not path.exists()
+
     def refresh(self, *args):
+        needs_setup = self.needs_setup()
+        self.setup_hint.setText('First use: Install & Predict downloads and builds LocalFold in the background. '
+                                'Requires Apple Silicon and Xcode Command Line Tools; setup can be cancelled.')
+        self.setup_hint.setVisible(needs_setup)
+        self.start_button.setText('Install & Predict' if needs_setup else 'Predict')
         msa_ready = self.reuse.isChecked() or self.search.isChecked() or bool(self.msa.text().strip())
         self.msa_hint.setVisible(not msa_ready)
         try:
@@ -398,14 +424,27 @@ class PredictionDialog(QDialog):
             self.preview.setToolTip('\n'.join(c['sequence'] for c in chains))
             warning = predict.size_warning(chains)
             self.size_warning.setText(warning); self.size_warning.setVisible(bool(warning))
-            running = self.job is not None and self.job.state == 'running'
+            running = self.is_busy()
             terms_ready = self.backend.currentData() != 'af3' or self.af3_terms.isChecked()
             self.start_button.setEnabled(msa_ready and terms_ready and not running)
         except Exception as e:
             self.size_warning.clear(); self.size_warning.hide()
             self.preview.setText(str(e)); self.start_button.setEnabled(False)
 
+    def set_busy_controls(self, busy):
+        for widget in (self.flanks, self.executable, self.output, self.msa, self.search, self.seed,
+                       self.recycles, self.time_limit, self.randomize_seed, self.backend, self.af3_terms,
+                       self.af3_steps, self.af3_samples, self.start_button, *self.input_widgets):
+            widget.setEnabled(not busy)
+        self.reuse.setEnabled(not busy and self.source_msa is not None)
+        self.cancel_button.setEnabled(busy)
+        if not busy:
+            self.seed.setEnabled(not self.randomize_seed.isChecked())
+            self.msa_controls()
+
     def start(self):
+        if self.is_busy():
+            return
         self.status.setStyleSheet('')
         self.set_progress('Preparing prediction…')
         try:
@@ -418,35 +457,86 @@ class PredictionDialog(QDialog):
             if self.reuse.isChecked():
                 msa, query = self.source_msa
                 crop = dict(source_query=query, columns=[r['source_row'] for c in chains for r in c['residue_map']])
-            self.job = predict.PredictionJob(Path(self.output.text()).expanduser() / name, chains,
-                          executable=self.executable.text(), search=self.search.isChecked(),
-                          msa=msa, msa_crop=crop, seed=self.seed.value(),
-                          recycles=self.recycles.value(), source=source,
-                          timeout=self.time_limit.value()*60 or None, backend=self.backend.currentData(),
-                          accept_af3_terms=self.af3_terms.isChecked(), diffusion_steps=self.af3_steps.value(),
-                          diffusion_samples=self.af3_samples.value()).start()
-            if self.backend.currentData() == 'af3':
-                try:
-                    predict.record_af3_terms_acceptance()
-                except OSError as error:
-                    self.log_message(f'Could not remember AF3 terms acceptance: {error}', warning=True)
-        except Exception as e:
+            request = dict(directory=Path(self.output.text()).expanduser() / name, chains=chains,
+                           executable=self.executable.text(), search=self.search.isChecked(),
+                           msa=msa, msa_crop=crop, seed=self.seed.value(), recycles=self.recycles.value(), source=source,
+                           timeout=self.time_limit.value()*60 or None, backend=self.backend.currentData(),
+                           accept_af3_terms=self.af3_terms.isChecked(), diffusion_steps=self.af3_steps.value(),
+                           diffusion_samples=self.af3_samples.value())
+            if request['backend'] == 'af3' and not request['accept_af3_terms']:
+                raise ValueError('Confirm acceptance of DeepMind’s AF3 parameter terms before predicting with AF3.')
+            if self.needs_setup():
+                from .predict_setup import SetupJob
+                # Freeze the selected regions, sequences and settings at this click.
+                self.pending_prediction = request
+                self.setup_job = SetupJob(predict.data_directory(), request['backend']).start()
+                self.set_busy_controls(True)
+                self.cancel_button.setText('Cancel setup')
+                self.log_message(f'Installing LocalFold {request["backend"].upper()} for first use. '
+                                 f'Prediction will start when ready. Setup log: {self.setup_job.log_path}')
+                self.timer.start()
+            else:
+                self.launch_prediction(request)
+        except Exception as error:
+            self.timer.stop()
+            self.pending_prediction = None
             self.set_progress('Could not start', 0, 100)
-            self.show_error(str(e)); return
-        for widget in (self.flanks, self.executable, self.output, self.msa, self.reuse, self.search, self.seed, self.recycles,
-                       self.time_limit, self.randomize_seed, self.backend, self.af3_terms, self.af3_steps,
-                       self.af3_samples, self.start_button):
-            widget.setEnabled(False)
-        for widget in self.input_widgets:
-            widget.setEnabled(False)
-        self.cancel_button.setEnabled(True)
+            self.show_error(str(error))
+            self.set_busy_controls(False)
+
+    def launch_prediction(self, request):
+        self.setup_job = self.pending_prediction = None
+        self.job = predict.PredictionJob(**request).start()
+        if request['backend'] == 'af3':
+            try:
+                predict.record_af3_terms_acceptance()
+            except OSError as error:
+                self.log_message(f'Could not remember AF3 terms acceptance: {error}', warning=True)
+        self.set_busy_controls(True)
+        self.cancel_button.setText('Cancel job')
         self._logged_stage = None
         self.log_message(f'Starting {self.job.backend.upper()} prediction · Seed: {self.job.options["seed"]}\n'
                          f'Alignment source: {self.job.manifest["msa_source"]}\n'
                          f'Results: {self.job.directory}')
         self.timer.start()
 
+    def poll_setup(self):
+        setup = self.setup_job
+        try:
+            state = setup.poll()
+            for message in setup.read_messages():
+                self.log_message(message)
+            if state == 'running':
+                stage = 'Cancelling setup…' if setup.cancelled_at else setup.stage
+                self.set_progress(f'{stage} · {time.monotonic()-setup.started:.1f} s')
+                return
+            self.timer.stop()
+            request = self.pending_prediction
+            self.pending_prediction = self.setup_job = None
+            if state == 'complete':
+                self.log_message(f'LocalFold setup complete in {time.monotonic()-setup.started:.1f} s.')
+                self.launch_prediction(request)
+            elif state == 'cancelled':
+                self.set_progress('Setup cancelled', 0, 100)
+                self.log_message(f'LocalFold setup cancelled. Retry Install & Predict when ready. Log: {setup.log_path}')
+            else:
+                self.set_progress('Setup failed', 0, 100)
+                self.show_error(setup.error)
+        except Exception as error:
+            setup.shutdown()
+            self.timer.stop()
+            self.setup_job = self.pending_prediction = None
+            self.set_progress('Setup failed', 0, 100)
+            self.show_error(str(error))
+        finally:
+            if not self.is_busy():
+                self.cancel_button.setText('Cancel job')
+                self.set_busy_controls(False)
+
     def poll(self):
+        if self.setup_job is not None:
+            self.poll_setup()
+            return
         try:
             state = self.job.poll()
             if state == 'running':
@@ -491,17 +581,11 @@ class PredictionDialog(QDialog):
             self.show_error(f'Could not load prediction: {e}. Files: {self.job.directory}')
         finally:
             if self.job.state != 'running':
-                for widget in (self.flanks, self.executable, self.output, self.msa, self.search, self.seed,
-                               self.recycles, self.time_limit, self.randomize_seed, self.backend,
-                               self.af3_terms, self.af3_steps, self.af3_samples, self.start_button):
-                    widget.setEnabled(True)
-                self.reuse.setEnabled(self.source_msa is not None)
-                self.seed.setEnabled(not self.randomize_seed.isChecked())
-                self.msa_controls()
-                for widget in self.input_widgets:
-                    widget.setEnabled(True)
+                self.set_busy_controls(False)
 
     def shutdown(self):
+        if self.setup_job is not None:
+            self.setup_job.shutdown()
         if self.job and self.job.state == 'running':
             self.cancel()
             try:
@@ -515,7 +599,7 @@ class PredictionDialog(QDialog):
             self.job.poll()
 
     def closeEvent(self, event):
-        if self.job and self.job.state == 'running':
+        if self.is_busy():
             self.cancel()
             self.log_message('Cancelling… Close again when the process stops.')
             event.ignore()

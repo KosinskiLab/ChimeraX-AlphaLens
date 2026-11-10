@@ -141,8 +141,8 @@ def alphalens(session, structure=None, pae_file=None, distogram=None, mode=None,
         load = getattr(pae, '_distogram_load', None)
         loading = load is not None and load.pending
         if (save_contacts is not None or mode == 'agreement') and (loading or not pae.has_contact):
-            raise UserError(f'{structure}: no contact probabilities (no distogram or AF3 '
-                            f'contact_probs, or the distogram is still loading)')
+            raise UserError(f'{structure}: no contact probabilities (no distogram or confidence '
+                            f'JSON contact_probs, or the distogram is still loading)')
         if plot is not None and not plot.closed():
             plot.display(True)
             if pae_colormap is not None:
@@ -445,7 +445,8 @@ def prepare_prediction(session, structure, pae_file=None, distogram=None, cutoff
 
     pae._distogram_file = dpath
 
-    kind = {'af2': 'AlphaFold2', 'af3': 'AlphaFold3', 'colabfold': 'ColabFold'}.get(files.kind, '')
+    kind = {'af2': 'AlphaFold2', 'af3': 'AlphaFold3', 'colabfold': 'ColabFold',
+            'localfold': 'LocalFold'}.get(files.kind, '')
     model = f' {files.model_name}' if files.model_name else ''
     msg = f'AlphaLens {structure}: {kind}{model}, PAE from {pae_path}'
     if dpath:
@@ -599,7 +600,7 @@ def _open_structure(session, spath, log=True):
             stem = files.model_name
         else:
             stem = 'top'
-    kind = {'af2': 'AF2', 'af3': 'AF3'}.get(files.kind, '')
+    kind = {'af2': 'AF2', 'af3': 'AF3', 'localfold': 'LocalFold'}.get(files.kind, '')
     s.name = ' '.join(x for x in (os.path.basename(pred_dir), kind, stem) if x)
     return s
 

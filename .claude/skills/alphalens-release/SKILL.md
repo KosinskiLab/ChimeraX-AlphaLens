@@ -38,6 +38,14 @@ All three must pass before building:
    A large case (5,167 residues, 3 GB distogram, about 10 min to load over SMB):
    `/g/kosinski/dima/XFoldRuns/aruna/output_alphafold3/predictions/Q15650+Q8N9N2+Q9H1I8+Q8N3C0+Q5T481`.
 
+When the prediction dialog, `predict*.py` or the plot's box selection changed, also run the
+mapping check (about 15 s, no GPU or network; exit status 0):
+
+```bash
+ALPHALENS_MAPPING_SOURCE="<prediction with contact probabilities>" ALPHALENS_TEST_OUTPUT="<new folder>" \
+    $CX --cmd "open tests/chimerax_prediction_mapping_check.py"
+```
+
 ## 3. Build and check the wheel
 
 1. `cd` into the checkout first (the build needs it), then `$CX --nogui --exit --cmd "devel build . exit true"`.
@@ -49,6 +57,10 @@ All three must pass before building:
 4. Rerun the window check against the installed wheel: `ALPHALENS_SOURCE=installed`.
 
 ## 4. Publish
+
+When including `setup_localfold.py` in a release, copy `src/predict_setup.py` under
+that asset name. It is self-contained; `scripts/setup_localfold.py` is a repository
+entry point and requires the checkout.
 
 Each step runs on the user's request; ask when the request does not cover it.
 
