@@ -1927,7 +1927,8 @@ class AlphaLensPlot(ToolInstance):
         picked = st.get('picked')
         self._picked = None if picked is None or max(picked) >= n else tuple(picked)
         self._update_picked_marker()
-        self._struct_contacts = bool(st.get('struct_contacts')) and self._pae.has_contact
+        # Preserve the requested state while AF2 contact probabilities are still loading.
+        self._struct_contacts = bool(st.get('struct_contacts'))
         self._hider.set_state(st.get('hider', {}))
         hidden = np.asarray(st.get('selected_hidden', ()), int)
         self._selected_hidden[hidden[(hidden >= 0) & (hidden < n)]] = True
