@@ -118,7 +118,9 @@ def alphalens(session, structure=None, pae_file=None, distogram=None, mode=None,
                     t = min_prob
                 else:
                     t = plot.threshold if plot is not None and not plot.closed() else DEFAULT_MIN_P
-                save_contacts_csv(session, pae, save_contacts, t)
+                region = (plot._struct_region if plot is not None and not plot.closed()
+                          and plot.pae is pae else None)
+                save_contacts_csv(session, pae, save_contacts, t, region=region)
         if mode == 'agreement':
             start_agreement(session, pae, plot, cutoff, wait=wait, show=True, on_loaded=finish)
         else:
@@ -339,8 +341,18 @@ def _agreement_loaded(session, pae, plot, n_runs, agr, msgs, err, seconds):
     pending = pae._agreement_pending or []
     pae._agreement_pending = None
     s = pae.structure
+    plot_open = plot is not None and not plot.closed()
     if s.deleted:
-        return
+        # The window may now show another model of this prediction. Its load must settle,
+        # but callbacks (for example exports) still belong to the deleted source model.
+        if not plot_open:
+            return
+        current = plot.pae
+        if current is pae or current.structure.deleted or current.matrix_size != pae.matrix_size:
+            plot.agreement_failed('The model used to load agreement was closed')
+            return
+        pae, s = current, current.structure
+        pending = [(show, None) for show, _ in pending]
     for m in msgs:
         session.logger.warning(f'AlphaLens {s}: agreement: skipped {m}')
     plot_open = plot is not None and not plot.closed()

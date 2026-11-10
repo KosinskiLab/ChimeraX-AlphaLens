@@ -714,8 +714,13 @@ class AlphaLensPlot(ToolInstance):
     def _attach_structure(self):
         s = self._pae.structure
         self._structure_delete_handler = s.triggers.add_handler('deleted', self._structure_deleted)
+        self._structure_changes_handler = s.triggers.add_handler('changes', self._structure_changed)
 
     def _detach_structure(self):
+        h = getattr(self, '_structure_changes_handler', None)
+        if h is not None:
+            h.remove()
+            self._structure_changes_handler = None
         h = getattr(self, '_structure_delete_handler', None)
         if h is not None:
             try:
@@ -723,6 +728,20 @@ class AlphaLensPlot(ToolInstance):
             except Exception:
                 pass
             self._structure_delete_handler = None
+
+    def _structure_changed(self, trigger_name, data):
+        structure, changes = data
+        if self.closed() or structure is not self._pae.structure:
+            return
+        if ('coord changed' in changes.atom_reasons()
+                or 'active_coordset changed' in changes.structure_reasons()
+                or 'coordset changed' in changes.coordset_reasons()
+                or changes.num_deleted_atoms() or len(changes.created_atoms())):
+            # The cache checks current coordinates too, for commands before this trigger fires.
+            self._pae._model_distances = self._pae._model_contacts = None
+            if self._mode == 'model':
+                self._block_rgb = None
+                self._redraw(keep_zoom=True)
 
     def set_pae(self, pae):
         '''Show another model (same prediction) in this window.'''
@@ -1440,7 +1459,8 @@ class AlphaLensPlot(ToolInstance):
                 return
         if self._struct_contacts:
             contacts.show_contacts(self._pae, min_p=self._threshold, region=self._struct_region,
-                                   candidates=self._candidates() if self._threshold >= SLIDER_MIN else None)
+                                   candidates=(self._candidates() if self._struct_region is None
+                                               and self._threshold >= SLIDER_MIN else None))
         else:
             contacts.hide_contacts(self._pae.structure)
         self._hider.apply()                 # Drawing lines can switch the model to cartoon
@@ -1907,7 +1927,8 @@ class AlphaLensPlot(ToolInstance):
         picked = st.get('picked')
         self._picked = None if picked is None or max(picked) >= n else tuple(picked)
         self._update_picked_marker()
-        self._struct_contacts = bool(st.get('struct_contacts')) and self._pae.has_contact
+        # Preserve the requested state while AF2 contact probabilities are still loading.
+        self._struct_contacts = bool(st.get('struct_contacts'))
         self._hider.set_state(st.get('hider', {}))
         hidden = np.asarray(st.get('selected_hidden', ()), int)
         self._selected_hidden[hidden[(hidden >= 0) & (hidden < n)]] = True
