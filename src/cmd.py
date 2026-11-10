@@ -109,7 +109,7 @@ def alphalens(session, structure=None, pae_file=None, distogram=None, mode=None,
         if (contacts or save_contacts is not None or mode in ('contact', 'agreement')) \
                 and not pae.has_contact:
             raise UserError(f'{structure}: no contact probabilities: the distogram could '
-                            f'not be loaded and no AF3 contact_probs are available')
+                            f'not be loaded and no confidence JSON contact_probs are available')
         _apply_contacts(session, pae, plot, contacts, min_prob)
 
         def finish():
@@ -162,10 +162,10 @@ def alphalens(session, structure=None, pae_file=None, distogram=None, mode=None,
     if mode in ('std', 'entropy') and dpath is None:
         raise UserError(f'Mode "{mode}" needs a distogram and none was found for {structure}')
     if mode in ('contact', 'agreement') and dpath is None and not pae.has_contact:
-        raise UserError(f'Mode "{mode}" needs a distogram or AF3 contact_probs; '
+        raise UserError(f'Mode "{mode}" needs a distogram or confidence JSON contact_probs; '
                         f'none found for {structure}')
     if (contacts or save_contacts is not None) and dpath is None and not pae.has_contact:
-        raise UserError(f'"contacts" and "saveContacts" need a distogram or AF3 contact_probs; '
+        raise UserError(f'"contacts" and "saveContacts" need a distogram or confidence JSON contact_probs; '
                         f'none found for {structure}')
 
     plot = None
@@ -179,7 +179,7 @@ def alphalens(session, structure=None, pae_file=None, distogram=None, mode=None,
                             divider_lines=dividers)
         structure._alphalens_plot = plot
         if pae.has_contact:
-            plot.set_data_status('contact probabilities from AF3 confidences; no distogram')
+            plot.set_data_status('contact probabilities from confidence JSON; no distogram')
             if mode == 'contact':
                 plot.set_mode('contact')
         if mode == 'model':
@@ -234,7 +234,7 @@ def restore_plot(session, st):
                          divider_lines=st.get('divider_lines', True))
     structure._alphalens_plot = plot
     if pae.has_contact:
-        plot.set_data_status('contact probabilities from AF3 confidences; no distogram')
+        plot.set_data_status('contact probabilities from confidence JSON; no distogram')
     plot.restore_settings(st)
     finish = lambda: None if plot.closed() else plot.restore_loaded(st)
     if dpath:
@@ -410,7 +410,7 @@ def log_agreement(session, pae, threshold, seconds=None):
 #
 def prepare_prediction(session, structure, pae_file=None, distogram=None, cutoff=8.0):
     '''
-    Read PAE (and AF3 contact_probs) for a structure, attach an AlphaLensPAE object as
+    Read PAE (and confidence JSON contact_probs) for a structure, attach an AlphaLensPAE object as
     structure.alphafold_pae. Returns (pae, distogram_path or None, contact_probs, pae_path).
     '''
     from chimerax.core.errors import UserError
@@ -451,7 +451,7 @@ def prepare_prediction(session, structure, pae_file=None, distogram=None, cutoff
     if dpath:
         msg += f', distogram {dpath}'
     elif contact_probs is not None:
-        msg += ', no distogram: contact view from AF3 contact_probs, spread unavailable'
+        msg += ', no distogram: contact view from confidence JSON contact_probs, spread unavailable'
     else:
         msg += ', no distogram available (PAE only)'
     session.logger.info(msg)
@@ -467,7 +467,7 @@ def prepare_prediction(session, structure, pae_file=None, distogram=None, cutoff
         except ValueError as e:
             session.logger.warning(f'AlphaLens {structure}: ignoring contact_probs: {e}')
         if cutoff != 8.0:
-            session.logger.warning('AF3 contact_probs are fixed at 8 Å; cutoff ignored')
+            session.logger.warning('confidence JSON contact_probs are fixed at 8 Å; cutoff ignored')
     return pae, dpath, contact_probs, pae_path
 
 
@@ -518,9 +518,9 @@ def _distogram_loaded(session, structure, pae, plot, metrics, error, seconds, mo
             except ValueError as e:
                 session.logger.warning(f'AlphaLens {structure}: ignoring contact_probs: {e}')
             else:
-                session.logger.info(f'AlphaLens {structure}: using AF3 contact_probs instead')
+                session.logger.info(f'AlphaLens {structure}: using confidence JSON contact_probs instead')
                 if plot_open:
-                    plot.set_data_status(f'contact_probs from AF3 confidences; distogram failed: {error}')
+                    plot.set_data_status(f'contact_probs from confidence JSON; distogram failed: {error}')
                     plot.data_changed()
         if on_loaded:
             on_loaded()          # Validate requested operations; never silently skip an export
@@ -654,7 +654,7 @@ def switch_model(session, plot, spath):
     s._alphalens_plot = plot
     plot.set_pae(pae)
     if pae.has_contact and dpath is None and pae.metrics.get('contact_only'):
-        plot.set_data_status('contact probabilities from AF3 confidences; no distogram')
+        plot.set_data_status('contact probabilities from confidence JSON; no distogram')
     if dpath:
         start_distogram(session, s, pae, plot, dpath, plot.cutoff, None, False,
                         contact_probs, pae_path, on_loaded=plot.refresh_structure_contacts)
@@ -700,6 +700,14 @@ def _old_name(func, new):
     return run
 
 
+def alphalens_predict(session):
+    from chimerax.core.errors import UserError
+    if not session.ui.is_gui:
+        raise UserError('The prediction dialog requires the ChimeraX GUI.')
+    from .predict_ui import show_prediction_dialog
+    return show_prediction_dialog(session=session)
+
+
 def register_commands(logger):
     from chimerax.core.commands import (CmdDesc, register, OpenFileNameArg, FileNameArg,
                                         SaveFileNameArg, FloatArg, BoolArg, IntArg, EnumOf,
@@ -730,6 +738,8 @@ def register_commands(logger):
 
     register('alphalens', desc(), alphalens, logger=logger)
     register('alphalens open', odesc(), alphalens_open, logger=logger)
+    register('alphalens predict', CmdDesc(synopsis='Predict a protein or interface from sequences or UniProt IDs'),
+             alphalens_predict, logger=logger)
     # Former name (DistoPAE up to 0.4), so that existing scripts and notes keep working
     register('distopae', desc(), _old_name(alphalens, 'alphalens'), logger=logger)
     register('distopae open', odesc(), _old_name(alphalens_open, 'alphalens open'), logger=logger)

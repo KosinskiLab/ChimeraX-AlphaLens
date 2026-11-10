@@ -268,11 +268,14 @@ contacts reached in any seed, with P per seed:
 * PAE JSON and result pickle files, and NPZ distograms, can be `.gz` or `.xz` compressed.
   AlphaFold DB PAE files are read too. For other layouts, give the files with `paeFile` and `distogram`.
 
-## Experimental local interface prediction
+## Experimental local protein and interface prediction
 
-On Apple Silicon, the 0.11.0a1 prototype can re-predict two selected protein intervals
-with LocalFold's native AF2-Multimer engine. Drag an interface box, then right-click
-**Re-predict selected interface…**. Reuse/crop an existing MSA or explicitly choose a
+On Apple Silicon, the 0.11.0a2 prototype predicts one/two proteins from raw sequences,
+FASTA or UniProt IDs using `alphalens predict` (also under Tools → Structure Prediction
+→ AlphaLens Prediction). It can also re-predict two selected protein intervals with
+LocalFold's native AF2-Multimer engine. Drag an interface box, then right-click
+**Re-predict selected interface…**. Single proteins use AF2-monomer; pairs use multimer.
+Reuse/crop an existing MSA or explicitly choose a
 remote ColabFold search. Results open in a new plot with PAE/pLDDT comparisons over the
 same residues. The original structure is retained. Tested 175–195-residue predictions
 took about 2–3 seconds with cached MSAs on an M5 Max; fresh remote searches can take minutes.

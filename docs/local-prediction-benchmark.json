@@ -109,5 +109,46 @@
       },
       "heartbeat_ticks": 42
     }
+  ],
+  "sequence_gui_runs": [
+    {
+      "case": "fasta_pair",
+      "elapsed_seconds": 2.353510916000232,
+      "model": "model_1_multimer_v3",
+      "result": {
+        "ptm": 0.9332,
+        "iptm": 0.922759,
+        "mean_plddt": 97.36,
+        "mean_cross_chain_pae": 3.168168901660275,
+        "has_contact_probabilities": false
+      },
+      "heartbeat_ticks": 45
+    },
+    {
+      "case": "raw_monomer",
+      "elapsed_seconds": 7.071208041001228,
+      "model": "model_1_ptm",
+      "result": {
+        "ptm": 0.8838,
+        "iptm": null,
+        "mean_plddt": 97.53,
+        "mean_cross_chain_pae": null,
+        "has_contact_probabilities": true
+      },
+      "heartbeat_ticks": 141
+    },
+    {
+      "case": "uniprot_monomer",
+      "elapsed_seconds": 1.517386291998264,
+      "model": "model_1_ptm",
+      "result": {
+        "ptm": 0.8838,
+        "iptm": null,
+        "mean_plddt": 97.53,
+        "mean_cross_chain_pae": null,
+        "has_contact_probabilities": true
+      },
+      "heartbeat_ticks": 30
+    }
   ]
 }

@@ -8,7 +8,7 @@ import uuid
 
 from Qt.QtCore import QTimer
 from Qt.QtWidgets import (QApplication, QCheckBox, QDialog, QFormLayout, QHBoxLayout,
-                          QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout)
+                          QLabel, QLineEdit, QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout)
 from . import predict
 
 
@@ -71,9 +71,17 @@ def import_result(session, job):
     from . import cmd
     import numpy as np
     structure = cmd._open_structure(session, str(job.directory / 'fold.pdb'))
-    structure.name = f'{job.directory.name} LocalFold AF2-Multimer'
+    model_name = 'AF2-Multimer' if len(job.chains) == 2 else 'AF2-monomer'
+    structure.name = f'{job.directory.name} LocalFold {model_name}'
     pae = cmd.alphalens(session, structure, pae_file=str(job.directory / 'fold_confidences.json'), wait=True)
     pae.color_plddt(log_command=False)
+    if job.source.get('input_mode') == 'sequence':
+        confidence = (f'ipTM {job.result["iptm"]:.3f}' if len(job.chains) == 2
+                      else f'pTM {job.result["ptm"]:.3f}')
+        session.logger.info(f'Local prediction: {job.directory}\n{confidence}; '
+                            f'mean pLDDT {job.result["mean_plddt"]:.1f}. '
+                            'Predicted from sequence; no source-model comparison is available.')
+        return structure, None
     # Superpose on the first selected chain only, preserving the predicted interface.
     # Snapshot coordinates remain valid even if the source model has been closed.
     from chimerax.geometry import align_points
@@ -107,38 +115,63 @@ def import_result(session, job):
 
 
 class PredictionDialog(QDialog):
-    def __init__(self, plot):
-        super().__init__(plot.session.ui.main_window)
-        self.plot, self.session = plot, plot.session
-        self.source_msa = source_alignment(plot)
+    def __init__(self, plot=None, session=None):
+        session = plot.session if plot is not None else session
+        super().__init__(session.ui.main_window)
+        self.plot, self.session = plot, session
+        self.source_msa = source_alignment(plot) if plot is not None else None
+        self.entries = self.lookup_future = None
         self.job = self.output_model = self.comparison = None
-        self.setWindowTitle('Re-predict interface · experimental')
+        self.setWindowTitle('Local protein prediction · experimental')
         self.resize(660, 400)
         layout = QVBoxLayout(self)
-        intro = QLabel('Local AF2-Multimer on Apple Silicon • two protein chains • ≤400 residues\n'
-                       'The first run downloads public AF2 weights (~77 MB).')
+        intro = QLabel('Local AF2 on Apple Silicon • one or two protein chains • ≤400 total residues\n'
+                       'The first run of each model downloads public AF2 weights.')
         intro.setWordWrap(True); layout.addWidget(intro)
+        self.input_widgets = []
+        if plot is None:
+            label = QLabel('Paste one raw sequence, one/two FASTA entries, or one/two UniProt IDs.\n'
+                           'UniProt lookup sends only the IDs to UniProt; review the sequences before predicting.')
+            label.setWordWrap(True); layout.addWidget(label)
+            self.input_text = QPlainTextEdit(); self.input_text.setMaximumHeight(100)
+            self.input_text.setPlaceholderText('P69905\nP68871\n\nor >chain_A\nSEQUENCE\n>chain_B\nSEQUENCE')
+            layout.addWidget(self.input_text)
+            self.load_button = QPushButton('Load / resolve sequences'); layout.addWidget(self.load_button)
+            self.resolved = QPlainTextEdit(); self.resolved.setReadOnly(True); self.resolved.setMaximumHeight(100)
+            self.resolved.setPlaceholderText('Resolved sequences will appear here for review.')
+            layout.addWidget(self.resolved)
+            self.input_widgets = [self.input_text, self.load_button]
         form = QFormLayout(); form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         layout.addLayout(form)
-        self.flanks = QSpinBox(); self.flanks.setRange(0, 100); self.flanks.setValue(10)
-        form.addRow('Flanking residues on each side', self.flanks)
-        self.preview = QLabel(); form.addRow('Crop', self.preview)
+        self.flanks = QSpinBox(self); self.flanks.setRange(0, 100); self.flanks.setValue(10)
+        if plot is not None:
+            form.addRow('Flanking residues on each side', self.flanks)
+        else:
+            self.flanks.hide()
+            self.ranges = [QLineEdit(), QLineEdit()]
+            for cid, field in zip('AB', self.ranges):
+                field.setPlaceholderText('Whole sequence, or a 1-based range such as 25-120')
+                form.addRow(f'Chain {cid} range (optional)', field)
+                field.textChanged.connect(self.refresh)
+            self.input_widgets.extend(self.ranges)
+        self.preview = QLabel(); form.addRow('Selected sequences', self.preview)
         self.executable = QLineEdit(predict.default_executable()); form.addRow('LocalFold executable', self.executable)
         self.output = QLineEdit(str(predict.data_directory() / 'predictions')); form.addRow('Results directory', self.output)
-        self.msa = QLineEdit(); self.msa.setPlaceholderText('Existing merged A3M for exactly these two sequences')
+        self.msa = QLineEdit(); self.msa.setPlaceholderText('Existing A3M for exactly the selected sequence(s)')
         form.addRow('MSA file (optional)', self.msa)
         self.reuse = QCheckBox('Reuse and crop the source MSA (no upload)')
         self.reuse.setEnabled(self.source_msa is not None)
         self.reuse.setChecked(self.source_msa is not None)
-        form.addRow(self.reuse)
+        if plot is not None:
+            form.addRow(self.reuse)
         api = os.environ.get('LOCALFOLD_MMSEQS_API', 'https://api.colabfold.com').rstrip('/')
         self.search = QCheckBox(f'Search remotely if uncached: send sequences to {api}')
         form.addRow(self.search)
         self.seed = QSpinBox(); self.seed.setRange(0, 2147483647); form.addRow('Random seed', self.seed)
         self.recycles = QSpinBox(); self.recycles.setRange(0, 10); self.recycles.setValue(3)
         form.addRow('Recycles', self.recycles)
-        note = QLabel('PAE and pLDDT are compared on the same selected residues. Higher confidence after\n'
-                      'cropping is not proof of better accuracy. This weight bundle has no contact-probability head.')
+        note = QLabel('Region predictions compare PAE/pLDDT on the same residues. Higher confidence after\n'
+                      'cropping is not proof of better accuracy. The multimer bundle has no contact-probability head.')
         note.setWordWrap(True); layout.addWidget(note)
         self.status = QLabel('Ready'); self.status.setWordWrap(True); layout.addWidget(self.status)
         buttons = QHBoxLayout(); layout.addLayout(buttons)
@@ -148,6 +181,11 @@ class PredictionDialog(QDialog):
         self.start_button.clicked.connect(self.start)
         self.cancel_button.clicked.connect(lambda: self.job.cancel() if self.job else None)
         self.flanks.valueChanged.connect(self.refresh)
+        self.lookup_timer = QTimer(self); self.lookup_timer.setInterval(100)
+        self.lookup_timer.timeout.connect(self.poll_lookup)
+        if plot is None:
+            self.input_text.textChanged.connect(self.invalidate_input)
+            self.load_button.clicked.connect(self.load_sequences)
         self.reuse.toggled.connect(lambda checked: self.search.setChecked(False) if checked else None)
         self.search.toggled.connect(lambda checked: self.reuse.setChecked(False) if checked else None)
         self.reuse.toggled.connect(self.msa_controls)
@@ -157,12 +195,67 @@ class PredictionDialog(QDialog):
         self.msa_controls()
         self.refresh()
 
+    def display(self, shown):
+        """ChimeraX's Tools menu calls display(True) on the returned tool."""
+        self.setVisible(shown)
+
+    def reject(self):
+        # Escape must follow the same cancellation path as the window close button.
+        self.close()
+
     def msa_controls(self, *args):
         self.msa.setEnabled(not self.reuse.isChecked() and not self.search.isChecked())
 
-    def refresh(self):
+    def invalidate_input(self):
+        self.entries = None
+        self.resolved.clear()
+        self.refresh()
+
+    def load_sequences(self):
+        from concurrent.futures import Future
+        import threading
+        from .predict_inputs import resolve_entries
+        text = self.input_text.toPlainText()
+        future = self.lookup_future = Future()
+        # The worker owns only text and a Future, never Qt objects or the dialog.
+        def resolve():
+            try:
+                future.set_result(resolve_entries(text))
+            except Exception as e:
+                future.set_exception(e)
+        self.entries = None
+        self.input_text.setEnabled(False); self.load_button.setEnabled(False)
+        self.start_button.setEnabled(False)
+        self.status.setText('Resolving sequences…')
+        threading.Thread(target=resolve, daemon=True, name='AlphaLens UniProt lookup').start()
+        self.lookup_timer.start()
+
+    def poll_lookup(self):
+        if not self.lookup_future.done():
+            return
+        self.lookup_timer.stop()
+        self.input_text.setEnabled(True); self.load_button.setEnabled(True)
         try:
-            chains, _ = snapshot(self.plot, self.flanks.value())
+            self.entries = self.lookup_future.result()
+            self.resolved.setPlainText('\n'.join(f'>{e["label"]} ({len(e["sequence"])} residues)\n{e["sequence"]}'
+                                                 for e in self.entries))
+            self.status.setText('Review the resolved sequences, choose ranges/MSA, then click Predict.')
+        except Exception as e:
+            self.status.setText(str(e))
+        self.lookup_future = None
+        self.refresh()
+
+    def prediction_input(self):
+        if self.plot is not None:
+            return snapshot(self.plot, self.flanks.value())
+        if self.entries is None:
+            raise ValueError('Load sequences before predicting.')
+        from .predict_inputs import sequence_chains
+        return sequence_chains(self.entries, [field.text() for field in self.ranges])
+
+    def refresh(self, *args):
+        try:
+            chains, _ = self.prediction_input()
             self.preview.setText(' + '.join(f'{c["source_chain"]}: {len(c["sequence"])} residues' for c in chains))
             self.preview.setToolTip('\n'.join(c['sequence'] for c in chains))
             self.start_button.setEnabled(True)
@@ -171,7 +264,7 @@ class PredictionDialog(QDialog):
 
     def start(self):
         try:
-            chains, source = snapshot(self.plot, self.flanks.value())
+            chains, source = self.prediction_input()
             name = datetime.now().strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:6]
             msa = (self.msa.text().strip() or None) if self.msa.isEnabled() else None
             crop = None
@@ -186,6 +279,8 @@ class PredictionDialog(QDialog):
             self.status.setText(str(e)); return
         for widget in (self.flanks, self.executable, self.output, self.msa, self.reuse, self.search, self.seed, self.recycles,
                        self.start_button):
+            widget.setEnabled(False)
+        for widget in self.input_widgets:
             widget.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.timer.start()
@@ -205,6 +300,13 @@ class PredictionDialog(QDialog):
             self.timer.stop(); self.cancel_button.setEnabled(False)
             if state == 'complete':
                 self.output_model, self.comparison = import_result(self.session, self.job)
+                if self.comparison is None:
+                    score = (f'ipTM {self.job.result["iptm"]:.3f}' if len(self.job.chains) == 2
+                             else f'pTM {self.job.result["ptm"]:.3f}')
+                    self.status.setText(f'Complete in {time.monotonic()-self.job.started:.1f} s · {score}\n'
+                                        f'Mean pLDDT {self.job.result["mean_plddt"]:.1f}\n'
+                                        f'Results: {self.job.directory}')
+                    return
                 old = self.job.source['core_mean_pae']; new = self.comparison['predicted_core_mean_pae']
                 before = self.job.source['core_mean_plddt']
                 plddt = (f'Same residues: pLDDT {before:.1f} → '
@@ -231,6 +333,8 @@ class PredictionDialog(QDialog):
                     widget.setEnabled(True)
                 self.reuse.setEnabled(self.source_msa is not None)
                 self.msa_controls()
+                for widget in self.input_widgets:
+                    widget.setEnabled(True)
 
     def shutdown(self):
         if self.job and self.job.state == 'running':
@@ -251,6 +355,7 @@ class PredictionDialog(QDialog):
             self.status.setText('Cancelling… Close again when the process stops.')
             event.ignore()
         else:
+            self.lookup_timer.stop()
             QApplication.instance().aboutToQuit.disconnect(self.shutdown)
             dialogs = getattr(self.session, '_alphalens_prediction_dialogs', [])
             if self in dialogs:
@@ -260,11 +365,12 @@ class PredictionDialog(QDialog):
             self.deleteLater()
 
 
-def show_prediction_dialog(plot):
-    dialog = PredictionDialog(plot)
-    dialogs = getattr(plot.session, '_alphalens_prediction_dialogs', None)
+def show_prediction_dialog(plot=None, session=None):
+    session = plot.session if plot is not None else session
+    dialog = PredictionDialog(plot, session)
+    dialogs = getattr(session, '_alphalens_prediction_dialogs', None)
     if dialogs is None:
-        dialogs = plot.session._alphalens_prediction_dialogs = []
+        dialogs = session._alphalens_prediction_dialogs = []
     dialogs.append(dialog)  # Keep the job alive even if the source plot is closed.
     dialog.show()
     return dialog

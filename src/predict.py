@@ -1,4 +1,4 @@
-"""Experimental local AF2-Multimer jobs. No ChimeraX imports or shell commands."""
+"""Experimental local AF2 monomer/multimer jobs. No ChimeraX imports or shell commands."""
 import hashlib
 import json
 import math
@@ -11,6 +11,7 @@ import time
 
 ENGINE_REVISION = '68c59196fa7d32c6edfc061ed369889c1cdb680b'
 MODEL = 'model_1_multimer_v3'
+MONOMER_MODEL = 'model_1_ptm'
 AMINO_ACIDS = 'ACDEFGHIKLMNPQRSTVWY'
 
 
@@ -39,8 +40,8 @@ def write_json(path, obj):
 
 
 def validate_chains(chains):
-    if len(chains) != 2:
-        raise ValueError('The prototype needs exactly two protein chains.')
+    if not 1 <= len(chains) <= 2:
+        raise ValueError('The prototype needs one or two protein chains.')
     for chain in chains:
         seq = chain['sequence']
         if not seq or any(c not in AMINO_ACIDS for c in seq):
@@ -99,7 +100,7 @@ def validate_a3m(path, query):
             elif started:
                 first.append(''.join(c for c in line.strip() if not c.islower() and c != '.'))
     if ''.join(first) != query:
-        raise ValueError('The merged A3M query does not match the two selected sequences in order.')
+        raise ValueError('The A3M query does not match the selected sequence(s) in order.')
 
 
 def crop_a3m(path, destination, source_query, columns):
@@ -147,8 +148,8 @@ def validate_result(directory, chains):
     summary = json.loads((d / 'fold_summary_confidences.json').read_text())
     sizes = [len(c['sequence']) for c in chains]
     n = sum(sizes)
-    expected_ids = ['A'] * sizes[0] + ['B'] * sizes[1]
-    expected_res = list(range(1, sizes[0] + 1)) + list(range(1, sizes[1] + 1))
+    expected_ids = [cid for cid, size in zip('AB', sizes) for _ in range(size)]
+    expected_res = [i for size in sizes for i in range(1, size + 1)]
     if confidences.get('token_chain_ids') != expected_ids or confidences.get('token_res_ids') != expected_res:
         raise ValueError('Prediction token order does not match the requested chains and residues.')
     pae = confidences.get('pae', [])
@@ -156,7 +157,7 @@ def validate_result(directory, chains):
         raise ValueError('The returned PAE matrix has the wrong dimensions.')
     if any(not math.isfinite(v) or v < 0 for row in pae for v in row):
         raise ValueError('The returned PAE matrix contains invalid values.')
-    for key in ('ptm', 'iptm', 'mean_plddt'):
+    for key in ('ptm', 'mean_plddt') + (('iptm',) if len(chains) == 2 else ()):
         v = summary.get(key)
         if not isinstance(v, (float, int)) or not math.isfinite(v) or not 0 <= v <= (100 if key == 'mean_plddt' else 1):
             raise ValueError(f'Invalid prediction confidence: {key}.')
@@ -175,7 +176,9 @@ def validate_result(directory, chains):
         raise ValueError('Returned structure sequence or numbering does not match the job.')
     cross = [pae[i][j] for i in range(sizes[0]) for j in range(sizes[0], n)]
     cross += [pae[j][i] for i in range(sizes[0]) for j in range(sizes[0], n)]
-    return dict(summary, mean_cross_chain_pae=sum(cross) / len(cross),
+    if len(chains) == 1:
+        summary['iptm'] = None  # There is no interface score for a monomer.
+    return dict(summary, mean_cross_chain_pae=sum(cross) / len(cross) if cross else None,
                 has_contact_probabilities='contact_probs' in confidences)
 
 
@@ -188,13 +191,14 @@ class PredictionJob:
         if search and msa:
             raise ValueError('Choose remote search or an existing merged MSA, not both.')
         if not search and not msa:
-            raise ValueError('Choose Search ColabFold or supply a merged MSA for this interface.')
+            raise ValueError('Choose remote search or supply an MSA for this prediction.')
         for value, lo, hi, label in ((seed, 0, 2**31-1, 'seed'), (recycles, 0, 10, 'recycles'),
                                       (max_msa, 1, 512, 'MSA rows'), (max_extra, 0, 2048, 'extra MSA rows')):
             if not isinstance(value, int) or not lo <= value <= hi:
                 raise ValueError(f'Invalid {label}: {value}.')
         self.directory = Path(directory).expanduser().resolve()
         self.chains = chains
+        self.model = MODEL if len(chains) == 2 else MONOMER_MODEL
         self.cache = Path(cache or Path.home() / '.cache' / 'alphalens' / 'localfold')
         self.executable = Path(executable or default_executable()).expanduser().resolve()
         if not self.executable.is_file() or not os.access(self.executable, os.X_OK):
@@ -213,7 +217,7 @@ class PredictionJob:
         if msa_crop and not msa:
             raise ValueError('An MSA crop requires a source alignment.')
         self.api = os.environ.get('LOCALFOLD_MMSEQS_API', 'https://api.colabfold.com').rstrip('/')
-        key = json.dumps([ENGINE_REVISION, MODEL, self.api, [c['sequence'] for c in chains]])
+        key = json.dumps([ENGINE_REVISION, self.model, self.api, [c['sequence'] for c in chains]])
         self.msa_cache = self.cache / 'msa' / (hashlib.sha256(key.encode()).hexdigest() + '.a3m')
 
     def start(self):
@@ -244,7 +248,7 @@ class PredictionJob:
                            {'protein': {'id': cid, 'sequence': c['sequence']}} for cid, c in zip('AB', self.chains)])
             write_json(self.directory / 'input.json', job)
             write_json(self.directory / 'residue_map.json', self.chains)
-            args = [str(self.executable), f'--job={self.directory}/input.json', f'--model={MODEL}',
+            args = [str(self.executable), f'--job={self.directory}/input.json', f'--model={self.model}',
                     f'--out={self.directory}/fold.pdb', f'--weights-dir={self.cache}']
             args += [f'--{k.replace("_", "-")}={v}' for k, v in self.options.items()]
             args += [f'--a3m={self.directory}/input.a3m'] if alignment else ['--search']
@@ -253,8 +257,8 @@ class PredictionJob:
             binary_hash = digest(self.executable)
             revision = engine_info.get('revision') if engine_info.get('sha256') == binary_hash else 'unverified'
             self.manifest = dict(engine='LocalFold native Metal', revision=revision,
-                                 executable_sha256=binary_hash, model=MODEL,
-                                 weights='LocalFold AF2-Multimer int5 bundle (CC BY 4.0)',
+                                 executable_sha256=binary_hash, model=self.model,
+                                 weights=f'LocalFold AF2 {self.model} int5 bundle (CC BY 4.0)',
                                  source=self.source, options=self.options, args=args,
                                  msa_crop=self.msa_crop,
                                  source_msa_sha256=digest(alignment) if alignment else None,
@@ -328,7 +332,7 @@ class PredictionJob:
                 part = self.msa_cache.with_suffix('.part')
                 shutil.copyfile(alignment, part); part.replace(self.msa_cache)
                 self.manifest['msa_sha256'] = digest(alignment)
-                weights = self.cache / 'model-multimer' / 'manifest.json'
+                weights = self.cache / ('model-multimer' if len(self.chains) == 2 else 'model') / 'manifest.json'
                 if weights.is_file():
                     self.manifest['weights_manifest_sha256'] = digest(weights)
                 self.state = 'complete'
