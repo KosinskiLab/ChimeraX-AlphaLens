@@ -4,7 +4,7 @@ build-backend = "chimerax.bundle_builder.cx_pep517"
 
 [project]
 name = "ChimeraX-AlphaLens"
-version = "0.10.0"
+version = "0.11.0a2"
 license = { text = "MIT" }
 authors = [{ name = "Dmitry Molodenskiy" }]
 description = "AlphaFold PAE, contact-probability, model-distance, distogram-spread and seed-agreement plot (formerly DistoPAE)"
@@ -35,6 +35,14 @@ description = "PAE, contact probability, model distances, spread and agreement p
 [tool.chimerax.command.alphalens]
 category = "Structure Prediction"
 description = "Show the AlphaLens plot for a predicted structure, or open a prediction folder"
+
+[tool.chimerax.tool."AlphaLens Prediction"]
+category = "Structure Prediction"
+description = "Predict from sequences, FASTA, or UniProt IDs locally"
+
+[tool.chimerax.command."alphalens predict"]
+category = "Structure Prediction"
+description = "Open the local prediction dialog for sequences or UniProt IDs"
 
 [tool.chimerax.command."alphalens open"]
 category = "Structure Prediction"

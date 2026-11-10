@@ -11,6 +11,9 @@ class _AlphaLensAPI(BundleAPI):
 
     @staticmethod
     def start_tool(session, bi, ti):
+        if ti.name == 'AlphaLens Prediction':
+            from .cmd import alphalens_predict
+            return alphalens_predict(session)
         from .cmd import start_tool_from_menu
         return start_tool_from_menu(session)
 
