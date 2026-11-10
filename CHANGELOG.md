@@ -1,14 +1,16 @@
 # Changelog
 
-## 1.0.1a1
+## 1.0.1a2
 
-* Raise the local prediction limit from 400 to 1,024 total residues, including flanks,
-  for selected regions and sequence/UniProt inputs. The UI and validator share one limit.
-* Retain the native engine’s GPU-memory check and the existing cancellation/timeout.
-* Add combined-chain and flank boundary regressions. A real 799-residue pair completed
-  in 25.9 seconds on the tested M5 Max with a supplied MSA (3.26 GB engine buffer peak).
+* Remove the fixed local prediction length cap. Inputs above 1,024 total residues,
+  including flanks, show a non-blocking warning about runtime and GPU memory.
+* Replace the fixed five-minute job timeout with an optional time limit in minutes,
+  defaulting to No limit. Manual cancellation and the native GPU-memory check remain.
+* Cover large input, flanks, unlimited runtime, optional timeouts and cancellation with
+  regression checks. A real 799-residue pair completed in 25–26 seconds on the tested
+  M5 Max with a supplied MSA (3.26 GB engine buffer peak).
 * Clarify that AlphaLens uses the native Metal engine; the browser WebGPU backend is
-  not integrated. This is a test build; performance at the full cap is not yet measured.
+  not integrated. This is a test build; memory and speed still depend on the hardware.
 
 ## 1.0.0
 

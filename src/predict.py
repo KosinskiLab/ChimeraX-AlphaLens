@@ -13,9 +13,8 @@ ENGINE_REVISION = '68c59196fa7d32c6edfc061ed369889c1cdb680b'
 MODEL = 'model_1_multimer_v3'
 MONOMER_MODEL = 'model_1_ptm'
 AMINO_ACIDS = 'ACDEFGHIKLMNPQRSTVWY'
-# Total across chains, after extending a selected region with flanks.
-# LocalFold also checks its estimated allocation against the GPU working-set budget.
-MAX_RESIDUES = 1024
+# A UI warning threshold only. LocalFold checks the GPU working-set budget.
+LARGE_JOB_RESIDUES = 1024
 
 
 def data_directory():
@@ -51,9 +50,14 @@ def validate_chains(chains):
             raise ValueError('Use nonempty protein sequences with the 20 standard amino acids.')
         if len(chain['residue_map']) != len(seq):
             raise ValueError('The sequence and residue mapping have different lengths.')
-    if sum(len(c['sequence']) for c in chains) > MAX_RESIDUES:
-        raise ValueError(f'Local prediction is limited to {MAX_RESIDUES} total residues, '
-                         'including flanks; select a smaller region.')
+
+
+def size_warning(chains):
+    total = sum(len(c['sequence']) for c in chains)
+    if total > LARGE_JOB_RESIDUES:
+        return (f'Large prediction: {total:,} residues including flanks. More GPU memory '
+                'and time may be needed. You can proceed.')
+    return ''
 
 
 def crop_chains(rows, region, flanks=10):
@@ -190,7 +194,7 @@ class PredictionJob:
     """One cancellable process; poll() is nonblocking and called by the GUI timer."""
     def __init__(self, directory, chains, *, executable=None, search=False, msa=None,
                  seed=0, recycles=3, max_msa=512, max_extra=1024, source=None,
-                 cache=None, timeout=300, msa_crop=None):
+                 cache=None, timeout=None, msa_crop=None):
         validate_chains(chains)
         if search and msa:
             raise ValueError('Choose remote search or an existing merged MSA, not both.')
@@ -207,6 +211,9 @@ class PredictionJob:
         self.executable = Path(executable or default_executable()).expanduser().resolve()
         if not self.executable.is_file() or not os.access(self.executable, os.X_OK):
             raise ValueError('LocalFold is not installed. Run scripts/setup_localfold.py or choose localfold-af2.')
+        if timeout is not None and (not isinstance(timeout, (float, int)) or
+                                    not math.isfinite(timeout) or timeout <= 0):
+            raise ValueError('The time limit must be positive, or None for no limit.')
         self.timeout = timeout
         self.process = self.lock = self.log = None
         self.cancelled_at = None
@@ -264,6 +271,7 @@ class PredictionJob:
                                  executable_sha256=binary_hash, model=self.model,
                                  weights=f'LocalFold AF2 {self.model} int5 bundle (CC BY 4.0)',
                                  source=self.source, options=self.options, args=args,
+                                 timeout_seconds=self.timeout,
                                  msa_crop=self.msa_crop,
                                  source_msa_sha256=digest(alignment) if alignment else None,
                                  msa_source=('supplied' if self.msa else 'cache') if alignment else self.api,
@@ -308,8 +316,9 @@ class PredictionJob:
     def poll(self):
         if self.state != 'running':
             return self.state
-        if time.monotonic()-self.started > self.timeout and self.cancelled_at is None:
-            self.error = f'Prediction exceeded the {self.timeout}-second prototype limit.'
+        if (self.timeout is not None and time.monotonic()-self.started > self.timeout
+                and self.cancelled_at is None):
+            self.error = f'Prediction exceeded the configured {self.timeout}-second time limit.'
             self.cancel()
         if self.cancelled_at and time.monotonic()-self.cancelled_at > 1 and self.process.poll() is None:
             try:

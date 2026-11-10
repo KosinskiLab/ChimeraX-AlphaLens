@@ -125,7 +125,7 @@ class PredictionDialog(QDialog):
         self.setWindowTitle('Local protein prediction · experimental')
         self.resize(660, 400)
         layout = QVBoxLayout(self)
-        intro = QLabel(f'Local AF2 on Apple Silicon • one or two protein chains • ≤{predict.MAX_RESIDUES} total residues\n'
+        intro = QLabel('Local AF2 on Apple Silicon • one or two protein chains\n'
                        'The first run of each model downloads public AF2 weights.')
         intro.setWordWrap(True); layout.addWidget(intro)
         self.input_widgets = []
@@ -155,6 +155,10 @@ class PredictionDialog(QDialog):
                 field.textChanged.connect(self.refresh)
             self.input_widgets.extend(self.ranges)
         self.preview = QLabel(); form.addRow('Selected sequences', self.preview)
+        self.size_warning = QLabel(); self.size_warning.setWordWrap(True)
+        self.size_warning.setMinimumHeight(2*self.size_warning.fontMetrics().lineSpacing()+4)
+        self.size_warning.setStyleSheet('color: #a65c00;')
+        form.addRow(self.size_warning)
         self.executable = QLineEdit(predict.default_executable()); form.addRow('LocalFold executable', self.executable)
         self.output = QLineEdit(str(predict.data_directory() / 'predictions')); form.addRow('Results directory', self.output)
         self.msa = QLineEdit(); self.msa.setPlaceholderText('Existing A3M for exactly the selected sequence(s)')
@@ -170,6 +174,9 @@ class PredictionDialog(QDialog):
         self.seed = QSpinBox(); self.seed.setRange(0, 2147483647); form.addRow('Random seed', self.seed)
         self.recycles = QSpinBox(); self.recycles.setRange(0, 10); self.recycles.setValue(3)
         form.addRow('Recycles', self.recycles)
+        self.time_limit = QSpinBox(); self.time_limit.setRange(0, 10080)
+        self.time_limit.setSpecialValueText('No limit'); self.time_limit.setValue(0)
+        form.addRow('Time limit (minutes)', self.time_limit)
         note = QLabel('Region predictions compare PAE/pLDDT on the same residues. Higher confidence after\n'
                       'cropping is not proof of better accuracy. The multimer bundle has no contact-probability head.')
         note.setWordWrap(True); layout.addWidget(note)
@@ -258,8 +265,11 @@ class PredictionDialog(QDialog):
             chains, _ = self.prediction_input()
             self.preview.setText(' + '.join(f'{c["source_chain"]}: {len(c["sequence"])} residues' for c in chains))
             self.preview.setToolTip('\n'.join(c['sequence'] for c in chains))
+            warning = predict.size_warning(chains)
+            self.size_warning.setText(warning); self.size_warning.setVisible(bool(warning))
             self.start_button.setEnabled(True)
         except Exception as e:
+            self.size_warning.clear(); self.size_warning.hide()
             self.preview.setText(str(e)); self.start_button.setEnabled(False)
 
     def start(self):
@@ -274,11 +284,12 @@ class PredictionDialog(QDialog):
             self.job = predict.PredictionJob(Path(self.output.text()).expanduser() / name, chains,
                           executable=self.executable.text(), search=self.search.isChecked(),
                           msa=msa, msa_crop=crop, seed=self.seed.value(),
-                          recycles=self.recycles.value(), source=source).start()
+                          recycles=self.recycles.value(), source=source,
+                          timeout=self.time_limit.value()*60 or None).start()
         except Exception as e:
             self.status.setText(str(e)); return
         for widget in (self.flanks, self.executable, self.output, self.msa, self.reuse, self.search, self.seed, self.recycles,
-                       self.start_button):
+                       self.time_limit, self.start_button):
             widget.setEnabled(False)
         for widget in self.input_widgets:
             widget.setEnabled(False)
@@ -329,7 +340,7 @@ class PredictionDialog(QDialog):
         finally:
             if self.job.state != 'running':
                 for widget in (self.flanks, self.executable, self.output, self.msa, self.search, self.seed,
-                               self.recycles, self.start_button):
+                               self.recycles, self.time_limit, self.start_button):
                     widget.setEnabled(True)
                 self.reuse.setEnabled(self.source_msa is not None)
                 self.msa_controls()
