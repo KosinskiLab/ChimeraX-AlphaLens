@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.0.0
+
+* **Local prediction on Apple Silicon:** predict one or two proteins from raw sequence,
+  FASTA, or UniProt accession/entry/isoform IDs with `alphalens predict`, also available
+  as Tools > Structure Prediction > AlphaLens Prediction. Preview resolved sequences
+  and select residue ranges before running. One chain uses AF2-monomer; two use AF2-Multimer.
+* **Re-predict a selected interface:** drag an off-diagonal box and choose Re-predict
+  selected interface. Contiguous crops include adjustable flanks. Reuse/crop the source
+  MSA, supply an alignment, or explicitly choose remote ColabFold search. The result opens
+  in its own plot, superposed on the first chain, with PAE/pLDDT comparisons over the same
+  selected residues. Original residue mapping and job provenance are saved.
+* The separate LocalFold engine downloads public AF2 weights automatically, caches MSAs,
+  keeps ChimeraX responsive, and supports cancellation. The experimental feature is
+  limited to 400 total residues and does not run AF3. Tested 108–195-residue examples ran
+  in about 1–3 seconds with cached MSAs on an M5 Max; fresh remote MSA searches can take
+  minutes. Higher confidence after cropping does not establish better accuracy.
+* Fix AF3 distogram seed provenance and retain explicitly supplied distogram paths across
+  model switching. Contacts inside a selected region are no longer lost to the global
+  display cap; CSV export respects the selected region.
+* Model distances refresh after coordinate changes. AF2 contacts restore with saved
+  sessions, and background agreement loading finishes safely if its source model closes.
+* Add real-window checks, input/provenance tests, a prediction guide, measured examples,
+  and a standalone engine setup script distributed with the release.
+
 ## 0.10.0
 
 * Opening a session with a plot no longer logs `restore_snapshot for "AlphaLensPlot" returned None`.
