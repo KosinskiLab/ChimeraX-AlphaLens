@@ -35,7 +35,7 @@ P ≥ 0.5.*
 
 ## Install
 
-Version 1.2.0 sets up LocalFold when you first predict, reopens saved local prediction
+Version 1.2.1 sets up LocalFold when you first predict, reopens saved local prediction
 folders, and keeps the selected-region preview in sync with the plot. It includes all
 AF3, progress, score-report and hover fixes from 1.1.3.
 
@@ -48,7 +48,7 @@ Apple Silicon macOS 13 or newer and is tested with ChimeraX 1.12.
    pip needs it.
 2. In the ChimeraX command line:
 
-       toolshed install ~/Downloads/chimerax_alphalens-1.2.0-py3-none-any.whl
+       toolshed install ~/Downloads/chimerax_alphalens-1.2.1-py3-none-any.whl
 
 3. Restart ChimeraX.
 
@@ -84,7 +84,7 @@ took about 30 seconds on the tested M5 Max, excluding model weights and MSA sear
 and opening its prediction dialog do not install engines. Existing engines are reused.
 
 For optional manual installation of both engines, download
-[setup_localfold.py](https://github.com/KosinskiLab/AlphaLens/releases/download/v1.2.0/setup_localfold.py)
+[setup_localfold.py](https://github.com/KosinskiLab/AlphaLens/releases/download/v1.2.1/setup_localfold.py)
 and run `python3 ~/Downloads/setup_localfold.py`. First-use setup uses ChimeraX's bundled
 Python. The first AF2 prediction downloads about 77 MB of model weights; AF3 downloads
 about 277 MB after you accept DeepMind's terms in the dialog.

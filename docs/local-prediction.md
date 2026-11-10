@@ -1,6 +1,6 @@
 # Experimental local protein and interface prediction
 
-AlphaLens 1.2.0 can predict protein complexes from sequences or UniProt IDs, or re-predict
+AlphaLens 1.2.1 can predict protein complexes from sequences or UniProt IDs, or re-predict
 selected regions spanning multiple protein chains, with AlphaFold 2 or AlphaFold 3 on
 Apple Silicon, using [LocalFold's native Metal implementation](https://github.com/sokrypton/localfold/tree/68c59196fa7d32c6edfc061ed369889c1cdb680b/metal).
 The prediction runs in a separate process; ChimeraX remains interactive. The original
@@ -10,7 +10,7 @@ are not yet connected to AlphaLens.
 
 ## Setup
 
-Install the AlphaLens 1.2.0 wheel. The local prediction feature remains experimental.
+Install the AlphaLens 1.2.1 wheel. The local prediction feature remains experimental.
 The engine requires Apple Silicon, macOS 13 or newer and Xcode Command Line Tools.
 No separate Python ML environment is needed. With a missing default engine, the button
 reads **Install & Predict**. Clicking it downloads and builds only the selected backend

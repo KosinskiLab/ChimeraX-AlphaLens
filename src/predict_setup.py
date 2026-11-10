@@ -22,9 +22,13 @@ def progress(message):
     print(PHASE + message, flush=True)
 
 
-def check_prerequisites():
+def check_platform():
     if platform.system() != 'Darwin' or platform.machine() != 'arm64':
         raise RuntimeError('LocalFold setup requires Apple Silicon macOS.')
+
+
+def check_prerequisites():
+    check_platform()
     if subprocess.run(['/usr/bin/xcode-select', '-p'], capture_output=True).returncode:
         raise RuntimeError('Install Xcode Command Line Tools with xcode-select --install, then retry Predict.')
     for name in ('git', 'clang++', 'clang', 'curl', 'ar'):
@@ -34,8 +38,8 @@ def check_prerequisites():
 
 def install(prefix, models, source=None):
     """Build under an installation lock; preserve existing tracked source files."""
-    import fcntl
     check_prerequisites()
+    import fcntl
     prefix = Path(prefix).expanduser().resolve()
     prefix.mkdir(parents=True, exist_ok=True)
     with (prefix / 'setup.lock').open('a') as lock:
@@ -95,6 +99,7 @@ class SetupJob:
     def start(self):
         if self.state != 'prepared':
             raise ValueError('This setup has already been started.')
+        check_platform()
         logs = self.prefix / 'setup-logs'
         logs.mkdir(parents=True, exist_ok=True)
         self.log_path = logs / (time.strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:6] + '.log')

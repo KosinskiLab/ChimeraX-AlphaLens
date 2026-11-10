@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.0
+## 1.2.1
 
 * Install the optional LocalFold engine on first prediction with **Install & Predict**.
   Setup runs in the background, can be cancelled and retried, and continues with the
