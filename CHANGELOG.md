@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.2.1
+
+* Install the optional LocalFold engine on first prediction with **Install & Predict**.
+  Setup runs in the background, can be cancelled and retried, and continues with the
+  submitted sequences/region and settings when ready. Installing the AlphaLens plugin
+  or opening the dialog does not download/build an engine. Existing/custom engines
+  are preserved. Missing Xcode Command Line Tools produce actionable instructions.
+
+* Local predictions can be opened again: `alphalens open <job folder>` and
+  `alphalens open <job folder>/fold.pdb` find `fold_confidences.json`, and `alphalens #N`
+  shows the plot of a result again after its window was closed. Until now these stopped
+  with "Could not find a PAE file" or "Could not find a rank 0 model". `rank N` opens the
+  other AF3 diffusion samples in the order of `fold_ranking_scores.csv`.
+* The re-prediction dialog follows the plot. A box dragged while the dialog is open updates
+  the chains and lengths it shows; before, it kept showing the earlier box and predicted
+  the new one. Closing the source plot or model turns Predict off with the reason.
+* Dragging along the pLDDT track only selects residues. It no longer colors the model lime
+  and grey when "Dragging box colors structure" is on.
+* After a failed sequence or UniProt lookup, the messages of the next lookup are no longer
+  shown in the red error style.
+* Alignments (A3M) with non-ASCII bytes in their headers are read and cropped unchanged.
+  ChimeraX uses ASCII as its default text encoding once a PDB file has been opened, which
+  is the case after the first local prediction.
+* Messages and tooltips say "confidence JSON contact_probs" throughout; local AF2
+  predictions carry them too, so "AF3 contact_probs" was wrong for those plots.
+* Add `tests/chimerax_prediction_mapping_check.py`: a real-window check that needs no GPU
+  or network. A stand-in engine returns the cropped source structure, so PAE, pLDDT and
+  contact comparisons, CSV rows and the superposition have exact expected values.
+
 ## 1.1.3
 
 * Show actual prediction stages and elapsed time instead of repeatedly showing the

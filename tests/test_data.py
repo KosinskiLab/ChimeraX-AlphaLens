@@ -208,3 +208,62 @@ def test_top_af3_model_uses_ranked_seed(tmp_path):
     files = data.find_prediction_files(str(model))
     assert files.model_name == 'seed-2_sample-0'
     assert files.distogram_path == str(tmp_path / 'seed-2_distogram' / 'd.npz')
+
+
+def local_job(tmp_path, samples=()):
+    """The files LocalFold writes into an AlphaLens job directory."""
+    job = tmp_path / '20261110-160312-cf8945'
+    job.mkdir()
+    for stem in ['fold'] + [f'fold_sample{k}' for k, _ in samples]:
+        (job / f'{stem}.pdb').touch()
+        (job / f'{stem}_confidences.json').write_text('{"pae": [[1]], "contact_probs": [[0.3]]}')
+        (job / f'{stem}_summary_confidences.json').write_text('{}')
+    if samples:
+        (job / 'fold_ranking_scores.csv').write_text(
+            'seed,sample,ranking_score\n' + ''.join(f'7,{k},{score}\n' for k, score in samples))
+    (job / 'job.json').write_text('{}')
+    return job
+
+
+def test_local_prediction_directory_and_model_are_found(tmp_path):
+    job = local_job(tmp_path)
+    top = data.structure_path_for_directory(str(job))
+    assert top == str(job / 'fold.pdb')
+    files = data.find_prediction_files(top)
+    assert (files.kind, files.model_name, files.distogram_path) == ('localfold', None, None)
+    assert files.pae_path == str(job / 'fold_confidences.json')
+    assert data.read_pae(files.pae_path)[1][0, 0] == pytest.approx(0.3)
+    with pytest.raises(ValueError, match='1 sample'):
+        data.structure_path_for_directory(str(job), 1)
+    assert data.prediction_models(top) == [] and data.agreement_runs(top) == []
+
+
+def test_local_prediction_samples_open_by_rank(tmp_path):
+    job = local_job(tmp_path, samples=[(0, 0.65), (1, 0.64), (2, 0.67)])
+    assert data.structure_path_for_directory(str(job)) == str(job / 'fold.pdb')
+    second = data.structure_path_for_directory(str(job), 1)
+    assert second == str(job / 'fold_sample0.pdb')          # Rank 0, sample 2, is fold.pdb
+    assert data.structure_path_for_directory(str(job), 2) == str(job / 'fold_sample1.pdb')
+    files = data.find_prediction_files(second)
+    assert (files.kind, files.model_name) == ('localfold', 'sample0')
+    assert files.pae_path == str(job / 'fold_sample0_confidences.json')
+    with pytest.raises(ValueError, match='3 sample'):
+        data.structure_path_for_directory(str(job), 3)
+
+
+def test_other_layouts_are_not_taken_for_a_local_prediction(tmp_path):
+    (tmp_path / 'ranked_0.pdb').touch()
+    (tmp_path / 'ranking_debug.json').write_text('{"order": ["model_1"]}')
+    (tmp_path / 'pae_model_1.json').write_text('{}')
+    (tmp_path / 'ranked_0_confidences.json').write_text('{}')    # Not what AlphaFold2 writes
+    files = data.find_prediction_files(str(tmp_path / 'ranked_0.pdb'))
+    assert (files.kind, files.pae_path) == ('af2', str(tmp_path / 'pae_model_1.json'))
+    assert data.structure_path_for_directory(str(tmp_path)) == str(tmp_path / 'ranked_0.pdb')
+    empty = tmp_path / 'empty'
+    empty.mkdir()
+    (empty / 'a.pdb').touch()
+    (empty / 'b.pdb').touch()
+    for stem in 'ab':
+        (empty / f'{stem}_confidences.json').write_text('{}')
+    with pytest.raises(ValueError, match='Could not find'):       # Two candidates: not guessed
+        data.structure_path_for_directory(str(empty))

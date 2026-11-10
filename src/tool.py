@@ -762,7 +762,7 @@ class AlphaLensPlot(ToolInstance):
         if same_size and pae.agreement is None:
             pae.agreement = self._pae.agreement     # Seeds / models are shared by all models
         self._pae = pae
-        self._prediction_region = None
+        self._set_prediction_region(None)
         self._attach_structure()
         self._pair_cache = None
         if not same_size:
@@ -904,7 +904,7 @@ class AlphaLensPlot(ToolInstance):
             from chimerax.core.errors import UserError
             need = {'spread': 'a distogram',
                     'agreement': 'contact probabilities for at least two seeds or models'
-                    }.get(name, 'a distogram or AF3 contact_probs')
+                    }.get(name, 'a distogram or confidence JSON contact_probs')
             why = self._agreement_error if name == 'agreement' and self._agreement_error \
                 else self._data_status
             raise UserError(f'View "{name}" needs {need}; {self._pae.structure}: {why}')
@@ -1094,13 +1094,13 @@ class AlphaLensPlot(ToolInstance):
         for b in (self._left, self._right):
             b.setEnabled(on)
             b.setToolTip(tip)
-        reasons = {'contact': 'Needs a distogram or AlphaFold3 contact_probs',
+        reasons = {'contact': 'Needs a distogram or confidence JSON contact_probs',
                    'spread': 'Needs a distogram'}
         c = f'{self._contact_cutoff():g}'
         about = {
             'pae': 'Predicted aligned error',
             'contact': f'Contact probability predicted by AlphaFold, P(d < {c} Å), from the '
-                       'distogram or AF3 contact_probs; dots mark the pairs above the slider',
+                       'distogram or confidence JSON contact_probs; dots mark the pairs above the slider',
             'model': f'Distances in the shown model (CB–CB, CA for glycine): grey from {c} Å '
                      f'(dark) to {DISTANCE_FAR:g} Å and beyond (white); pairs closer than {c} Å '
                      'are colored by the predicted contact probability'
@@ -1251,7 +1251,7 @@ class AlphaLensPlot(ToolInstance):
         if mode.key in ('contact', 'model') and self._pae.has_contact \
                 and self._pae.metrics.get('contact_only'):
             note = 'distogram loading' if self._load_progress is not None else 'no distogram'
-            src = f' <span style="color:gray">(AF3 contact_probs; {note})</span>'
+            src = f' <span style="color:gray">(confidence JSON contact_probs; {note})</span>'
         if mode.key == 'model' and not self._pae.has_contact:
             src = ' <span style="color:gray">(no contact probabilities: contacts in one color)</span>'
         pool = (f' <span style="color:gray">[overview {f}×{f} {mode.pool}-pooled; '
@@ -1699,7 +1699,9 @@ class AlphaLensPlot(ToolInstance):
         r1, r2 = clamp(min(x1, x2)), clamp(max(x1, x2))
         r3, r4 = clamp(min(y1, y2)), clamp(max(y1, y2))
         off_diagonal = (r2 < r3 or r4 < r1)
-        if self._drag_colors_structure:
+        if on_track:
+            pass                     # The track only selects, below: it must not recolor the model
+        elif self._drag_colors_structure:
             if off_diagonal:
                 self._color_rows(r1, r2, 'lime', 'gray')
                 self._color_rows(r3, r4, 'magenta')
@@ -1709,7 +1711,7 @@ class AlphaLensPlot(ToolInstance):
             ranges = [(r1, r2), (r3, r4)] if off_diagonal else [(min(r1, r3), max(r2, r4))]
             self._select_rows(ranges)
         tiny = (r2 - r1) < 3 and (r4 - r3) < 3
-        self._prediction_region = None if on_track or tiny else (r3, r4, r1, r2)
+        self._set_prediction_region(None if on_track or tiny else (r3, r4, r1, r2))
         if on_track and tiny:
             self.session.selection.clear()      # A click on the track deselects
         elif on_track:
@@ -1841,6 +1843,16 @@ class AlphaLensPlot(ToolInstance):
     def _predict_interface(self):
         from .predict_ui import show_prediction_dialog
         return show_prediction_dialog(self)
+
+    def _set_prediction_region(self, region):
+        '''The box "Re-predict selected interface" uses. Open prediction dialogs show it.'''
+        self._prediction_region = region
+        self._notify_prediction_dialogs()
+
+    def _notify_prediction_dialogs(self):
+        for dialog in list(getattr(self.session, '_alphalens_prediction_dialogs', ())):
+            if dialog.plot is self:
+                dialog.source_changed()
 
     def _reset_contact_region(self):
         self._struct_region = None
@@ -2010,3 +2022,4 @@ class AlphaLensPlot(ToolInstance):
         v.dots = []
         self._render = self._block_rgb = None
         ToolInstance.delete(self)
+        self._notify_prediction_dialogs()   # They now say that the source plot is closed

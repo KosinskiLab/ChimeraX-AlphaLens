@@ -278,3 +278,15 @@ def test_manifest_failure_after_spawn_reaps_child(runner, monkeypatch):
     assert job.process.poll() is not None
     assert job.lock is None
     assert finish(runner('after_disk_error', search=True).start()).state == 'complete'
+
+
+def test_a3m_headers_in_any_encoding_pass_through(tmp_path, monkeypatch):
+    # ChimeraX switches to the C locale (ASCII text files) once a PDB file has been opened
+    import locale
+    from alphalens.predict import crop_a3m
+    monkeypatch.setattr(locale, 'getpreferredencoding', lambda *a: 'ascii')
+    source, cropped = tmp_path/'source.a3m', tmp_path/'cropped.a3m'
+    source.write_bytes(b'>query caf\xc3\xa9\nACDE\n>hit \xe9t\xe9\nAaC-E\n')
+    validate_a3m(source, 'ACDE')
+    crop_a3m(source, cropped, 'ACDE', [0, 1, 3])
+    assert cropped.read_bytes() == b'>query caf\xc3\xa9\nACE\n>hit \xe9t\xe9\nAaCE\n'

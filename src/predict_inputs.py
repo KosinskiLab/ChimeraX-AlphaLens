@@ -37,7 +37,7 @@ def fetch_uniprot(identifier):
     if not _IDENTIFIER.fullmatch(identifier):
         raise ValueError('Use a UniProt accession (P69905), isoform (P05067-2), or entry ID (HBA_HUMAN).')
     url = f'https://rest.uniprot.org/uniprotkb/{identifier}.fasta'
-    request = Request(url, headers={'User-Agent': 'AlphaLens-local-prediction/0.11', 'Accept': 'text/plain'})
+    request = Request(url, headers={'User-Agent': 'AlphaLens-local-prediction', 'Accept': 'text/plain'})
     try:
         with urlopen(request, timeout=20) as response:
             body = response.read(1024 * 1024 + 1)
