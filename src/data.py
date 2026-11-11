@@ -663,6 +663,19 @@ def prediction_models(structure_path):
             p = os.path.join(d, f'seed-{seed}_sample-{sample}', 'model.cif')
             models.append({'label': f'#{k + 1}  seed {seed} sample {sample}  score {score:.3f}',
                            'path': p if os.path.exists(p) else None, 'score': score})
+        return models
+
+    top = _localfold_top(d)                                           # LocalFold (local AF3)
+    if top:
+        stem = os.path.splitext(top)[0]
+        ranked = _af3_ranked_samples(d, fallback=False, name=os.path.basename(stem) + '_ranking_scores.csv')
+        if ranked:
+            models.append({'label': f'top model = sample {ranked[0][1]}', 'path': top,
+                           'score': ranked[0][2]})
+            for k, (seed, sample, score) in enumerate(ranked):
+                p = f'{stem}_sample{sample}.pdb'
+                models.append({'label': f'#{k + 1}  sample {sample}  score {score:.3f}',
+                               'path': p if os.path.exists(p) else None, 'score': score})
     return models
 
 

@@ -60,20 +60,43 @@ def test_distance_matrix_matches_contact_mask():
         assert ((d < 8.0) == contacts.contact_mask(xyz, 8.0)).all()
 
 
-def test_distance_view_values():
+def test_model_view_values():
     far = contacts.DISTANCE_FAR
-    d = np.array([[0.0, 5.0, 8.0], [24.0, far, 100.0], [np.nan, 7.99, 3.0]], np.float32)
-    p = np.array([[1.0, 0.0, 0.9], [0.5, 0.5, 0.5], [0.5, 0.4, 0.7]], np.float32)
-    v = contacts.distance_view_values(d, 8.0, p, floor=0.1)
+    d = np.array([[0.0, 5.0, 8.0], [5.0, far, 100.0], [np.nan, 7.99, 3.0]], np.float32)
+    p = np.array([[1.0, 0.1, 0.9], [0.0, 0.5, 0.1], [0.5, 0.4, 0.05]], np.float32)
+    v = contacts.model_view_values(d, 8.0, p, 0.5)
     assert v.dtype == np.float32
-    # Contacts (d < 8): their P, at least the floor, so none disappears
-    assert v[0, 0] == 1.0 and np.isclose(v[0, 1], 0.1) and np.isclose(v[2, 1], 0.4)
-    # Farther pairs: -1 at the cutoff (dark grey) to -2 at far and beyond (white)
-    assert v[0, 2] == -1.0 and np.isclose(v[1, 0], -1.5) and v[1, 1] == -2.0 and v[1, 2] == -2.0
-    assert v[2, 0] == -2.0                                  # No coordinates: white
-    # Max-pooling keeps a contact over any distance, and the closest of the farther pairs
-    assert (v[d < 8] >= 0).all() and (v[~(d < 8)] <= -1).all()
-    assert contacts.distance_view_values(d, 8.0)[0, 1] == 1.0   # Without P: one color
+    # In contact in the model: predicted (P >= 0.5, P symmetrized) or not
+    assert v[0, 0] == contacts.MODEL_AND_PREDICTED and v[0, 1] == contacts.MODEL_ONLY
+    assert v[2, 1] == contacts.MODEL_ONLY          # 7.99 A in the model, P max(0.4, 0.1) < 0.5
+    assert v[2, 2] == contacts.MODEL_ONLY
+    # Predicted but not formed: 8 A is not a contact
+    assert v[0, 2] == contacts.PREDICTED_ONLY
+    # Neither: faint grey, -2 (white) at far and beyond
+    assert v[1, 2] == -2.0
+    assert v[2, 0] == -2.0                                  # No coordinates: white, never predicted-only
+    d2 = np.array([[0.0, 24.0], [24.0, 0.0]], np.float32)
+    v2 = contacts.model_view_values(d2, 8.0, np.zeros((2, 2), np.float32), 0.5)
+    assert np.isclose(v2[0, 1], -1.5)
+    # Without contact probabilities every model contact is one color
+    v3 = contacts.model_view_values(d, 8.0)
+    assert v3[0, 1] == contacts.MODEL_AND_PREDICTED and v3[0, 2] == -1.0
+    # Max-pooling order: predicted-only > both > model-only > distances
+    assert contacts.PREDICTED_ONLY > contacts.MODEL_AND_PREDICTED > contacts.MODEL_ONLY > -1
+
+
+def test_model_contact_counts():
+    class Pae:
+        pass
+    vals = np.full((4, 4), -1.5, np.float32)
+    vals[0, 2] = vals[2, 0] = contacts.MODEL_AND_PREDICTED
+    vals[0, 3] = vals[3, 0] = contacts.PREDICTED_ONLY
+    vals[1, 3] = vals[3, 1] = contacts.MODEL_ONLY
+    vals[0, 1] = vals[1, 0] = contacts.PREDICTED_ONLY       # Intra-chain: not counted
+    import unittest.mock as mock
+    with mock.patch.object(contacts, 'row_chain_ids', lambda pae: np.array(['A', 'A', 'B', 'B'])):
+        c = contacts.model_contact_counts(Pae(), vals)
+    assert c == dict(predicted=2, formed=1, missed=1, unpredicted=1, scope='inter-chain')
 
 
 def test_plddt_palette_bands():

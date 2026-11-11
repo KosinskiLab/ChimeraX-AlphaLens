@@ -7,7 +7,7 @@ name = "ChimeraX-AlphaLens"
 version = "1.4.0"
 license = { text = "MIT" }
 authors = [{ name = "Dmitry Molodenskiy" }]
-description = "AlphaFold PAE, contact-probability, model-distance, distogram-spread and seed-agreement plot (formerly DistoPAE)"
+description = "AlphaFold PAE, contact-probability, model-contact, distogram-spread and seed-agreement plot (formerly DistoPAE)"
 dependencies = ["ChimeraX-Core~=1.6", "ChimeraX-AlphaFold~=1.0"]
 dynamic = ["classifiers", "requires-python"]
 
@@ -33,7 +33,7 @@ classifiers = ["Development Status :: 3 - Alpha"]
 
 [tool.chimerax.tool."AlphaLens"]
 category = "Structure Prediction"
-description = "PAE, contact probability, model distances, spread and agreement plots for AlphaFold predictions"
+description = "PAE, contact probability, model contacts, spread and agreement plots for AlphaFold predictions"
 
 [tool.chimerax.command.alphalens]
 category = "Structure Prediction"

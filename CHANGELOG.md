@@ -2,6 +2,30 @@
 
 ## 1.4.0
 
+* **Model contacts** replaces the Model distances view. It answers the view's question directly:
+  each pair is green when the shown model forms it (CB–CB < 8 Å) and the prediction supports it
+  (P ≥ the slider threshold), vermillion when it is predicted but not formed in the model, purple
+  when the model has it but the prediction does not; farther pairs are faint grey. The line under
+  the slider counts them for the inter-chain pairs ("87 of 88 predicted inter-chain contacts are
+  formed, 1 not; 11 contacts of the model are not predicted"), so AF3 samples and AF2 models can
+  be compared from the Model menu. Its dots take the three colors, so the inter-chain pairs stay
+  visible in a zoomed-out overview; a dot or colored pair is clicked to show it on the structure.
+  Until now the model's contacts were drawn in the green of P, under the contact dots that cover
+  the same pairs, so at an interface they could hardly be seen; most of the matrix was grey
+  distances. `mode model` (or `distance`) still selects it.
+* The Model menu of a local AF3 prediction lists its five samples, best first, so they can be
+  compared; it listed only the opened one.
+* Zoomed in, contact dots become rings, so the matrix cell under a dot shows its color.
+* Switching views no longer widens the window: the legend under the plot is drawn to the
+  window's width (the Model distances legend made the window about 400 px wider, and it stayed so).
+* Readable in dark mode: chain labels, the pLDDT label and the legend text follow the window's
+  colors; they were dark grey on the dark ChimeraX background.
+* A quieter window: the views are a segmented control (the ← / → arrow buttons are gone; the keys
+  still switch views); the heading is the view's name and one grey line about the model, and the
+  interaction hints moved to the line under the slider, shown while the pointer is not on the plot;
+  buttons are grouped (structure colors, contacts, files); the pLDDT slider is labeled "hide";
+  the "pLDDT" label is no longer clipped; undefined spread is light grey instead of mid grey.
+* Asking the plot for an unknown view now names the views; `distance` works as `model`.
 * Discontinuous regions, as AlphaPulldown predicts them. A box dragged across a gap in the
   model (an AlphaPulldown region such as `P1:1-100:150-200`, or unresolved residues) is
   re-predicted as one chain with the gap kept; sequence input takes several ranges a chain
