@@ -93,12 +93,25 @@ def main():
         assert dialog.start_button.isEnabled()
         dialog.output.setText(str(out / 'jobs'))
         engine = dialog.executable.text()
+        # A missing engine turns Predict off, and the button and the line above it say why
         dialog.executable.setText(str(out / 'missing-engine'))
+        assert not dialog.start_button.isEnabled()
+        assert 'No LocalFold engine at' in dialog.start_button.toolTip()
+        assert not dialog.msa_hint.isHidden() and 'No LocalFold engine at' in dialog.msa_hint.text()
+        # A problem found only on Predict (here: the results folder cannot be made) is reported
+        dummy = out / 'dummy-engine'
+        dummy.write_text('#!/bin/sh\nexit 0\n')
+        dummy.chmod(0o755)
+        not_a_folder = out / 'not-a-folder'
+        not_a_folder.write_text('')
+        dialog.executable.setText(str(dummy))
+        dialog.output.setText(str(not_a_folder / 'jobs'))
+        assert dialog.start_button.isEnabled(), dialog.start_button.toolTip()
         dialog.start_button.click()
         assert dialog.progress_label.text() == 'Could not start'
-        assert 'not installed' in dialog.status.toPlainText()
         assert 'bold' in dialog.status.styleSheet()
         assert dialog.job is None
+        dialog.output.setText(str(out / 'jobs'))
         stub = out / 'progress-engine'
         stub.write_text("#!/bin/sh\nprintf 'search: chain search 1 of 2: queued\\n'\n"
                         "sleep 1\nprintf 'AF2 multimer: 195 residues, 512 MSA rows, 1024 extra, 4 passes\\n'\n"

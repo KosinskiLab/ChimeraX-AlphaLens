@@ -207,9 +207,19 @@ class Section(QWidget):
 
 
 def _option(text, tooltip=''):
-    """An alignment choice: looks like a radio button, but can also be cleared (no choice yet)."""
+    """
+    An alignment choice, a radio button. A click always chooses it: clicking the chosen one again
+    must not clear the choice (it did, and Predict went grey without a visible reason). Code can
+    still clear it with setChecked(False): no choice yet is a valid state of the dialog.
+    """
     from Qt.QtWidgets import QRadioButton
-    button = QRadioButton(text); button.setAutoExclusive(False)
+
+    class Choice(QRadioButton):
+        def nextCheckState(self):
+            if not self.isChecked():
+                self.setChecked(True)
+
+    button = Choice(text); button.setAutoExclusive(False)
     if tooltip:
         button.setToolTip(tooltip)
     return button
@@ -347,11 +357,11 @@ class PredictionDialog(QDialog):
                               'MMseqs2 search on the ColabFold server, unless the same query is in the '
                               'local MSA cache. Queues can take minutes.')
         msa_layout.addWidget(self.search)
+        # Why Predict is off, if it is: shown above the buttons (and as the button's tooltip)
         self.msa_hint = QLabel('Choose an alignment to enable Predict.')
         self.msa_hint.setWordWrap(True)
-        self.msa_hint.setStyleSheet('color: #a65c00; font-weight: bold;')
+        self.msa_hint.setStyleSheet('color: #c06000; font-weight: bold;')
         self.msa_hint.setMinimumHeight(self.msa_hint.fontMetrics().lineSpacing()+4)
-        msa_layout.addWidget(self.msa_hint)
         self._guessed_names = ''
         if plot is not None:
             filename = getattr(plot.pae.structure, 'filename', None)
@@ -409,11 +419,14 @@ class PredictionDialog(QDialog):
         self.status = QPlainTextEdit('Ready'); self.status.setReadOnly(True)
         self.status.setFixedHeight(4*self.status.fontMetrics().lineSpacing()+14)
         layout.addWidget(self.status)
+        layout.addWidget(self.msa_hint)
         buttons = QHBoxLayout(); layout.addLayout(buttons)
         self.start_button = QPushButton('Predict'); self.cancel_button = QPushButton('Cancel job')
         self.start_button.setDefault(True)
         self.cancel_button.setEnabled(False)
+        self.cancel_button.setToolTip('Stops the running prediction or engine setup')
         self.report_button = QPushButton('Prediction report…'); self.report_button.setEnabled(False)
+        self.report_button.setToolTip('The scores and comparison of the last prediction, once it has finished')
         self.report_directory = None
         self.report_button.clicked.connect(lambda: show_prediction_report(self.session, self.report_directory))
         buttons.addWidget(self.report_button); buttons.addStretch(1)
@@ -539,6 +552,7 @@ class PredictionDialog(QDialog):
             self.set_progress('Cancelling…')
 
     def invalidate_input(self):
+        self._lookup_error = None
         if self.entries is not None:
             self.entries = None
             self.set_chain_rows([])
@@ -607,6 +621,7 @@ class PredictionDialog(QDialog):
             self.log_message('Review the chains (hover for the sequence), set ranges if needed, choose '
                              'an alignment, then click Predict.')
         except Exception as e:
+            self._lookup_error = str(e)
             self.show_error(str(e))
         self.lookup_future = None
         self.refresh()
@@ -615,7 +630,11 @@ class PredictionDialog(QDialog):
         if self.plot is not None:
             return snapshot(self.plot, self.flanks.value())
         if self.entries is None:
-            raise ValueError('Load sequences before predicting.')
+            if getattr(self, '_lookup_error', None):
+                raise ValueError(f'The input could not be read: {self._lookup_error}')
+            if self.input_text.toPlainText().strip():
+                raise ValueError('Click Load sequences to read the input.')
+            raise ValueError('Paste a sequence, FASTA entries or UniProt IDs, then click Load sequences.')
         from .predict_inputs import sequence_chains
         return sequence_chains(self.entries, [field.text() for field in self.ranges])
 
@@ -644,11 +663,6 @@ class PredictionDialog(QDialog):
         self.setup_hint.setVisible(needs_setup)
         # '&&': a single & is Qt's mnemonic marker and would not be shown
         self.start_button.setText(('Update && Predict' if update else 'Install && Predict') if needs_setup else 'Predict')
-        msa_ready = (self.reuse.isChecked() or self.search.isChecked()
-                     or (self.use_a3m.isChecked() and bool(self.msa.text().strip()))
-                     or (self.features.isChecked() and bool(self.features_names.text().strip())
-                         and bool(self.features_root.text().strip())))
-        self.msa_hint.setVisible(not msa_ready)
         af3 = self.backend.currentData() == 'af3'
         summary = [f'{self.recycles.value()} recycles',
                    'random seed' if self.randomize_seed.isChecked() else f'seed {self.seed.value()}']
@@ -656,8 +670,15 @@ class PredictionDialog(QDialog):
             summary.append(f'{self.af3_steps.value()} steps × {self.af3_samples.value()} samples')
         summary.append(f'{self.time_limit.value()} min limit' if self.time_limit.value() else 'no time limit')
         self.advanced.summary.setText(' · '.join(summary))
-        try:
-            chains, _ = self.prediction_input()
+        chains, problem = None, ''
+        if self.lookup_future is not None:
+            problem = 'Reading the input (UniProt lookup)…'
+        else:
+            try:
+                chains, _ = self.prediction_input()
+            except Exception as e:
+                problem = str(e)
+        if chains:
             preview = ' + '.join(f'{c["source_chain"]}: {len(c["sequence"])} residues'
                                  + (f' in {predict.segment_count(c)} segments' if c.get('residue_ids') else '')
                                  for c in chains[:4])
@@ -665,16 +686,53 @@ class PredictionDialog(QDialog):
                 preview += f' + … ({len(chains)} chains total)'
             if len(chains) > 1:
                 preview += f' · {sum(len(c["sequence"]) for c in chains)} in total'
+            self.preview.setStyleSheet('')
             self.preview.setText(preview)
             self.preview.setToolTip('\n'.join(c['sequence'] for c in chains))
             warning = predict.size_warning(chains)
             self.size_warning.setText(warning); self.size_warning.setVisible(bool(warning))
-            running = self.is_busy()
-            terms_ready = self.backend.currentData() != 'af3' or self.af3_terms.isChecked()
-            self.start_button.setEnabled(msa_ready and terms_ready and not running)
-        except Exception as e:
+            problem = self.blocking_reason(chains)
+        else:
             self.size_warning.clear(); self.size_warning.hide()
-            self.preview.setText(str(e)); self.start_button.setEnabled(False)
+            self.preview.setStyleSheet('color: #c06000;')
+            self.preview.setText(problem)
+            self.preview.setToolTip(problem)
+        self.start_button.setEnabled(not problem)
+        self.start_button.setToolTip(problem or ('Install LocalFold, then predict' if needs_setup and not update
+                                                 else 'Rebuild LocalFold, then predict' if needs_setup
+                                                 else 'Start the prediction'))
+        self.msa_hint.setText(problem)
+        self.msa_hint.setVisible(bool(problem))
+
+    def blocking_reason(self, chains):
+        '''
+        Why Predict cannot start with these chains, or '' when it can. Only real problems: a missing
+        choice or file the prediction needs, the AF3 terms, a missing engine, a running job.
+        '''
+        if self.is_busy():
+            return 'A prediction or engine setup is running: wait for it, or Cancel it.'
+        if self.backend.currentData() == 'af3' and not self.af3_terms.isChecked():
+            return 'Accept DeepMind’s AF3 terms (under Model) to predict with AlphaFold 3, or choose AlphaFold 2.'
+        if not any(b.isChecked() for b in (self.reuse, self.features, self.use_a3m, self.search)):
+            return 'Choose an alignment (MSA) to enable Predict.'
+        if self.use_a3m.isChecked() and not self.msa.text().strip():
+            return 'Enter the A3M file of the chosen alignment, or Browse… for it.'
+        if self.features.isChecked():
+            try:
+                self.feature_request(chains)
+            except ValueError as e:
+                return str(e)
+        path = self.executable.text().strip()
+        if not path:
+            return 'Enter the LocalFold engine under Settings.'
+        if self.needs_setup():
+            if native_platform() is None:
+                return 'LocalFold runs on Apple Silicon macOS or Linux x86_64 with an NVIDIA GPU; it cannot be installed here.'
+        elif not (Path(path).expanduser().is_file() and os.access(Path(path).expanduser(), os.X_OK)):
+            return (f'No LocalFold engine at {path}. Fix the path under Settings, or restore '
+                    f'{predict.data_directory() / "bin" / ("localfold-" + self.backend.currentData())}, '
+                    'which Install & Predict sets up.')
+        return ''
 
     def set_busy_controls(self, busy):
         for widget in (self.flanks, self.executable, self.output, self.msa_details, self.search, self.seed,
@@ -684,6 +742,8 @@ class PredictionDialog(QDialog):
             widget.setEnabled(not busy)
         self.reuse.setEnabled(not busy and self.source_msa is not None)
         self.cancel_button.setEnabled(busy)
+        if busy:
+            self.start_button.setToolTip('A prediction or engine setup is running: wait for it, or Cancel it.')
         if not busy:
             self.seed.setEnabled(not self.randomize_seed.isChecked())
             self.msa_controls()

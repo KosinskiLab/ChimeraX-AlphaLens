@@ -37,10 +37,11 @@ P ≥ 0.5.*
 
 ## Install
 
-Version 1.4.0 predicts discontinuous regions as AlphaPulldown does (one chain with the gap
-kept), writes predicted structures in the source numbering, reads AlphaPulldown notation
-(`P0A836:1-100+P0AGE9`), has a simpler prediction dialog, and builds LocalFold from
-KosinskiLab's fork. Version 1.3.0 added local prediction on Linux with an NVIDIA GPU, through LocalFold's CUDA
+Version 1.4.1 says why **Predict** is off, above the buttons and on hover, and turns it off only
+for real problems. Version 1.4.0 predicts discontinuous regions as AlphaPulldown does (one chain
+with the gap kept), writes predicted structures in the source numbering, reads AlphaPulldown
+notation (`P0A836:1-100+P0AGE9`), adds the Model contacts view, has a simpler prediction dialog,
+and builds LocalFold from KosinskiLab's fork. Version 1.3.0 added local prediction on Linux with an NVIDIA GPU, through LocalFold's CUDA
 engines, beside the Metal engines on Apple Silicon. It can take the alignments of a local
 prediction from precomputed AlphaPulldown features (the lab database, its public copy or a
 feature folder) instead of an MSA search, colors predicted contacts by a fixed P scale in the
@@ -58,7 +59,7 @@ on Windows or on Intel Macs. It is tested with ChimeraX 1.12.
    pip needs it.
 2. In the ChimeraX command line:
 
-       toolshed install ~/Downloads/chimerax_alphalens-1.4.0-py3-none-any.whl
+       toolshed install ~/Downloads/chimerax_alphalens-1.4.1-py3-none-any.whl
 
 3. Restart ChimeraX.
 
@@ -97,7 +98,7 @@ the CUDA toolkit (`nvcc`, cuBLAS 12) and `g++`; see the
 and opening its prediction dialog do not install engines. Existing engines are reused.
 
 For optional manual installation of both engines, download
-[setup_localfold.py](https://github.com/KosinskiLab/AlphaLens/releases/download/v1.4.0/setup_localfold.py)
+[setup_localfold.py](https://github.com/KosinskiLab/AlphaLens/releases/download/v1.4.1/setup_localfold.py)
 and run `python3 ~/Downloads/setup_localfold.py`. First-use setup uses ChimeraX's bundled
 Python. The first AF2 prediction downloads about 77 MB of model weights; AF3 downloads
 about 277 MB after you accept DeepMind's terms in the dialog.
@@ -343,8 +344,9 @@ Tested 175–195-residue predictions
 took about 2–3 seconds with cached MSAs on an M5 Max. A full 799-residue pair took
 25.9 seconds with a supplied MSA and a 3.26 GB engine-reported buffer peak. Fresh
 remote searches can take minutes. The progress bar shows activity during preparation
-and MSA search, then completed inference passes for AF2 or an activity indicator for AF3. Choose an MSA source
-to enable **Predict**; a missing alignment is explained beside the MSA controls.
+and MSA search, then completed inference passes for AF2 or an activity indicator for AF3. **Predict**
+is off only while something it needs is missing (a box across two chains, an alignment, the AF3
+terms, the engine); the reason is shown above the buttons and when you hover over Predict.
 
 ### Alignments from precomputed AlphaPulldown features
 
