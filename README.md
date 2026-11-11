@@ -35,10 +35,12 @@ P ≥ 0.5.*
 
 ## Install
 
-Version 1.3.0 colors predicted contacts by a fixed P scale in the pLDDT colors and adds a
-"dots on plot" switch next to the slider. Since 1.2.1, AlphaLens sets up LocalFold when you
-first predict, reopens saved local prediction folders, and keeps the selected-region preview
-in sync with the plot.
+Version 1.3.0 can take the alignments of a local prediction from precomputed AlphaPulldown
+features (the lab database, its public copy or a feature folder) instead of an MSA search,
+colors predicted contacts by a fixed P scale in the pLDDT colors, and adds a "dots on plot"
+switch next to the slider. Since 1.2.1, AlphaLens sets up LocalFold when you first predict,
+reopens saved local prediction folders, and keeps the selected-region preview in sync with
+the plot.
 
 Requires ChimeraX 1.6 or newer; tested with 1.10 and 1.12. The bundle is pure Python, so one wheel works on
 macOS, Linux and Windows. The optional local prediction engine currently requires
@@ -326,6 +328,29 @@ took about 2–3 seconds with cached MSAs on an M5 Max. A full 799-residue pair 
 remote searches can take minutes. The progress bar shows activity during preparation
 and MSA search, then completed inference passes for AF2 or an activity indicator for AF3. Choose an MSA source
 to enable **Predict**; a missing alignment is explained beside the MSA controls.
+
+### Alignments from precomputed AlphaPulldown features
+
+Instead of an MSA search, tick **Use precomputed AlphaPulldown features** and give each chain's
+UniProt ID (filled in from the prediction's folder name, e.g. `Q15014+Q9NV56`, or from the
+UniProt lookup). **Features from** is one of:
+
+* `/g/alphafold/input_features`, the lab database through the `/g` mount (the default when it is
+  mounted): AF2 features of 16 proteomes, AF3 features of *B. subtilis* and *L. monocytogenes*;
+* `https://s3.embl.de/alphapulldown`, the same database, public (the default otherwise). Only
+  the IDs are sent; the files are cached in `~/.cache/alphalens/features`;
+* any folder of AlphaPulldown features (`<ID>.pkl[.xz]`, `<ID>_af3_input.json[.xz]`).
+
+AF2 feature pickles (AlphaPulldown's `MonomericObject`, or AlphaFold's own per-chain feature
+dict) give each chain its unpaired alignment, and their `msa_all_seq` is paired by species as
+AlphaFold-Multimer does. AlphaFold 3 uses `<ID>_af3_input.json` when every chain has one (its
+alignments go into the job, AF3 pairs them), else the AF2 features. Re-predicted regions are
+cropped from the full-length features. Templates are not used, as with the search. Feature
+files of a whole complex (an AF-Multimer `features.pkl`) are refused. The features are found,
+read and converted in the prediction's own process before LocalFold starts, so a slow network
+mount does not block ChimeraX; the job folder keeps the alignments (`features/`) and which files
+they came from with their checksums (`features/features.json`). Set `ALPHALENS_FEATURES_DIR`
+to change the default location.
 
 See [setup, workflow, measurements and limitations](docs/local-prediction.md).
 

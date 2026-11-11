@@ -2,6 +2,16 @@
 
 ## 1.3.0
 
+* Local predictions can take their alignments from precomputed AlphaPulldown features instead of
+  an MSA search: tick **Use precomputed AlphaPulldown features** in the prediction dialog. The
+  features come from the lab database (`/g/alphafold/input_features`), its public copy
+  (`https://s3.embl.de/alphapulldown`, downloaded once into `~/.cache/alphalens/features`) or any
+  AlphaPulldown feature folder. Chain IDs are filled in from the prediction's folder name or the
+  UniProt lookup. AF2 pickles (AlphaPulldown `MonomericObject` or AlphaFold feature dicts) are
+  read without AlphaPulldown or AlphaFold installed; their `msa_all_seq` is paired by species as
+  AlphaFold-Multimer does. AlphaFold 3 uses `<ID>_af3_input.json` features when all chains have
+  them. Re-predicted regions are cropped from the full-length features. Reading and converting
+  run in the prediction's process, so ChimeraX stays responsive on a slow mount.
 * Predicted contacts (dots on the plot, lines on the structure) are colored by a fixed scale of
   P with the pLDDT colors and bands: orange below 0.5, yellow 0.5–0.7, light blue 0.7–0.9, dark
   blue 0.9 and above. Until now they ran from light to dark blue, so at the usual thresholds
