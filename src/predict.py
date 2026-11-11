@@ -135,12 +135,25 @@ def write_json(path, obj):
     part.replace(path)
 
 
+# Besides the 20 standard amino acids, LocalFold folds X (unknown) as AlphaFold's UNK
+FOLDABLE = AMINO_ACIDS + 'X'
+REPLACEMENTS = {'U': 'C (U is selenocysteine)', 'O': 'K (O is pyrrolysine)', 'B': 'X or D/N', 'Z': 'X or E/Q',
+                'J': 'X or I/L'}
+
+
 def validate_chains(chains):
     chain_ids(len(chains))
-    for chain in chains:
+    for cid, chain in zip(chain_ids(len(chains)), chains):
         seq = chain['sequence']
-        if not seq or any(c not in AMINO_ACIDS for c in seq):
-            raise ValueError('Use nonempty protein sequences with the 20 standard amino acids.')
+        if not seq:
+            raise ValueError(f'Chain {cid} is empty.')
+        bad = next((k for k, c in enumerate(seq) if c not in FOLDABLE), None)
+        if bad is not None:
+            c = seq[bad]
+            r = chain['residue_map'][bad] if bad < len(chain['residue_map']) else {}
+            where = f"{r.get('chain_id', cid)}:{r.get('number', bad + 1)}{r.get('insertion_code') or ''}"
+            raise ValueError(f'{c} at {where} cannot be folded: LocalFold takes the 20 standard amino acids '
+                             f'and X. Replace it by {REPLACEMENTS.get(c, "X")}, or leave it out of the range.')
         if len(chain['residue_map']) != len(seq):
             raise ValueError('The sequence and residue mapping have different lengths.')
         ids = chain.get('residue_ids')
@@ -208,14 +221,20 @@ def crop_chains(rows, region, flanks=10):
     selected_cores = {}
     for lo, hi in ((y0, y1), (x0, x1)):
         if not 0 <= lo <= hi < len(rows):
-            raise ValueError('The selected region no longer matches the structure.')
-        core = rows[lo:hi + 1]
-        if any(r is None for r in core):
-            raise ValueError('The selected box must contain protein residues only.')
+            raise ValueError('The structure changed since the box was drawn: drag the box again.')
         for i in range(lo, hi + 1):
-            selected_cores.setdefault(rows[i]['chain_id'], set()).add(i)
+            if rows[i] is not None:     # Ligands and nucleic acids in the box are left out
+                selected_cores.setdefault(rows[i]['chain_id'], set()).add(i)
+    chains_present = list(dict.fromkeys(r['chain_id'] for r in rows if r is not None))
+    if len(chains_present) < 2:
+        raise ValueError('This prediction has one protein chain: re-predicting an interface needs two.')
+    if not selected_cores:
+        raise ValueError('The box covers no protein residues: drag it across two protein chains.')
     if len(selected_cores) < 2:
-        raise ValueError('Select an interface between different protein chains.')
+        cid = next(iter(selected_cores))
+        other = next(c for c in chains_present if c != cid)
+        raise ValueError(f'The box covers chain {cid} only: drag it across two chains, in an off-diagonal '
+                         f'block such as {cid} × {other}, to re-predict their interface.')
     chains = []
     for cid, core_rows in selected_cores.items():
         start, end = min(core_rows), max(core_rows)
@@ -230,7 +249,9 @@ def crop_chains(rows, region, flanks=10):
                 end += 1
         selected = rows[start:end + 1]
         if any(r is None or r['chain_id'] != cid for r in selected):
-            raise ValueError('The selected box must contain protein residues only.')
+            raise ValueError(f'Chain {cid} has a modified or non-protein residue inside the box (AlphaFold 3 '
+                             'treats it atom by atom); LocalFold folds standard residues here. Drag the box '
+                             'around it.')
         chain = dict(source_chain=cid, sequence=''.join(r['aa'] for r in selected),
                      residue_map=[dict(r, source_row=i) for i, r in enumerate(selected, start)],
                      core_rows=sorted(core_rows))

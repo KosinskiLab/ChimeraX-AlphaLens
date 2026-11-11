@@ -100,8 +100,13 @@ def test_sequence_validation_has_no_residue_count_cap():
     validate_chains([dict(sequence='A'*512, residue_map=[{}]*512)]*2)
     validate_chains([dict(sequence='A'*1024, residue_map=[{}]*1024)])
     validate_chains([dict(sequence='A'*10000, residue_map=[{}]*10000)]*2)
-    with pytest.raises(ValueError, match='standard'):
-        validate_chains([dict(sequence='AX', residue_map=[{}, {}])]*2)
+    # X (unknown) is folded as UNK by both engines; U, O, B, Z, J are named, with what to use instead
+    validate_chains([dict(sequence='AX', residue_map=[{}, {}])]*2)
+    with pytest.raises(ValueError, match=r'U at B:7 cannot be folded.*Replace it by C'):
+        validate_chains([dict(sequence='AA', residue_map=[{}, {}]),
+                         dict(sequence='AU', residue_map=[{}, dict(chain_id='B', number=7)])])
+    with pytest.raises(ValueError, match='Chain A is empty'):
+        validate_chains([dict(sequence='', residue_map=[])])
 
 
 def test_large_crop_is_allowed_with_nonblocking_warning():
@@ -442,3 +447,20 @@ def test_gapped_chains_reach_the_engine_and_come_back_in_source_numbering(tmp_pa
     record = renumber_outputs(tmp_path, [chain])
     assert record['scheme'] == 'source' and record['chain_ids'] == {'A': 'C'}
     assert _labels(tmp_path / 'fold.pdb') == [('C', 4, ''), ('C', 5, ''), ('C', 20, ''), ('C', 21, '')]
+
+
+def test_crop_leaves_out_ligand_rows_and_explains_a_one_chain_box():
+    r = rows()
+    lig = [None] * 3                    # An AF3 ligand between the chains, atom by atom
+    r = r[:8] + lig + r[8:]
+    chains = crop_chains(r, (2, 12, 2, 12), 0)       # A box from chain A over the ligand into chain B
+    assert [c['source_chain'] for c in chains] == ['A', 'B']
+    assert [x['source_row'] for x in chains[1]['residue_map']] == [11, 12]
+    with pytest.raises(ValueError, match=r'covers chain A only.*such as A × B'):
+        crop_chains(r, (1, 4, 2, 6), 0)
+    with pytest.raises(ValueError, match='no protein residues'):
+        crop_chains(r, (8, 10, 8, 10), 0)
+    with pytest.raises(ValueError, match='one protein chain'):
+        crop_chains(rows()[:8], (1, 2, 4, 6), 0)
+    with pytest.raises(ValueError, match='drag the box again'):
+        crop_chains(rows(), (2, 4, 9, 99), 0)
