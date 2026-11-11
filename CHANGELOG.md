@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.3.0
+
+* Predicted contacts (dots on the plot, lines on the structure) are colored by a fixed scale of
+  P with the pLDDT colors and bands: orange below 0.5, yellow 0.5–0.7, light blue 0.7–0.9, dark
+  blue 0.9 and above. Until now they ran from light to dark blue, so at the usual thresholds
+  every contact looked confident, and the legend redrew its ramp from the slider value to 1,
+  which looked as if the colors were rescaled with the slider. The legend now shows the whole
+  0–1 scale with the range below the threshold faded and the threshold marked.
+* A **dots on plot** box next to the slider switches the contact dots off, to see the PAE or
+  other matrix colors underneath (until now only in the right-click menu).
+* The slider is labeled "Contact probability ≥" and the legend "contact probability", not
+  "Predicted contacts" / "contacts", which could be read as the contacts in the model.
+* A clicked contact is magenta (it was gold, too close to the new yellow band).
+
 ## 1.2.1
 
 * Install the optional LocalFold engine on first prediction with **Install & Predict**.
