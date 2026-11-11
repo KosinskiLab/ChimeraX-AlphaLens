@@ -1,0 +1,190 @@
+{
+ "date": "2026-11-11",
+ "purpose": "AlphaLens 1.3.0 CUDA backend: first-use setup and real predictions on Linux, compared with the 1BRS crystal and with Metal at the same seed and MSA.",
+ "engine_revision": "68c59196fa7d32c6edfc061ed369889c1cdb680b",
+ "cluster_job": "EMBL SLURM 64598616 (run-005), gpu-el8, 8 CPUs, 32 GB",
+ "hardware": "NVIDIA A100-PCIE-40GB, 8.0, 590.48.01, 40960 MiB",
+ "os": "Rocky Linux 8.10 (Green Obsidian)",
+ "toolchain": {
+  "nvcc": "Cuda compilation tools, release 12.8, V12.8.61 (EasyBuild CUDA/12.8.0)",
+  "gxx": "g++ (GCC) 12.3.0 (EasyBuild GCCcore-12.3.0)",
+  "python": "Python 3.11.3"
+ },
+ "setup_seconds": {
+  "af2": 125,
+  "af3": 177
+ },
+ "setup_notes": [
+  "Each engine set up separately, as the dialog does; source downloaded by the first.",
+  "rfd4p-featurise (unused) failed to link on glibc 2.28; setup restored the two probe binaries it rewrote and continued.",
+  "Predictions ran with the CUDA module unloaded; ldd resolved libcublas.so.12 and libcublasLt.so.12 through the RUNPATH setup wrote."
+ ],
+ "input": {
+  "msa": "barnase-barstar A3M, query = PDB 1BRS chains A then D (108 + 87 residues)",
+  "seed": 1,
+  "crystal": "LocalFold tools/fixtures/1brs-crystal.pdb at the pinned revision; validation only, never an input"
+ },
+ "metal_reference": "Apple M5 Max, same seed and MSA, AlphaLens 1.3.0 checkout, tests/localfold_engine_check.py",
+ "cold_run_including_weight_download": [
+  {
+   "case": "af2-multimer",
+   "state": "complete",
+   "seconds": 5.55,
+   "engine": "LocalFold native CUDA",
+   "revision": "68c59196fa7d32c6edfc061ed369889c1cdb680b",
+   "contact_head": true,
+   "ptm": 0.9324,
+   "iptm": 0.921323,
+   "mean_plddt": 97.39,
+   "has_contact_probabilities": true,
+   "rmsd_to_crystal": 0.64,
+   "chain_rmsd_to_crystal": {
+    "A": 0.294,
+    "D": 0.647
+   },
+   "interface_contacts_p50": 46,
+   "interface_precision_ca10": 0.978,
+   "rmsd_to_reference": 0.054,
+   "reference_delta": {
+    "ptm": -0.0006,
+    "mean_plddt": -0.03,
+    "iptm": -0.0007
+   },
+   "problems": []
+  },
+  {
+   "case": "af2-monomer",
+   "state": "complete",
+   "seconds": 4.04,
+   "engine": "LocalFold native CUDA",
+   "revision": "68c59196fa7d32c6edfc061ed369889c1cdb680b",
+   "contact_head": false,
+   "ptm": 0.8809,
+   "iptm": null,
+   "mean_plddt": 97.44,
+   "has_contact_probabilities": true,
+   "rmsd_to_crystal": 0.379,
+   "chain_rmsd_to_crystal": {
+    "A": 0.379
+   },
+   "interface_contacts_p50": null,
+   "interface_precision_ca10": null,
+   "rmsd_to_reference": 0.011,
+   "reference_delta": {
+    "ptm": -0.0001,
+    "mean_plddt": 0.02
+   },
+   "problems": []
+  },
+  {
+   "case": "af3",
+   "state": "complete",
+   "seconds": 28.22,
+   "engine": "LocalFold native CUDA",
+   "revision": "68c59196fa7d32c6edfc061ed369889c1cdb680b",
+   "contact_head": false,
+   "ptm": 0.94,
+   "iptm": 0.93,
+   "mean_plddt": 95.79,
+   "has_contact_probabilities": true,
+   "rmsd_to_crystal": 0.603,
+   "chain_rmsd_to_crystal": {
+    "A": 0.208,
+    "D": 0.747
+   },
+   "interface_contacts_p50": 52,
+   "interface_precision_ca10": 0.942,
+   "rmsd_to_reference": 0.262,
+   "reference_delta": {
+    "ptm": 0.0,
+    "mean_plddt": -0.11,
+    "iptm": -0.01
+   },
+   "problems": []
+  }
+ ],
+ "warm_run": [
+  {
+   "case": "af2-multimer",
+   "state": "complete",
+   "seconds": 3.57,
+   "engine": "LocalFold native CUDA",
+   "revision": "68c59196fa7d32c6edfc061ed369889c1cdb680b",
+   "contact_head": true,
+   "ptm": 0.9324,
+   "iptm": 0.921323,
+   "mean_plddt": 97.39,
+   "has_contact_probabilities": true,
+   "rmsd_to_crystal": 0.64,
+   "chain_rmsd_to_crystal": {
+    "A": 0.294,
+    "D": 0.647
+   },
+   "interface_contacts_p50": 46,
+   "interface_precision_ca10": 0.978,
+   "rmsd_to_reference": 0.054,
+   "reference_delta": {
+    "ptm": -0.0006,
+    "mean_plddt": -0.03,
+    "iptm": -0.0007
+   },
+   "problems": []
+  },
+  {
+   "case": "af2-monomer",
+   "state": "complete",
+   "seconds": 3.17,
+   "engine": "LocalFold native CUDA",
+   "revision": "68c59196fa7d32c6edfc061ed369889c1cdb680b",
+   "contact_head": false,
+   "ptm": 0.8809,
+   "iptm": null,
+   "mean_plddt": 97.44,
+   "has_contact_probabilities": true,
+   "rmsd_to_crystal": 0.379,
+   "chain_rmsd_to_crystal": {
+    "A": 0.379
+   },
+   "interface_contacts_p50": null,
+   "interface_precision_ca10": null,
+   "rmsd_to_reference": 0.011,
+   "reference_delta": {
+    "ptm": -0.0001,
+    "mean_plddt": 0.02
+   },
+   "problems": []
+  },
+  {
+   "case": "af3",
+   "state": "complete",
+   "seconds": 13.79,
+   "engine": "LocalFold native CUDA",
+   "revision": "68c59196fa7d32c6edfc061ed369889c1cdb680b",
+   "contact_head": false,
+   "ptm": 0.94,
+   "iptm": 0.93,
+   "mean_plddt": 95.79,
+   "has_contact_probabilities": true,
+   "rmsd_to_crystal": 0.603,
+   "chain_rmsd_to_crystal": {
+    "A": 0.208,
+    "D": 0.747
+   },
+   "interface_contacts_p50": 52,
+   "interface_precision_ca10": 0.942,
+   "rmsd_to_reference": 0.262,
+   "reference_delta": {
+    "ptm": 0.0,
+    "mean_plddt": -0.11,
+    "iptm": -0.01
+   },
+   "problems": []
+  }
+ ],
+ "warm_identical_to_cold": true,
+ "unit_tests_on_linux": "141 passed",
+ "limitations": [
+  "One small known complex on one GPU model; not a general accuracy benchmark.",
+  "AF3 differs from Metal by a seed-scale amount (0.26 A CA RMSD), AF2 by 0.01-0.05 A."
+ ]
+}

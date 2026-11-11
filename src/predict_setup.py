@@ -22,23 +22,109 @@ def progress(message):
     print(PHASE + message, flush=True)
 
 
+CUDA_HINT = ('Install the CUDA toolkit (nvcc and cuBLAS) and g++, or load them '
+             '(for example module load CUDA), then retry Predict.')
+# cuda/build.sh logs here and in a marker beside it, whoever runs it.
+CUDA_BUILD_FILES = ('/tmp/localfold-cuda-build', '/tmp/localfold-cuda-build.log')
+
+
+def native_platform():
+    """LocalFold's native build for this machine: 'metal', 'cuda' or None."""
+    system, machine = platform.system(), platform.machine().lower()
+    if system == 'Darwin' and machine == 'arm64':
+        return 'metal'
+    if system == 'Linux' and machine in ('x86_64', 'amd64'):
+        return 'cuda'
+    return None
+
+
 def check_platform():
-    if platform.system() != 'Darwin' or platform.machine() != 'arm64':
-        raise RuntimeError('LocalFold setup requires Apple Silicon macOS.')
+    native = native_platform()
+    if native is None:
+        raise RuntimeError('LocalFold setup requires Apple Silicon macOS, or Linux x86_64 with an NVIDIA GPU.')
+    return native
 
 
 def check_prerequisites():
-    check_platform()
-    if subprocess.run(['/usr/bin/xcode-select', '-p'], capture_output=True).returncode:
-        raise RuntimeError('Install Xcode Command Line Tools with xcode-select --install, then retry Predict.')
-    for name in ('git', 'clang++', 'clang', 'curl', 'ar'):
+    native = check_platform()
+    if native == 'metal':
+        if subprocess.run(['/usr/bin/xcode-select', '-p'], capture_output=True).returncode:
+            raise RuntimeError('Install Xcode Command Line Tools with xcode-select --install, then retry Predict.')
+        for name in ('git', 'clang++', 'clang', 'curl', 'ar'):
+            if not shutil.which(name):
+                raise RuntimeError(f'Missing {name}. Install Xcode Command Line Tools, then retry Predict.')
+        return native
+    for name in ('git', 'curl', 'gzip', 'sha256sum'):
         if not shutil.which(name):
-            raise RuntimeError(f'Missing {name}. Install Xcode Command Line Tools, then retry Predict.')
+            raise RuntimeError(f'Missing {name}. Install it, then retry Predict.')
+    for name in ('nvcc', 'g++'):
+        if not shutil.which(name):
+            raise RuntimeError(f'Missing {name}. {CUDA_HINT}')
+    if not shutil.which('nvidia-smi'):
+        raise RuntimeError('Missing nvidia-smi. Install the NVIDIA driver, then retry Predict.')
+    gpu = subprocess.run(['nvidia-smi', '--query-gpu=compute_cap', '--format=csv,noheader'],
+                         capture_output=True, text=True)
+    if gpu.returncode or not gpu.stdout.strip():
+        raise RuntimeError('No NVIDIA GPU found: nvidia-smi reported none. Run setup on a machine with an NVIDIA GPU.')
+    for path in CUDA_BUILD_FILES:
+        if os.path.lexists(path) and not os.access(path, os.W_OK):
+            raise RuntimeError(f'{path} belongs to another user (an earlier LocalFold build). '
+                               'Ask them or an administrator to remove it, then retry Predict.')
+    return native
+
+
+# cuda/build.sh always builds LocalFold's design-model (RFD4-Proteina) featuriser too. At the
+# pinned revision it does not link on glibc < 2.34 (no -ldl: EL8, Ubuntu 20.04) and rewrites two
+# committed probe binaries. AlphaLens does not use it; the AF2/AF3 engines do not depend on it.
+OPTIONAL_CUDA_FAILURES = ('FAILED rfd4p-featurise',)
+
+
+def restore_tracked_files(source):
+    """Undo build byproducts in tracked files: the checkout was verified clean before the build."""
+    status = subprocess.check_output(['git', '-C', str(source), 'status', '--porcelain', '--untracked-files=no'],
+                                     text=True)
+    paths = [line[3:] for line in status.splitlines() if line[3:]]
+    if paths:
+        subprocess.run(['git', '-C', str(source), 'checkout', '--', *paths], check=True)
+    return paths
+
+
+def build(source, native, models, env):
+    command = ['bash', f'{native}/build.sh', *models]
+    code = subprocess.run(command, cwd=source, env=env).returncode
+    restored = restore_tracked_files(source)
+    if restored:
+        progress('Restored files the build rewrote: ' + ', '.join(restored))
+    if code == 0:
+        return
+    if native == 'cuda':
+        try:
+            log = Path(CUDA_BUILD_FILES[1]).read_text(errors='replace')
+        except OSError:
+            log = ''
+        failed = [line.strip() for line in log.splitlines() if line.startswith('FAILED')]
+        built = all(os.access(source / native / m / f'localfold-{m}', os.X_OK) for m in models)
+        if failed and built and all(line.startswith(OPTIONAL_CUDA_FAILURES) for line in failed):
+            progress('LocalFold\'s design-model featuriser did not build; AlphaLens does not use it')
+            return
+    raise subprocess.CalledProcessError(code, command)
+
+
+def cuda_library_directory():
+    """The toolkit directory holding cuBLAS, written into the binaries so they run without module load."""
+    nvcc = shutil.which('nvcc')
+    if not nvcc:
+        return None
+    root = Path(nvcc).resolve().parent.parent
+    for directory in (root / 'lib64', root / 'targets' / 'x86_64-linux' / 'lib', root / 'lib'):
+        if any(directory.glob('libcublas.so*')):
+            return directory
+    return None   # Elsewhere, such as a distribution package in the loader's default path.
 
 
 def install(prefix, models, source=None):
     """Build under an installation lock; preserve existing tracked source files."""
-    check_prerequisites()
+    native = check_prerequisites()
     import fcntl
     prefix = Path(prefix).expanduser().resolve()
     prefix.mkdir(parents=True, exist_ok=True)
@@ -66,17 +152,22 @@ def install(prefix, models, source=None):
         progress('Building ' + ', '.join(m.upper() for m in models) + ' (first use only)')
         env = dict(os.environ, PYTHONUTF8='1', PYTHONDONTWRITEBYTECODE='1')
         env['PATH'] = str(Path(sys.executable).parent) + os.pathsep + env.get('PATH', '/usr/bin:/bin')
-        subprocess.run(['bash', 'metal/build.sh', *models], cwd=source, env=env, check=True)
+        if native == 'cuda':
+            library = cuda_library_directory()
+            if library:
+                env['LOCALFOLD_RPATH'] = str(library)
+        build(source, native, models, env)
         target_dir = prefix / 'bin'
         target_dir.mkdir(parents=True, exist_ok=True)
         for model in models:
             target = target_dir / f'localfold-{model}'
             temporary = target.with_suffix('.part')
-            shutil.copy2(source / f'metal/{model}/localfold-{model}', temporary)
+            shutil.copy2(source / f'{native}/{model}/localfold-{model}', temporary)
             checksum = hashlib.sha256(temporary.read_bytes()).hexdigest()
             info = target.with_suffix('.json')
             receipt = info.with_suffix('.json.part')
-            receipt.write_text(json.dumps(dict(repository=REPOSITORY, revision=head, sha256=checksum), indent=2)+'\n', encoding='utf-8')
+            receipt.write_text(json.dumps(dict(repository=REPOSITORY, revision=head, sha256=checksum, native=native),
+                                          indent=2)+'\n', encoding='utf-8')
             temporary.replace(target)
             receipt.replace(info)
             progress(f'Installed {target}')

@@ -13,6 +13,14 @@ from Qt.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFormLayo
 from . import predict
 from . import predict_contacts
 from . import predict_features
+from .predict_setup import native_platform
+
+PLATFORM_TEXT = {'metal': 'Local protein prediction on Apple Silicon (Metal)',
+                 'cuda': 'Local protein prediction on an NVIDIA GPU (CUDA)',
+                 None: 'Local protein prediction needs Apple Silicon macOS or Linux x86_64 with an NVIDIA GPU'}
+SETUP_REQUIREMENTS = {'metal': 'Requires Apple Silicon and Xcode Command Line Tools',
+                      'cuda': 'Requires an NVIDIA GPU, the CUDA toolkit (nvcc, cuBLAS) and g++',
+                      None: 'Requires Apple Silicon macOS, or Linux x86_64 with an NVIDIA GPU'}
 
 
 def snapshot(plot, flanks):
@@ -162,7 +170,7 @@ class PredictionDialog(QDialog):
         self.setWindowTitle('Local protein prediction · experimental')
         self.resize(660, 400)
         layout = QVBoxLayout(self)
-        intro = QLabel('Local protein prediction on Apple Silicon\n'
+        intro = QLabel(PLATFORM_TEXT.get(native_platform(), PLATFORM_TEXT[None]) + '\n'
                        'Model weights download on the first run and are cached locally.')
         intro.setWordWrap(True); layout.addWidget(intro)
         self.input_widgets = []
@@ -470,7 +478,8 @@ class PredictionDialog(QDialog):
     def refresh(self, *args):
         needs_setup = self.needs_setup()
         self.setup_hint.setText('First use: Install & Predict downloads and builds LocalFold in the background. '
-                                'Requires Apple Silicon and Xcode Command Line Tools; setup can be cancelled.')
+                                + SETUP_REQUIREMENTS.get(native_platform(), SETUP_REQUIREMENTS[None])
+                                + '; setup can be cancelled.')
         self.setup_hint.setVisible(needs_setup)
         self.start_button.setText('Install & Predict' if needs_setup else 'Predict')
         msa_ready = (self.reuse.isChecked() or self.search.isChecked() or bool(self.msa.text().strip())

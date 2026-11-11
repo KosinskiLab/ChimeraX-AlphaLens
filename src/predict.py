@@ -13,6 +13,7 @@ import sys
 import time
 
 from .predict_setup import REVISION as ENGINE_REVISION
+NATIVE_NAMES = dict(metal='Metal', cuda='CUDA')
 MODEL = 'model_1_multimer_v3'
 MONOMER_MODEL = 'model_1_ptm'
 AMINO_ACIDS = 'ACDEFGHIKLMNPQRSTVWY'
@@ -53,6 +54,14 @@ def record_af3_terms_acceptance():
     write_json(root / 'af3_terms.json', dict(accepted=True, accepted_at=datetime.now(timezone.utc).isoformat(),
         terms='https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_TERMS_OF_USE.md',
         policy='https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_PROHIBITED_USE_POLICY.md'))
+
+
+def engine_platform():
+    """The native build that runs engines on this OS: Metal on macOS, CUDA on Linux.
+
+    Decided by the OS, not by Python's architecture: an x86_64 Python under Rosetta on
+    Apple Silicon still launches the arm64 Metal engine and needs its AF3 settings."""
+    return {'darwin': 'metal', 'linux': 'cuda'}.get(sys.platform)
 
 
 def default_executable(backend='af2'):
@@ -398,7 +407,8 @@ class PredictionJob:
             engine_info = json.loads(provenance.read_text()) if provenance.exists() else {}
             binary_hash = digest(self.executable)
             revision = engine_info.get('revision') if engine_info.get('sha256') == binary_hash else 'unverified'
-            self.manifest = dict(engine='LocalFold native Metal', revision=revision,
+            native = engine_platform()
+            self.manifest = dict(engine='LocalFold native ' + NATIVE_NAMES.get(native, 'engine'), revision=revision,
                                  executable_sha256=binary_hash, model=self.model,
                                  weights=('LocalFold AF3 int8 parameters (DeepMind AF3 terms)'
                                           if self.backend == 'af3' else f'LocalFold AF2 {self.model} int5 bundle (CC BY 4.0)'),
@@ -413,15 +423,14 @@ class PredictionJob:
             env = os.environ.copy()
             if self.backend == 'af3':
                 env['LOCALFOLD_ACCEPT_MODEL_TERMS'] = 'alphafold3'
-                # The pinned engine's M5 tensor path collapses AF3 coordinates.
-                # Its conventional Metal kernels pass the 1BRS crystal control.
-                env['LOCALFOLD_GEMM_TENSOR'] = '0'
-                env['LOCALFOLD_ATTN_TENSOR'] = '0'
-                # Foundation otherwise buffers AF3 stdout until inference finishes.
-                env['NSUnbufferedIO'] = 'YES'
                 self.manifest['af3_terms_accepted'] = True
-                self.manifest['runtime_environment'] = dict(LOCALFOLD_GEMM_TENSOR='0', LOCALFOLD_ATTN_TENSOR='0',
-                                                            NSUnbufferedIO='YES')
+                if native == 'metal':
+                    # The pinned engine's M5 tensor path collapses AF3 coordinates.
+                    # Its conventional Metal kernels pass the 1BRS crystal control.
+                    # Foundation otherwise buffers AF3 stdout until inference finishes.
+                    runtime = dict(LOCALFOLD_GEMM_TENSOR='0', LOCALFOLD_ATTN_TENSOR='0', NSUnbufferedIO='YES')
+                    env.update(runtime)
+                    self.manifest['runtime_environment'] = runtime
             launch = args
             if self.model == MODEL and revision == ENGINE_REVISION:
                 from .predict_weights import HEAD_SHA256
