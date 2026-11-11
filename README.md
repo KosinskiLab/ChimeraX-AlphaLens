@@ -14,8 +14,8 @@ sequences, FASTA or UniProt IDs, or re-predict an interface selected in the plot
   alt="AlphaLens plot in the contact-probability view, with dots on the inter-chain contacts"></p>
 
 *The contact-probability view for an AlphaFold2 prediction of E. coli succinyl-CoA synthetase,
-SucC–SucD (UniProt P0A836, P0AGE9). Blue dots mark the inter-chain pairs with P ≥ 0.5, darker for
-higher P. The one ringed in gold was clicked; its values are in the line under the slider.*
+SucC–SucD (UniProt P0A836, P0AGE9). Dots mark the inter-chain pairs with P ≥ 0.5, colored by P in
+the pLDDT bands. The ringed one was clicked; its values are in the line under the slider.*
 
 | View | Matrix | Colors (dark = confident) |
 |---|---|---|
@@ -28,16 +28,17 @@ higher P. The one ringed in gold was clicked; its values are in the line under t
 <p align="center"><img src="docs/images/views.png" width="760"
   alt="The PAE, contact-probability, model-distance, spread and agreement views of one prediction, and its contacts drawn on the structure"></p>
 
-*The five views of the same prediction, each with the predicted contacts as blue dots, and its
+*The five views of the same prediction, each with the predicted contacts as dots, and its
 inter-chain contacts with P ≥ 0.5 drawn on the structure by Show Contacts. In the spread view, grey marks pairs whose distance is mostly beyond
 the last distogram bin. The agreement view counts the five AlphaFold2 models in which each pair has
 P ≥ 0.5.*
 
 ## Install
 
-Version 1.2.1 sets up LocalFold when you first predict, reopens saved local prediction
-folders, and keeps the selected-region preview in sync with the plot. It includes all
-AF3, progress, score-report and hover fixes from 1.1.3.
+Version 1.3.0 colors predicted contacts by a fixed P scale in the pLDDT colors and adds a
+"dots on plot" switch next to the slider. Since 1.2.1, AlphaLens sets up LocalFold when you
+first predict, reopens saved local prediction folders, and keeps the selected-region preview
+in sync with the plot.
 
 Requires ChimeraX 1.6 or newer; tested with 1.10 and 1.12. The bundle is pure Python, so one wheel works on
 macOS, Linux and Windows. The optional local prediction engine currently requires
@@ -48,7 +49,7 @@ Apple Silicon macOS 13 or newer and is tested with ChimeraX 1.12.
    pip needs it.
 2. In the ChimeraX command line:
 
-       toolshed install ~/Downloads/chimerax_alphalens-1.2.1-py3-none-any.whl
+       toolshed install ~/Downloads/chimerax_alphalens-1.3.0-py3-none-any.whl
 
 3. Restart ChimeraX.
 
@@ -144,23 +145,26 @@ bar above the plot shows how far it has come; the Spread tab turns on when it fi
   are present locally. The chosen model opens in the same window, superposed on the previous one,
   which is hidden; the view and zoom are kept.
 * **Contact dots:** in every view, inter-chain pairs above the slider threshold (pairs at least
-  24 matrix positions apart for a single chain) are drawn as blue dots that stay visible at any
-  zoom, darker blue for higher P (the scale is next to the color bar). Right-click to turn them
-  off, or to keep them to the contact-probability view. At most the 40,000 strongest pairs are
+  24 matrix positions apart for a single chain) are drawn as dots that stay visible at any zoom.
+  Their color is a fixed scale of P with the pLDDT colors and bands (P × 100 as the score):
+  orange below 0.5, yellow 0.5–0.7, light blue 0.7–0.9, dark blue 0.9 and above. The slider
+  only decides which pairs are drawn, not their color; the legend next to the color bar fades
+  the range below the threshold. Untick **dots on plot** next to the slider to see the matrix
+  colors underneath; right-click to keep the dots to the contact-probability view. At most the 40,000 strongest pairs are
   shown as dots; CSV export is not capped by this display limit.
 * **Hide by pLDDT:** the vertical slider right of the pLDDT track hides the parts of the model
   with pLDDT below its value; a line marks the value and hidden residues fade on the track.
 * **Hide selected:** drag along the pLDDT track to select residues, then right-click the plot and
   choose Hide selected. It also hides residues selected in the 3D view. Show hidden restores them.
-* **Predicted contacts P ≥ slider:** one threshold (0.05–1, default 0.2) for the dots, the 3D
-  lines, the agreement view and the CSV export. "hide in matrix too" also blanks matrix pixels
+* **Contact probability ≥ slider:** one threshold on the predicted P (0.05–1, default 0.2) for
+  the dots, the 3D lines, the agreement view and the CSV export. "hide in matrix too" also blanks matrix pixels
   below it.
 * **Show Contacts:** draws all predicted contacts above the slider threshold on the structure as
-  CA–CA lines, in the same blue as the dots, thicker for higher P; weak contacts are drawn
+  CA–CA lines, in the same colors as the dots, thicker for higher P; weak contacts are drawn
   semi-transparent, so the confident interfaces stand out. Move the slider down to 0.05 to see
   every contact. Up to 10,000 lines are drawn, strongest first.
-* **Click a dot:** draws that contact on the structure as a thick gold line (the plot rings the
-  dot in the same gold), labels both residues and shows their side chains. The log gives P, both
+* **Click a dot:** draws that contact on the structure as a thick magenta line (the plot rings
+  the dot in the same magenta), labels both residues and shows their side chains. The log gives P, both
   PAE values, the expected distance (with a distogram) and the CA–CA distance in the model.
   Clicking another dot replaces it. Right-click > Clear clicked contact removes it; with
   right-click > Zoom 3D view to clicked contact switched on, the camera also moves there.

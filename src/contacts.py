@@ -18,18 +18,25 @@ DEFAULT_MIN_P = 0.2         # Initial slider threshold; also used by "saveContac
 # Band edges of the banded contact color scale of the matrix.
 BAND_EDGES = (0.2, 0.5, 0.8)
 
-# Predicted contacts (plot dots and lines on the structure) are blue, darker for higher P:
-# blue reads as confident, and red stays free for clashes. The strongest color is the
-# AlphaFold "very high pLDDT" blue.
-CONTACT_RAMP = ((0.0, (198, 219, 239)), (0.5, (66, 146, 198)), (1.0, (0, 83, 214)))
+# AlphaFold pLDDT colors, lowest band first: very low, low, confident, very high.
+PLDDT_COLORS = ((255, 125, 69), (255, 219, 19), (101, 203, 243), (0, 83, 214))
+
+# Predicted contacts (plot dots and lines on the structure) use the pLDDT bands with P x 100
+# as the score: orange P < 0.5, yellow 0.5-0.7, light blue 0.7-0.9, dark blue >= 0.9. The
+# color depends on P alone, never on the slider threshold, so it reads as a confidence.
+CONTACT_COLOR_EDGES = (0.5, 0.7, 0.9)
+CONTACT_COLORS = PLDDT_COLORS
+
+
+def contact_band(p):
+    '''Index into CONTACT_COLORS of contact probabilities p (0 = lowest band).'''
+    p = np.asarray(p, np.float32)       # float32 edges too: P stored as 0.9 is in the 0.9 band
+    return np.searchsorted(np.array(CONTACT_COLOR_EDGES, np.float32), p, side='right')
 
 
 def contact_rgb(p):
-    '''(k, 3) uint8 colors of contact probabilities p on the blue contact ramp.'''
-    p = np.clip(np.asarray(p, np.float32), 0, 1)
-    x = [v for v, _ in CONTACT_RAMP]
-    return np.stack([np.interp(p, x, [c[k] for _, c in CONTACT_RAMP]) for k in range(3)],
-                    axis=-1).round().astype(np.uint8)
+    '''(k, 3) uint8 colors of contact probabilities p in the pLDDT-style bands.'''
+    return np.array(CONTACT_COLORS, np.uint8)[contact_band(p)]
 
 
 def row_chain_ids(pae):
@@ -141,7 +148,8 @@ MAX_LINES = 10000            # Most contact lines drawn on the structure at once
 
 def show_contacts(pae, min_p=0.5, region=None, max_pairs=MAX_LINES, log=True, candidates=None):
     '''
-    Draw contacts as pseudobonds (CA-CA), blue and thicker for higher P. Returns count.
+    Draw contacts as pseudobonds (CA-CA), colored by P (contact_rgb) and thicker for higher
+    P. Returns count.
     candidates: precomputed (pairs, probs) from contact_pairs() with a threshold <= min_p.
     '''
     s = pae.structure
@@ -278,8 +286,8 @@ def write_contacts_csv(pae, path, min_p, region=None, agreement=None):
 # -----------------------------------------------------------------------------
 
 PICK_GROUP_NAME = 'AlphaLens picked contact'
-PICK_RGB = (255, 190, 0)                # Gold, as the ring around the clicked dot in the plot
-PICK_RGBA = PICK_RGB + (255,)           # Drawn thicker than the blue contact lines
+PICK_RGB = (230, 0, 230)                # Magenta, as the ring around the clicked dot in the plot;
+PICK_RGBA = PICK_RGB + (255,)           # not a contact color. Thicker than the contact lines.
 
 
 def _residue_spec(ra):
@@ -289,7 +297,7 @@ def _residue_spec(ra):
 
 
 def show_picked_contact(pae, i, j, log=True, zoom=False):
-    '''Highlight one residue pair: thick gold line, residue labels, side chains shown.'''
+    '''Highlight one residue pair: thick magenta line, residue labels, side chains shown.'''
     from chimerax.atomic import Residue
     from chimerax.core.commands import run
     s = pae.structure

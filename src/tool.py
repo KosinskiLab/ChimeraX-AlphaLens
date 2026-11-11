@@ -5,7 +5,8 @@ when the data exist.
 
 All matrices use the AlphaFold-DB green ramp (dark green = confident: low PAE, high contact
 probability, sharp distance distribution, contact in many seeds or models). Predicted
-contacts drawn on top of the matrix (dots) and on the structure (lines) are blue.
+contacts drawn on top of the matrix (dots) and on the structure (lines) have the pLDDT colors,
+banded by contact probability (orange < 0.5, yellow, light blue, dark blue >= 0.9).
 
 Interaction: scroll wheel / pinch zooms at the cursor, Shift-drag or middle-drag pans,
 "Fit" resets. When zoomed into a large matrix the
@@ -18,18 +19,17 @@ import numpy as np
 from chimerax.core.tools import ToolInstance
 from chimerax.alphafold.pae import PAEView, pae_pixmap
 
-from .contacts import BAND_EDGES, DEFAULT_MIN_P, DISTANCE_FAR, PICK_RGB, contact_rgb
+from .contacts import (BAND_EDGES, CONTACT_COLOR_EDGES, CONTACT_COLORS, DEFAULT_MIN_P,
+                       DISTANCE_FAR, PICK_RGB, PLDDT_COLORS, contact_band, contact_rgb)
 from .hide import RowHider, true_runs
 
 # pLDDT colors used by AlphaFold / the "alphafold" palette.
-PLDDT_BINS = ((90, (0, 83, 214)), (70, (101, 203, 243)), (50, (255, 219, 19)),
-              (-1e9, (255, 125, 69)))
+PLDDT_BINS = tuple(zip((-1e9, 50, 70, 90), PLDDT_COLORS))[::-1]
 
 MAX_DISPLAY = 900          # Matrices larger than this are pooled for the overview image
 MAX_DETAIL = 1200          # Max pixels per side when redrawing a zoomed region
 MAX_PIXELS_PER_RESIDUE = 40
 MAX_DOTS = 40000
-DOT_LEVELS = 20            # Color steps of the contact dots
 SLIDER_MIN = 0.05          # Lowest contact threshold offered by the slider
 UNDEFINED_GRAY = (190, 190, 190)   # Spread view: pairs whose distance is mostly in the last bin
 DISTANCE_NEAR_GREY = 0.42          # Model distances view: grey at the contact cutoff (white at far)
@@ -635,7 +635,7 @@ class AlphaLensPlot(ToolInstance):
         tw_ = QWidget(parent)
         tl = QHBoxLayout(tw_)
         tl.setContentsMargins(0, 0, 0, 0)
-        tl.addWidget(QLabel('Predicted contacts  P ≥', tw_))
+        tl.addWidget(QLabel('Contact probability ≥', tw_))
         self._slider = sl_ = QSlider(Qt.Orientation.Horizontal, tw_)
         sl_.setRange(int(SLIDER_MIN * 100), 100)
         sl_.setValue(int(round(self._threshold * 100)))
@@ -646,6 +646,12 @@ class AlphaLensPlot(ToolInstance):
         self._slider_label = QLabel(f'{self._threshold:.2f}', tw_)
         self._slider_label.setMinimumWidth(self._slider_label.fontMetrics().horizontalAdvance('0.00') + 4)
         tl.addWidget(self._slider_label)
+        self._dots_box = db = QCheckBox('dots on plot', tw_)
+        db.setChecked(self._dots_on)
+        db.setToolTip('Draw the predicted contacts above the threshold as dots on the plot. '
+                      'Switch off to see the matrix colors underneath')
+        db.toggled.connect(self.set_dots_shown)
+        tl.addWidget(db)
         self._mask_box = mb = QCheckBox('hide in matrix too', tw_)
         mb.setToolTip('Also blank contact-matrix pixels below the threshold')
         mb.toggled.connect(self._set_mask_matrix)
@@ -1004,7 +1010,11 @@ class AlphaLensPlot(ToolInstance):
         self._redraw(keep_zoom=True)
 
     def set_dots_shown(self, show):
-        self._dots_on = show
+        self._dots_on = bool(show)
+        if self._dots_box.isChecked() != self._dots_on:
+            self._dots_box.blockSignals(True)
+            self._dots_box.setChecked(self._dots_on)
+            self._dots_box.blockSignals(False)
         self._update_dots()
         self._redraw(keep_zoom=True)
 
@@ -1134,7 +1144,7 @@ class AlphaLensPlot(ToolInstance):
         cb.setText('Hide Contacts' if cb.isChecked() else 'Show Contacts')
         self._threshold_row.setEnabled(self._pae.has_contact)
         cb.setToolTip(f'Draw all predicted contacts with P ≥ {self._threshold:.2f} on the structure '
-                      'as lines, darker blue and thicker for higher P; dragging a box in the plot '
+                      'as lines, colored by P as the dots and thicker for higher P; dragging a box in the plot '
                       'limits them to that region' if self._pae.has_contact
                       else 'Needs contact probabilities')
 
@@ -1418,14 +1428,14 @@ class AlphaLensPlot(ToolInstance):
         i, j = pairs[:, 0] + 0.5, pairs[:, 1] + 0.5
         v.dot_xy = np.concatenate([np.stack([j, i], 1), np.stack([i, j], 1)])
         v.dot_pairs = np.concatenate([pairs, pairs])
-        # Blue by P, as the lines on the structure; drawn in DOT_LEVELS color steps
-        levels = np.minimum((probs * DOT_LEVELS).astype(int), DOT_LEVELS - 1)
-        for b in np.unique(levels):
-            sel = pairs[levels == b]
+        # Colored by P in the pLDDT-style bands, as the lines on the structure; drawn low band
+        # first, so the confident contacts end up on top
+        bands = contact_band(probs)
+        for b in np.unique(bands):
+            sel = pairs[bands == b]
             bi, bj = sel[:, 0] + 0.5, sel[:, 1] + 0.5
             pts = [QPointF(x, y) for x, y in zip(np.concatenate([bj, bi]), np.concatenate([bi, bj]))]
-            rgb = contact_rgb((b + 0.5) / DOT_LEVELS)
-            v.dots.append((QColor(*(int(c) for c in rgb)), QPolygonF(pts)))
+            v.dots.append((QColor(*CONTACT_COLORS[b]), QPolygonF(pts)))
         self._update_picked_marker()
 
     # -- Picked contact (click on a dot) --------------------------------------------------
@@ -1499,10 +1509,10 @@ class AlphaLensPlot(ToolInstance):
         dpr = self._cbar.devicePixelRatioF()
         w, gh, H = 260, 12, 30
         x0, x1 = 20, 20 + w
-        # Legend of the blue contact colors when dots or lines are shown
+        # Legend of the contact colors when dots or lines are shown
         dots = self._view.dots_visible or (self._struct_contacts and self._pae.has_contact)
         model_plain = mode.key == 'model' and not self._pae.has_contact
-        extra = 170 + (200 if dots else 0) + (250 if mode.key == 'model' else 0)
+        extra = 170 + (260 if dots else 0) + (250 if mode.key == 'model' else 0)
         pm = QPixmap(int((w + extra) * dpr), int(H * dpr))
         pm.setDevicePixelRatio(dpr)
         pm.fill(Qt.GlobalColor.transparent)
@@ -1562,20 +1572,41 @@ class AlphaLensPlot(ToolInstance):
         elif mode.key == 'model':
             sx = self._draw_distance_ramp(p, sx, gh)
         if dots:
-            # Predicted contacts (dots and lines): blue ramp from the threshold to 1
-            label = 'contacts:'
-            p.drawText(int(sx), 2 + gh, label)
-            sx += fm.horizontalAdvance(label) + 6
-            t = self._threshold
-            lw = 70
-            ramp = np.ascontiguousarray(contact_rgb(np.linspace(t, 1, lw))[None, :, :].repeat(gh, 0))
-            p.drawImage(QRectF(sx, 2, lw, gh),
-                        QImage(ramp.data, lw, gh, 3 * lw, QImage.Format.Format_RGB888))
-            p.drawRect(QRectF(sx, 2, lw, gh))
-            for tv, tx in ((f'{t:.2f}', sx), ('1', sx + lw)):
-                p.drawText(int(tx - fm.horizontalAdvance(tv) / 2), 5 + gh + fm.ascent(), tv)
+            self._draw_contact_legend(p, sx, gh)
         p.end()
         self._cbar.setPixmap(pm)
+
+    def _draw_contact_legend(self, p, sx, gh):
+        '''
+        Colors of the predicted contacts (dots and lines): the fixed P scale from 0 to 1, with
+        the part below the slider threshold (not drawn) faded and the threshold marked.
+        '''
+        from Qt.QtGui import QColor, QImage
+        from Qt.QtCore import QRectF, QPointF
+        fm = p.fontMetrics()
+        label = 'contact probability:'
+        p.drawText(int(sx), 2 + gh, label)
+        sx += fm.horizontalAdvance(label) + 6
+        lw = 120
+        ramp = np.ascontiguousarray(contact_rgb((np.arange(lw) + 0.5) / lw)[None, :, :].repeat(gh, 0))
+        p.drawImage(QRectF(sx, 2, lw, gh), QImage(ramp.data, lw, gh, 3 * lw, QImage.Format.Format_RGB888))
+        t = self._threshold
+        if t > 0:
+            p.fillRect(QRectF(sx, 2, t * lw, gh), QColor(255, 255, 255, 170))
+        p.drawRect(QRectF(sx, 2, lw, gh))
+        for e in (0.0,) + CONTACT_COLOR_EDGES + (1.0,):
+            x = sx + e * lw
+            p.drawLine(int(x), 2 + gh, int(x), 5 + gh)
+            if e < 1:       # "1" would run into "0.9"; the bar ends there
+                tv = f'{e:g}'
+                p.drawText(int(x - fm.horizontalAdvance(tv) / 2), 5 + gh + fm.ascent(), tv)
+        # Threshold: a dark tick through the bar
+        x = sx + t * lw
+        pen = p.pen()
+        p.setPen(QColor(20, 20, 20))
+        p.drawLine(QPointF(x, 0), QPointF(x, 2 + gh + 2))
+        p.setPen(pen)
+        return sx + lw + 20
 
     def _draw_distance_ramp(self, p, sx, gh):
         '''Grey ramp of the Model distances view (cutoff to DISTANCE_FAR Å); returns the next x.'''
@@ -1944,7 +1975,10 @@ class AlphaLensPlot(ToolInstance):
         self._spread_measure = st.get('spread_measure', self._spread_measure)
         self._contact_scale = st.get('contact_scale', self._contact_scale)
         self._far_threshold = st.get('far_threshold', self._far_threshold)
-        self._dots_on = st.get('dots_on', self._dots_on)
+        self._dots_on = bool(st.get('dots_on', self._dots_on))
+        self._dots_box.blockSignals(True)
+        self._dots_box.setChecked(self._dots_on)
+        self._dots_box.blockSignals(False)
         self._dots_all_views = st.get('dots_all_views', self._dots_all_views)
         self._zoom_to_pick = st.get('zoom_to_pick', self._zoom_to_pick)
         self._drag_colors_structure = st.get('drag_colors_structure', self._drag_colors_structure)
