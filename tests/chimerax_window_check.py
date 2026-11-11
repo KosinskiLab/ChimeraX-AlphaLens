@@ -145,9 +145,21 @@ def check_prediction(c, pkg, label, path):
     c.pump(0.5)
     group = s.pseudobond_group(contacts.GROUP_NAME, create_type=None)
     n = group.num_pseudobonds if group else 0
-    colors = group.pseudobonds.colors.astype(int) if n else np.zeros((0, 4), int)
-    c.check(f'{label} Show Contacts', n == min(len(pairs), contacts.MAX_LINES)
-            and bool((colors[:, 2] > colors[:, 0]).all()), f'{n} blue lines, {len(pairs)} pairs at P ≥ 0.5')
+    colors = group.pseudobonds.colors[:, :3].astype(int) if n else np.zeros((0, 3), int)
+    palette = np.array(contacts.CONTACT_COLORS)
+    in_palette = bool((np.abs(colors[:, None, :] - palette[None]).max(-1) == 0).any(1).all())
+    c.check(f'{label} Show Contacts', n == min(len(pairs), contacts.MAX_LINES) and in_palette
+            and len(colors) > 0 and not (np.abs(colors - palette[0]).max(-1) == 0).any(),
+            f'{n} lines in the contact colors, none orange at P ≥ 0.5; {len(pairs)} pairs')
+    dot_rgb = {(q.red(), q.green(), q.blue()) for q, _ in plot._view.dots}
+    c.check(f'{label} contact dots in the fixed P colors', bool(dot_rgb)
+            and dot_rgb <= set(contacts.CONTACT_COLORS[1:]), str(sorted(dot_rgb)))
+    plot._dots_box.setChecked(False)
+    c.pump(0.2)
+    hidden = not plot._dots_on and not plot._view.dots and not plot._view.dots_visible
+    plot._dots_box.setChecked(True)
+    c.pump(0.2)
+    c.check(f'{label} "dots on plot" box', hidden and plot._dots_on and bool(plot._view.dots))
     plot._pick_contact(i, j)
     c.pump(0.3)
     picked = s.pseudobond_group(contacts.PICK_GROUP_NAME, create_type=None)

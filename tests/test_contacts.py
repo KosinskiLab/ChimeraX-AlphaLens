@@ -23,20 +23,21 @@ def _pae_module():
     return importlib.import_module('alphalens.pae')
 
 
-def test_contact_rgb_is_blue_and_darker_for_higher_p():
-    rgb = contacts.contact_rgb(np.linspace(0, 1, 11)).astype(int)
-    assert rgb.shape == (11, 3)
-    assert tuple(rgb[0]) == contacts.CONTACT_RAMP[0][1]
-    assert tuple(rgb[-1]) == contacts.CONTACT_RAMP[-1][1]
-    assert (rgb[:, 2] >= rgb[:, 0]).all()                   # Blue, never red
-    lum = rgb @ np.array([0.2126, 0.7152, 0.0722])
-    assert (np.diff(lum) < 0).all()                         # Darker as P grows
-    assert tuple(contacts.contact_rgb(1.5)) == tuple(rgb[-1])   # Clipped
+def test_contact_colors_are_plddt_bands_of_p():
+    # Fixed bands of P (as pLDDT / 100), independent of any threshold: orange, yellow,
+    # light blue, dark blue. float32 values on an edge belong to the band above it.
+    p = np.array([0.0, 0.2, 0.49, 0.5, 0.69, np.float32(0.7), 0.89, np.float32(0.9), 1.0, 1.5, -1])
+    bands = [0, 0, 0, 1, 1, 2, 2, 3, 3, 3, 0]
+    rgb = contacts.contact_rgb(p)
+    assert rgb.dtype == np.uint8 and rgb.shape == (len(p), 3)
+    assert [tuple(int(v) for v in c) for c in rgb] == [contacts.PLDDT_COLORS[b] for b in bands]
+    assert contacts.PLDDT_COLORS[0] == (255, 125, 69) and contacts.PLDDT_COLORS[-1] == (0, 83, 214)
+    assert tuple(contacts.contact_rgb(0.95)) == contacts.PLDDT_COLORS[-1]      # Scalar input
 
 
-def test_picked_contact_is_not_red():
-    r, g, b = contacts.PICK_RGB
-    assert g > 100                                          # Gold, not red
+def test_picked_contact_stands_out_from_contact_colors():
+    pick = np.array(contacts.PICK_RGB)
+    assert all(np.abs(pick - np.array(c)).max() > 100 for c in contacts.CONTACT_COLORS)
 
 
 def test_contact_mask():
