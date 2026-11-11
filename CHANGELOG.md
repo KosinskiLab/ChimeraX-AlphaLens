@@ -6,11 +6,15 @@
   CUDA engines, from the same pinned revision as the Metal ones, when `nvcc`, cuBLAS and `g++`
   are available. A missing tool, a machine without a GPU and another user's LocalFold build
   files are reported with what to do. The engines find cuBLAS without the CUDA module loaded.
+  Each engine is built for the GPU generation it was set up on, and AlphaLens refuses to run it
+  on another: A100-built engines gave NaN or wrong structures on an H100.
   Checked on an A100 against the 1BRS crystal and the Metal results (see the prediction guide).
 * `job.json` names the engine: "LocalFold native Metal" or "LocalFold native CUDA". The AF3
   settings that work around the Metal tensor path are set on macOS only.
 * Add `tests/localfold_engine_check.py`: real AF2-Multimer, AF2-monomer and AF3 predictions
   through `PredictionJob` without ChimeraX, scored against 1BRS and, optionally, an earlier run.
+* The AlphaPulldown-feature unit tests no longer need AlphaPulldown or AlphaFold installed; five
+  of them failed on machines without those packages.
 * Local predictions can take their alignments from precomputed AlphaPulldown features instead of
   an MSA search: tick **Use precomputed AlphaPulldown features** in the prediction dialog. The
   features come from the lab database (`/g/alphafold/input_features`), its public copy

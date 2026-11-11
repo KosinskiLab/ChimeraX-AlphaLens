@@ -313,3 +313,33 @@ def test_engine_platform_follows_the_os_not_python_architecture(monkeypatch):
     for system, native in (('darwin', 'metal'), ('linux', 'cuda'), ('win32', None)):
         monkeypatch.setattr(predict.sys, 'platform', system)
         assert predict.engine_platform() == native
+
+
+def test_cuda_engine_built_for_another_gpu_generation_is_refused(tmp_path, monkeypatch):
+    # Seen on the EMBL cluster: A100-built engines on an H100 gave NaN, or a wrong AF2 monomer.
+    binary = tmp_path / 'bin' / 'localfold-af2'
+    binary.parent.mkdir()
+    binary.write_text('#!/bin/sh\n')
+    binary.chmod(0o755)
+    receipt = dict(revision=predict.ENGINE_REVISION, sha256=predict.digest(binary), native='cuda',
+                   cuda_compute_capability='8.0')
+    binary.with_suffix('.json').write_text(json.dumps(receipt))
+    monkeypatch.setattr(predict.sys, 'platform', 'linux')
+    chains = [dict(sequence='AA', residue_map=[{}, {}])] * 2
+    def make():
+        return PredictionJob(tmp_path / 'job', chains, executable=binary, cache=tmp_path / 'cache', search=True)
+    monkeypatch.setattr(predict, 'cuda_compute_capability', lambda: '9.0')
+    with pytest.raises(ValueError, match='compute capability 8.0, but this GPU has 9.0'):
+        make()
+    assert not (tmp_path / 'job').exists()
+    monkeypatch.setattr(predict, 'cuda_compute_capability', lambda: '8.0')
+    make()                                                   # the same generation
+    monkeypatch.setattr(predict, 'cuda_compute_capability', lambda: None)
+    make()                                                   # cannot tell: the engine reports its own errors
+    binary.write_text('#!/bin/sh\n# replaced by the user\n')
+    monkeypatch.setattr(predict, 'cuda_compute_capability', lambda: '9.0')
+    make()                                                   # no longer the receipt's engine: unverified
+    monkeypatch.setattr(predict.sys, 'platform', 'darwin')
+    receipt['sha256'] = predict.digest(binary)
+    binary.with_suffix('.json').write_text(json.dumps(receipt))
+    make()                                                   # Metal engines carry no GPU generation
