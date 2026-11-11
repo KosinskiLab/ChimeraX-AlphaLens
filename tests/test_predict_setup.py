@@ -199,3 +199,37 @@ def test_cuda_build_failures_that_matter_stop_setup(tmp_path, cuda_source, log, 
     with pytest.raises(subprocess.CalledProcessError):
         setup.install(tmp_path / 'prefix', ['af2'], source)
     assert not (tmp_path / 'prefix' / 'bin' / 'localfold-af2').exists()
+
+
+def test_source_comes_from_the_mirror_first_then_upstream(tmp_path, monkeypatch):
+    """KosinskiLab's fork is tried first; upstream only if the mirror lacks the pinned revision."""
+    assert setup.REPOSITORIES[0] == 'https://github.com/KosinskiLab/localfold.git'
+    calls = []
+
+    def fake_run(args, check):
+        calls.append(args)
+        if args[1] == 'clone':
+            Path(args[-1]).mkdir(exist_ok=True)
+            if args[-2] == 'https://mirror.invalid/localfold.git':
+                raise subprocess.CalledProcessError(128, args)
+    monkeypatch.setattr(setup.subprocess, 'run', fake_run)
+    source = tmp_path / 'engine' / setup.REVISION
+    source.parent.mkdir(parents=True)
+    used = setup.fetch_source(source, ('https://mirror.invalid/localfold.git', 'https://upstream.invalid/x.git'))
+    assert used == 'https://upstream.invalid/x.git' and source.is_dir()
+    assert [a[-2] for a in calls if a[1] == 'clone'] == ['https://mirror.invalid/localfold.git',
+                                                         'https://upstream.invalid/x.git']
+    assert not [p for p in source.parent.iterdir() if p.name.startswith('.localfold-setup-')]
+
+
+def test_source_download_failure_names_every_repository(tmp_path, monkeypatch):
+    def fail(args, check):
+        if args[1] == 'clone':
+            Path(args[-1]).mkdir(exist_ok=True)
+        raise subprocess.CalledProcessError(128, args)
+    monkeypatch.setattr(setup.subprocess, 'run', fail)
+    source = tmp_path / 'engine' / setup.REVISION
+    source.parent.mkdir(parents=True)
+    with pytest.raises(RuntimeError, match='a.invalid.*b.invalid.*retry Predict'):
+        setup.fetch_source(source, ('https://a.invalid/l.git', 'https://b.invalid/l.git'))
+    assert not source.exists()

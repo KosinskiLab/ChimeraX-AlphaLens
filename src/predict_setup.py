@@ -13,8 +13,12 @@ import tempfile
 import time
 import uuid
 
-REVISION = '68c59196fa7d32c6edfc061ed369889c1cdb680b'
-REPOSITORY = 'https://github.com/sokrypton/localfold.git'
+# sokrypton/localfold 68c5919 (branch opus-55-opt) plus AlphaLens's residueIds patch (gapped residue
+# numbering for discontinuous regions), on KosinskiLab's fork: its protected 'alphalens' branch keeps
+# the pinned revision reachable while upstream moves the native engines into private submodules.
+REVISION = '837a15ca7c72c35c75739740bc7ed71ee9d5e09b'
+REPOSITORIES = ('https://github.com/KosinskiLab/localfold.git',)
+REPOSITORY = REPOSITORIES[0]
 PHASE = 'AlphaLens setup: '
 
 
@@ -131,6 +135,36 @@ def cuda_library_directory():
     return None   # Elsewhere, such as a distribution package in the loader's default path.
 
 
+def fetch_source(source, repositories=REPOSITORIES):
+    """Clone the pinned revision from the first repository that has it."""
+    errors = []
+    for repository in repositories:
+        stage = Path(tempfile.mkdtemp(prefix='.localfold-setup-', dir=source.parent))
+        try:
+            progress(f'Downloading LocalFold source from {repository}')
+            subprocess.run(['git', 'clone', '--filter=blob:none', '--no-checkout', repository, str(stage)], check=True)
+            subprocess.run(['git', '-C', str(stage), 'checkout', '--detach', REVISION], check=True)
+            stage.rename(source)
+            return repository
+        except subprocess.CalledProcessError as e:
+            errors.append(f'{repository}: {e}')
+        finally:
+            if stage.exists():
+                shutil.rmtree(stage)
+    raise RuntimeError('Could not download LocalFold revision ' + REVISION[:7] + ' from '
+                       + '; '.join(errors) + '. Check the network connection and retry Predict.')
+
+
+def source_repository(source):
+    """Where a clone came from, for the receipt; REPOSITORY for a source given without a remote."""
+    try:
+        url = subprocess.check_output(['git', '-C', str(source), 'remote', 'get-url', 'origin'],
+                                      text=True, stderr=subprocess.DEVNULL).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return REPOSITORY
+    return url or REPOSITORY
+
+
 def install(prefix, models, source=None):
     """Build under an installation lock; preserve existing tracked source files."""
     native = check_prerequisites()
@@ -145,15 +179,7 @@ def install(prefix, models, source=None):
         source = Path(source).expanduser().resolve() if source else prefix / 'engine' / REVISION
         if not source.exists():
             source.parent.mkdir(parents=True, exist_ok=True)
-            stage = Path(tempfile.mkdtemp(prefix='.localfold-setup-', dir=source.parent))
-            try:
-                progress('Downloading LocalFold source')
-                subprocess.run(['git', 'clone', '--filter=blob:none', '--no-checkout', REPOSITORY, str(stage)], check=True)
-                subprocess.run(['git', '-C', str(stage), 'checkout', '--detach', REVISION], check=True)
-                stage.rename(source)
-            finally:
-                if stage.exists():
-                    shutil.rmtree(stage)
+            fetch_source(source)
         head = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
         changed = subprocess.check_output(['git', '-C', str(source), 'status', '--porcelain', '--untracked-files=no'], text=True)
         if head != REVISION or changed:
@@ -175,7 +201,7 @@ def install(prefix, models, source=None):
             checksum = hashlib.sha256(temporary.read_bytes()).hexdigest()
             info = target.with_suffix('.json')
             receipt = info.with_suffix('.json.part')
-            info_data = dict(repository=REPOSITORY, revision=head, sha256=checksum, native=native)
+            info_data = dict(repository=source_repository(source), revision=head, sha256=checksum, native=native)
             if native == 'cuda':
                 # Engines are compiled for this GPU generation only; predict.py refuses them on another.
                 info_data['cuda_compute_capability'] = cuda_compute_capability()

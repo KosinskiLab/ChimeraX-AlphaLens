@@ -444,11 +444,18 @@ def a3m_rows(msa, deletions, headers):
     return ''.join(lines)
 
 
-def crop_columns(msa, deletions, start, length):
-    m = msa[:, start:start + length]
-    d = deletions[:, start:start + length].copy()
-    if start:
-        d[:, 0] = 0          # Insertions before the first kept column belong to the cut part
+def columns(start, length=None):
+    """The feature columns kept: start..start+length, or start itself as a list of columns
+    (a chain of discontinuous segments)."""
+    return np.arange(start, start + length) if length is not None else np.asarray(start, dtype=int)
+
+
+def crop_columns(msa, deletions, start, length=None):
+    cols = columns(start, length)
+    m = msa[:, cols]
+    d = deletions[:, cols].copy()
+    # Insertions before a kept column that follows a cut belong to the cut part
+    d[:, np.flatnonzero(np.diff(np.concatenate([[-1], cols])) != 1)] = 0
     return m, d
 
 
@@ -501,11 +508,13 @@ def pair_rows(chains):
 def paired_a3ms(chain_features, starts, lengths, labels):
     '''Row-aligned paired A3Ms, one a chain (LocalFold --paired-a3m).'''
     cropped = []
-    for f, s, l in zip(chain_features, starts, lengths):
+    cols = [columns(s, l) for s, l in zip(starts, lengths)]
+    lengths = [len(c) for c in cols]
+    for f, s, l in zip(chain_features, cols, lengths):
         if f['all_msa'] is None:
             cropped.append((None, None, None))
         else:
-            m, d = crop_columns(f['all_msa'], f['all_deletions'], s, l)
+            m, d = crop_columns(f['all_msa'], f['all_deletions'], s)
             cropped.append((m, d, f['all_species']))
     rows = pair_rows([(m, sp) for m, _, sp in cropped])
     texts = []
@@ -513,8 +522,7 @@ def paired_a3ms(chain_features, starts, lengths, labels):
         idx = rows[:, c]
         if m is None:      # Query row only; gaps where the others have partners
             m = np.full((1, l), 21, np.int32); d = np.zeros((1, l), np.int32)
-            q, _ = crop_columns(chain_features[c]['msa'][:1], chain_features[c]['deletions'][:1],
-                                starts[c], l)
+            q, _ = crop_columns(chain_features[c]['msa'][:1], chain_features[c]['deletions'][:1], cols[c])
             m[0] = q[0]
             idx = np.where(idx == 0, 0, -1)
         gap_m = np.vstack([m, np.full((1, l), 21, np.int32)])
@@ -525,8 +533,9 @@ def paired_a3ms(chain_features, starts, lengths, labels):
 
 
 def crop_a3m_text(text, start, length, query):
-    '''One chain's A3M (AF3 JSON) cropped to columns start..start+length; headers kept, rows
-    with no residue left dropped (the query is kept).'''
+    '''One chain's A3M (AF3 JSON) cropped to columns start..start+length (or the list of columns
+    start, length None); headers kept, rows with no residue left dropped (the query is kept).'''
+    cols = [int(c) for c in columns(start, length)]
     out = []
     header, parts = None, []
 
@@ -543,8 +552,7 @@ def crop_a3m_text(text, start, length, query):
                 aligned.append(ch); inserts.append(pending); pending = ''
         if len(aligned) != len(query):
             raise ValueError(f'An alignment row has {len(aligned)} columns for a {len(query)}-residue sequence.')
-        cols = range(start, start + length)
-        row = ''.join((inserts[c] if c > start else '') + aligned[c] for c in cols)
+        row = ''.join((inserts[c] if k and c == cols[k - 1] + 1 else '') + aligned[c] for k, c in enumerate(cols))
         if not out or any(aligned[c] != '-' for c in cols):
             out.append(f'{header}\n{row}\n')
 
@@ -559,7 +567,7 @@ def crop_a3m_text(text, start, length, query):
     flush()
     if out:
         first = out[0].split('\n')[1]
-        if ''.join(c for c in first if not c.islower()) != query[start:start + length]:
+        if ''.join(c for c in first if not c.islower()) != ''.join(query[c] for c in cols):
             raise ValueError('The first alignment row is not the query sequence.')
     return ''.join(out)
 
@@ -598,11 +606,30 @@ def prepare(spec):
                 raise
             say(f'read {c["name"]} in {time.monotonic() - t0:.1f} s')
     feats = [loaded[c['path']] for c in chains]
-    starts = [locate(f['sequence'], c['sequence'], c.get('start_hint'), c['name']) for f, c in zip(feats, chains)]
-    lengths = [len(c['sequence']) for c in chains]
-    for c, f, s in zip(chains, feats, starts):
+    # Each chain's columns in its full-length features: one located run, or one per segment of a
+    # chain of discontinuous regions (kept as one chain, as AlphaPulldown does)
+    starts = []
+    for f, c in zip(feats, chains):
+        segments = c.get('segments') or [[c['sequence'], c.get('start_hint')]]
+        cols = []
+        for piece, hint in segments:
+            at = locate(f['sequence'], piece, hint, c['name'])
+            cols.extend(range(at, at + len(piece)))
+        if any(b <= a for a, b in zip(cols, cols[1:])):
+            raise ValueError(f'The segments of chain {c["chain_id"]} are not in order in the features of {c["name"]}.')
+        starts.append(cols)
+    lengths = [None] * len(chains)
+    for c, f, cols in zip(chains, feats, starts):
+        runs = [[cols[0] + 1, cols[0] + 1]]
+        for a, b in zip(cols, cols[1:]):
+            if b == a + 1:
+                runs[-1][1] = b + 1
+            else:
+                runs.append([b + 1, b + 1])
         provenance.append(dict(chain_id=c['chain_id'], name=c['name'], kind=c['kind'], path=c['path'],
-                               url=c.get('url'), sha256=f['sha256'], residues=[s + 1, s + len(c['sequence'])],
+                               url=c.get('url'), sha256=f['sha256'],
+                               residues=runs[0] if len(runs) == 1 else [runs[0][0], runs[-1][1]],
+                               **({'segments': runs} if len(runs) > 1 else {}),
                                feature_length=len(f['sequence'])))
     args = []
     if chains[0]['kind'] == 'af3':

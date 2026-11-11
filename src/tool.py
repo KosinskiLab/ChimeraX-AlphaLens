@@ -1277,7 +1277,7 @@ class AlphaLensPlot(ToolInstance):
                      f'{self._threshold:.2f}')
         self._heading.setText(f'<html><b>{escape(title)}</b>{src}{pool}<br>'
                               f'{escape(str(self._pae.structure))} · {n} residues. '
-                              f'Drag a box to color residues.{nav}</html>')
+                              f'Drag a box to color residues; right-click it to re-predict.{nav}</html>')
         for key, b in self._tabs.items():
             label = self._modes[key].tab if key != 'spread' else self._modes[self._spread_measure].tab
             b.setText(label)

@@ -297,3 +297,22 @@ lines = [f'ATOM  {i+1:5d}  CA  {three[aa]} {c}{r:4d}    {i*3.8:8.3f}{0.:8.3f}{0.
     while bad.poll() == 'running' and time.monotonic() < end:
         time.sleep(0.05)
     assert bad.state == 'failed' and bad.error.startswith('precomputed features: No AlphaFold 2 features for P99999')
+
+
+def test_gapped_chain_takes_the_columns_of_each_segment(tmp_path):
+    # Columns 1, 2, 5, 6 (0-based 0, 1, 4, 5): an insertion stays inside a run, not across the cut
+    text = pf.crop_a3m_text('>q\nABCDEF\n>h\nAxBC-EF\n>g\n--CD--\n', [0, 1, 4, 5], None, 'ABCDEF')
+    assert text == '>q\nABEF\n>h\nAxBEF\n'
+    root = lab_database(tmp_path)
+    spec = dict(directory=str(tmp_path / 'out'), root=str(root), backend='af2', job=None, chains=[
+        dict(chain_id='A', name='P11111', sequence='MKAW', start_hint=0, segments=[['MK', 0], ['AW', 4]]),
+        dict(chain_id='B', name='P22222', sequence='GGHHS', start_hint=0)])
+    pf.prepare(spec)
+    out = tmp_path / 'out'
+    assert (out / 'chain_A.a3m').read_text().split('\n')[:2] == ['>A', 'MKAW']
+    assert (out / 'paired_A.a3m').read_text().split('\n')[:2] == ['>A', 'MKAW']
+    prov = json.loads((out / 'features.json').read_text())[0]
+    assert prov['segments'] == [[1, 2], [5, 6]] and prov['residues'] == [1, 6]
+    with pytest.raises(ValueError, match='not in order'):
+        pf.prepare(dict(spec, directory=str(tmp_path / 'bad'), chains=[
+            dict(chain_id='A', name='P11111', sequence='AWMK', segments=[['AW', 4], ['MK', 0]])]))

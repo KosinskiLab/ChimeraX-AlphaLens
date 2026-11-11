@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.4.0
+
+* Discontinuous regions, as AlphaPulldown predicts them. A box dragged across a gap in the
+  model (an AlphaPulldown region such as `P1:1-100:150-200`, or unresolved residues) is
+  re-predicted as one chain with the gap kept; sequence input takes several ranges a chain
+  (`1-100,150-200`). The model sees the gap through the residue index, as AlphaPulldown's AF2 and
+  AF3 backends do: the segments stay one chain, far apart in sequence, rather than being joined
+  into a continuous chain or split into separate chains. Barnase with residues 36–45 cut out:
+  the gap's ends stay 14–15 Å apart (16 Å in the full-length model) and the rest is within
+  0.3–0.4 Å of the full-length prediction; joined into a continuous chain, the ends are bonded
+  and the rest is 1.6 Å away. Precomputed AlphaPulldown features are cropped segment by segment.
+* Predicted structures are written in the source numbering: the chain IDs and residue numbers of
+  the re-predicted region (insertion codes included), or the UniProt positions of a sequence
+  range, so `#1/A:120` and `#2/A:120` are the same residue. The engine's own files (chains A, B,
+  ... numbered from 1) are kept in `engine_output/`; `job.json` records the numbering.
+* Until now a box across a gap in an AlphaPulldown region was predicted as one continuous chain,
+  fusing the two segments: the gap was invisible to the crop, which only looked for unresolved
+  residues. Flanks now stop at gaps as at chain ends.
+* AlphaPulldown notation in the sequence box: `P0A836:1-100+P0AGE9`, `P69905:2` (two copies),
+  `Q8I2G6:2:1-100:150-200`. Each identifier is looked up once.
+* A redesigned prediction dialog: the chains in a table (entry, length, range; hover for the
+  sequence), one alignment choice with only its own fields shown (reuse the source MSA,
+  precomputed features, an A3M file with Browse…, or the ColabFold search), and recycles, seed,
+  AF3 sampling, time limit, results folder and engine path under **Settings**, closed by default
+  with a one-line summary. The sequence dialog is about 650 px tall instead of 1,150. The plot's
+  hint line mentions that a dragged box can be re-predicted from the right-click menu.
+* LocalFold comes from KosinskiLab's fork (`github.com/KosinskiLab/localfold`, protected branch
+  `alphalens`), pinned at `837a15c`: upstream's `68c5919` plus the residueIds patch. Upstream is
+  moving the native engines into private repositories, which would have broken first-time setup.
+  Engines built by an earlier AlphaLens are rebuilt once by **Update & Predict**; without
+  residueIds the new engines give the same structures as before (identical coordinates, AF2 and
+  AF3). Cached MSAs stay valid.
+
 ## 1.3.0
 
 * Local prediction on Linux x86_64 with an NVIDIA GPU. **Install & Predict** builds LocalFold's
