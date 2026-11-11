@@ -12,6 +12,7 @@ from Qt.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFormLayo
                           QScrollArea, QSpinBox, QVBoxLayout, QWidget)
 from . import predict
 from . import predict_contacts
+from . import predict_features
 
 
 def snapshot(plot, flanks):
@@ -74,6 +75,15 @@ def source_alignment(plot):
             except (ValueError, OSError):
                 pass
     return None
+
+
+def structure_chain_ids(plot):
+    from chimerax.atomic import Residue
+    ids = []
+    for r in plot.pae.row_residues_or_atoms():
+        if isinstance(r, Residue) and r.polymer_type == Residue.PT_AMINO and r.chain_id not in ids:
+            ids.append(r.chain_id)
+    return ids
 
 
 def import_result(session, job):
@@ -221,8 +231,31 @@ class PredictionDialog(QDialog):
         api = os.environ.get('LOCALFOLD_MMSEQS_API', 'https://api.colabfold.com').rstrip('/')
         self.search = QCheckBox(f'Search remotely if uncached: send sequences to {api}')
         form.addRow(self.search)
-        self.msa_hint = QLabel('Choose an MSA to enable Predict: enter an A3M file above '
-                              'or check “Search remotely if uncached”.')
+        self.features = QCheckBox('Use precomputed AlphaPulldown features (no MSA search)')
+        self.features.setToolTip('Alignments from AlphaPulldown feature files, one a protein: AF2 '
+                                 '<ID>.pkl[.xz] (AF-Multimer pairing by species) or, for AlphaFold 3, '
+                                 '<ID>_af3_input.json[.xz]. Read and converted when the prediction starts.')
+        form.addRow(self.features)
+        self.features_root = QLineEdit(predict_features.default_root())
+        self.features_root.setToolTip(f'The lab database ({predict_features.LAB_ROOT}, through the /g mount), '
+                                      f'the public copy ({predict_features.PUBLIC_ROOT}; only the IDs are '
+                                      'sent and the files are cached in ~/.cache/alphalens/features), or '
+                                      'a folder of AlphaPulldown features')
+        form.addRow('Features from', self.features_root)
+        self.features_names = QLineEdit()
+        self.features_names.setPlaceholderText('UniProt ID of each chain, e.g. A: P0A836, B: P0AGE9')
+        self.features_names.setToolTip('The name of each chain\'s feature file (UniProt accession), as '
+                                       '"A: P0A836, B: P0AGE9" or in chain order. Filled in from the '
+                                       'prediction\'s folder name or the UniProt lookup when possible.')
+        form.addRow('Feature IDs', self.features_names)
+        self._guessed_names = ''
+        if plot is not None:
+            filename = getattr(plot.pae.structure, 'filename', None)
+            guess = predict_features.guess_names(filename, structure_chain_ids(plot)) if filename else {}
+            self._guessed_names = predict_features.format_names(guess)
+            self.features_names.setText(self._guessed_names)
+        self.msa_hint = QLabel('Choose an MSA to enable Predict: enter an A3M file above, use precomputed '
+                              'features or check “Search remotely if uncached”.')
         self.msa_hint.setWordWrap(True)
         self.msa_hint.setStyleSheet('color: #a65c00; font-weight: bold;')
         self.msa_hint.setMinimumHeight(2*self.msa_hint.fontMetrics().lineSpacing()+4)
@@ -262,10 +295,13 @@ class PredictionDialog(QDialog):
         if plot is None:
             self.input_text.textChanged.connect(self.invalidate_input)
             self.load_button.clicked.connect(self.load_sequences)
-        self.reuse.toggled.connect(lambda checked: self.search.setChecked(False) if checked else None)
-        self.search.toggled.connect(lambda checked: self.reuse.setChecked(False) if checked else None)
-        self.reuse.toggled.connect(self.msa_controls)
-        self.search.toggled.connect(self.msa_controls)
+        sources = (self.reuse, self.search, self.features)
+        for box in sources:
+            box.toggled.connect(lambda checked, box=box: [b.setChecked(False) for b in sources
+                                                          if b is not box] if checked else None)
+            box.toggled.connect(self.msa_controls)
+        self.features_names.textChanged.connect(self.refresh)
+        self.features_root.textChanged.connect(self.refresh)
         self.msa.textChanged.connect(self.refresh)
         self.executable.textChanged.connect(self.refresh)
         self.backend.currentIndexChanged.connect(self.backend_changed)
@@ -293,8 +329,27 @@ class PredictionDialog(QDialog):
         self.close()
 
     def msa_controls(self, *args):
-        self.msa.setEnabled(not self.reuse.isChecked() and not self.search.isChecked())
+        self.msa.setEnabled(not self.reuse.isChecked() and not self.search.isChecked()
+                            and not self.features.isChecked())
+        for widget in (self.features_root, self.features_names):
+            widget.setEnabled(self.features.isChecked())
         self.refresh()
+
+    def feature_request(self, chains):
+        '''dict(root, names) for the chains of this prediction, from the Feature IDs field.'''
+        root = self.features_root.text().strip()
+        if not root:
+            raise ValueError('Enter where the features are: a folder or the database URL.')
+        # Whether the folder exists is checked by the prediction's process: a stale network
+        # mount must not hang the window here.
+        ids = (structure_chain_ids(self.plot) if self.plot is not None
+               else list(predict.chain_ids(len(self.entries or []))))
+        mapping = predict_features.parse_chain_accessions(self.features_names.text(), ids)
+        missing = [c['source_chain'] for c in chains if not mapping.get(c['source_chain'])]
+        if missing:
+            raise ValueError(f'Enter the feature ID (UniProt accession) of chain {", ".join(missing)}.')
+        return dict(root=str(Path(root).expanduser()) if not predict_features.is_url(root) else root,
+                    names=[mapping[c['source_chain']] for c in chains])
 
     def set_progress(self, stage, completed=None, total=None):
         self.progress_label.setText(stage)
@@ -380,6 +435,11 @@ class PredictionDialog(QDialog):
             self.input_widgets.extend(self.ranges)
             self.resolved.setPlainText('\n'.join(f'>{e["label"]} ({len(e["sequence"])} residues)\n{e["sequence"]}'
                                                  for e in self.entries))
+            names = {cid: e.get('accession') or next(iter(predict_features.accessions_in(e['label'])), None)
+                     for cid, e in zip(predict.chain_ids(len(self.entries)), self.entries)}
+            if all(names.values()) and self.features_names.text() in ('', self._guessed_names):
+                self._guessed_names = predict_features.format_names(names)
+                self.features_names.setText(self._guessed_names)
             self.log_message('Review the resolved sequences, choose ranges/MSA, then click Predict.')
         except Exception as e:
             self.show_error(str(e))
@@ -413,7 +473,9 @@ class PredictionDialog(QDialog):
                                 'Requires Apple Silicon and Xcode Command Line Tools; setup can be cancelled.')
         self.setup_hint.setVisible(needs_setup)
         self.start_button.setText('Install & Predict' if needs_setup else 'Predict')
-        msa_ready = self.reuse.isChecked() or self.search.isChecked() or bool(self.msa.text().strip())
+        msa_ready = (self.reuse.isChecked() or self.search.isChecked() or bool(self.msa.text().strip())
+                     or (self.features.isChecked() and bool(self.features_names.text().strip())
+                         and bool(self.features_root.text().strip())))
         self.msa_hint.setVisible(not msa_ready)
         try:
             chains, _ = self.prediction_input()
@@ -434,7 +496,8 @@ class PredictionDialog(QDialog):
     def set_busy_controls(self, busy):
         for widget in (self.flanks, self.executable, self.output, self.msa, self.search, self.seed,
                        self.recycles, self.time_limit, self.randomize_seed, self.backend, self.af3_terms,
-                       self.af3_steps, self.af3_samples, self.start_button, *self.input_widgets):
+                       self.af3_steps, self.af3_samples, self.start_button, self.features,
+                       self.features_root, self.features_names, *self.input_widgets):
             widget.setEnabled(not busy)
         self.reuse.setEnabled(not busy and self.source_msa is not None)
         self.cancel_button.setEnabled(busy)
@@ -457,7 +520,9 @@ class PredictionDialog(QDialog):
             if self.reuse.isChecked():
                 msa, query = self.source_msa
                 crop = dict(source_query=query, columns=[r['source_row'] for c in chains for r in c['residue_map']])
+            features = self.feature_request(chains) if self.features.isChecked() else None
             request = dict(directory=Path(self.output.text()).expanduser() / name, chains=chains,
+                           features=features,
                            executable=self.executable.text(), search=self.search.isChecked(),
                            msa=msa, msa_crop=crop, seed=self.seed.value(), recycles=self.recycles.value(), source=source,
                            timeout=self.time_limit.value()*60 or None, backend=self.backend.currentData(),
