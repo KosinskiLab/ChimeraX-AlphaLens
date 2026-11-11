@@ -96,3 +96,39 @@ def test_monomer_uses_monomer_model(tmp_path):
     executable = tmp_path/'engine'; executable.write_text('#!/bin/sh\nexit 0\n'); executable.chmod(0o755)
     job = PredictionJob(tmp_path/'job', chains, source=source, executable=executable, search=True)
     assert job.model == MONOMER_MODEL
+
+
+def test_alphapulldown_notation_sets_copies_and_ranges():
+    seen = []
+    def fetch(identifier):
+        seen.append(identifier)
+        return dict(label=identifier, sequence='ACDEFGHIKL', input_kind='uniprot', accession=identifier)
+    entries = inputs.resolve_entries('P0A836:2:3-6+P0AGE9', fetch)
+    assert seen == ['P0A836', 'P0AGE9']                # one lookup for both copies
+    assert [(e['accession'], e.get('range')) for e in entries] == [('P0A836', '3-6'), ('P0A836', '3-6'),
+                                                                   ('P0AGE9', None)]
+    chains, source = inputs.sequence_chains(entries, [e.get('range', '') for e in entries])
+    assert [c['sequence'] for c in chains] == ['DEFG', 'DEFG', 'ACDEFGHIKL']
+    assert [r['number'] for r in chains[1]['residue_map']] == [3, 4, 5, 6]
+    assert source['inputs'][1]['range'] == [3, 6]
+    assert inputs.parse_alphapulldown('q8i2g6:2:1-100:150-200 P69905') == [
+        ('Q8I2G6', 2, [(1, 100), (150, 200)]), ('P69905', 1, [])]
+
+
+@pytest.mark.parametrize('text', ['P0A836:0', 'P0A836:5-2', 'P0A836:1-5:2', 'TP53:1-10', 'P0A836:x'])
+def test_alphapulldown_notation_errors(text):
+    with pytest.raises(ValueError):
+        inputs.parse_alphapulldown(text)
+
+
+def test_several_ranges_make_one_gapped_chain():
+    chains, source = inputs.sequence_chains(inputs.resolve_entries('ACDEFGHIKL'), ['1-3,6-8'])
+    assert chains[0]['sequence'] == 'ACDGHI'
+    assert chains[0]['residue_ids'] == [1, 2, 3, 6, 7, 8]
+    assert [r['number'] for r in chains[0]['residue_map']] == [1, 2, 3, 6, 7, 8]
+    assert source['inputs'][0]['ranges'] == [[1, 3], [6, 8]] and source['inputs'][0]['range'] == [1, 8]
+    joined, _ = inputs.sequence_chains(inputs.resolve_entries('ACDEFGHIKL'), ['1-3:4-6'])
+    assert 'residue_ids' not in joined[0]                    # adjacent ranges are one segment
+    for bad in ('5-8,1-3', '1-5,4-8', '1-3,x'):
+        with pytest.raises(ValueError):
+            inputs.sequence_chains(inputs.resolve_entries('ACDEFGHIKL'), [bad])

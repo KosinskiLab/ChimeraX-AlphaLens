@@ -1,9 +1,9 @@
 # Experimental local protein and interface prediction
 
-AlphaLens 1.3.0 can predict protein complexes from sequences or UniProt IDs, or re-predict
+AlphaLens 1.4.0 can predict protein complexes from sequences or UniProt IDs, or re-predict
 selected regions spanning multiple protein chains, with AlphaFold 2 or AlphaFold 3 on
-Apple Silicon, using [LocalFold's native Metal implementation](https://github.com/sokrypton/localfold/tree/68c59196fa7d32c6edfc061ed369889c1cdb680b/metal),
-or on Linux with an NVIDIA GPU, using its [native CUDA implementation](https://github.com/sokrypton/localfold/tree/68c59196fa7d32c6edfc061ed369889c1cdb680b/cuda)
+Apple Silicon, using [LocalFold's native Metal implementation](https://github.com/KosinskiLab/localfold/tree/837a15ca7c72c35c75739740bc7ed71ee9d5e09b/metal),
+or on Linux with an NVIDIA GPU, using its [native CUDA implementation](https://github.com/KosinskiLab/localfold/tree/837a15ca7c72c35c75739740bc7ed71ee9d5e09b/cuda)
 at the same revision. Both take the same options and write the same output files.
 The prediction runs in a separate process; ChimeraX remains interactive. The original
 structure stays open, and the result gets its own AlphaLens plot. The integration uses
@@ -12,7 +12,7 @@ have no native LocalFold engine and are not supported.
 
 ## Setup
 
-Install the AlphaLens 1.3.0 wheel. The local prediction feature remains experimental.
+Install the AlphaLens 1.4.0 wheel. The local prediction feature remains experimental.
 On a Mac, the engine requires Apple Silicon, macOS 13 or newer and Xcode Command Line Tools.
 On Linux, see [Linux with an NVIDIA GPU (CUDA)](#linux-with-an-nvidia-gpu-cuda) below.
 No separate Python ML environment is needed. With a missing default engine, the button
@@ -33,7 +33,13 @@ selects one. `--prefix /path` changes the installation directory; `--source /pat
 uses a clean checkout at the pinned revision. The release script is the self-contained
 `src/predict_setup.py`; `scripts/setup_localfold.py` is a repository entry point.
 
-LocalFold is pinned at `68c59196fa7d32c6edfc061ed369889c1cdb680b`.
+LocalFold is pinned at `837a15ca7c72c35c75739740bc7ed71ee9d5e09b` of KosinskiLab's fork
+([KosinskiLab/localfold](https://github.com/KosinskiLab/localfold), protected branch `alphalens`):
+upstream `68c59196fa7d32c6edfc061ed369889c1cdb680b` (`sokrypton/localfold`, branch `opus-55-opt`) plus
+one patch, `residueIds` (below). The fork keeps the pinned revision reachable while upstream moves
+the native engines into private repositories. Engines built by an earlier AlphaLens are rebuilt
+once: the button reads **Update & Predict**. Without `residueIds` the patched engines give the
+same structures as upstream's (identical coordinates for AF2 and AF3 in the barnase–barstar check).
 Executables go in `~/.local/share/alphalens/bin`, with revision and SHA-256 receipts.
 
 A fresh AF3 engine download and build took **30.4 seconds** on the tested M5 Max,
@@ -120,17 +126,20 @@ alphalens predict
 ```
 
 No open structure is needed. Paste one raw amino-acid sequence (line wrapping is
-allowed), multiple FASTA entries, or whitespace-separated UniProt identifiers.
+allowed), multiple FASTA entries, whitespace-separated UniProt identifiers, or
+AlphaPulldown notation: `P0A836:1-100+P0AGE9`, `P69905:2` (two copies),
+`Q8I2G6:2:1-100:150-200` (two copies of two regions).
 Use FASTA headers to separate sequences; plain wrapped sequence lines form one chain.
 For example, paste `P69905 P68871` to retrieve the two human hemoglobin subunits.
 Accessions, isoforms such as `P05067-2`, and entry IDs such as `RNBR_BACAM` are supported;
 ambiguous gene symbols are not looked up automatically.
 
-Click **Load / resolve sequences**. UniProt retrieval uses its
+Click **Load sequences**. UniProt retrieval uses its
 [official FASTA endpoint](https://github.com/ebi-uniprot/uniprot-manual/blob/main/help/api_retrieve_entries.md)
-in a background thread, sending only the identifiers. Review the resolved headers and
-sequences. Optional per-chain ranges are **1-based and inclusive** (e.g. `50-157` for
-the tested barnase segment from `P00648`). Optional ranges select domains from longer UniProt proteins; there is no fixed
+in a background thread, sending only the identifiers. Review the chains in the table (hover
+for a sequence). Optional per-chain ranges are **1-based and inclusive** (e.g. `50-157` for
+the tested barnase segment from `P00648`); several ranges, `1-100,150-200`, make one chain
+with a gap (see [Discontinuous regions](#discontinuous-regions)). Optional ranges select domains from longer UniProt proteins; there is no fixed
 residue-count cap. Residue maps
 retain positions in the original input sequence. Nonstandard amino acids in the
 selected ranges are rejected.
@@ -150,19 +159,20 @@ header, release, retrieval time, original sequence hash and selected ranges.
    interface block. Either axis can span multiple protein chains; only inter-chain
    pairs inside the rectangle are included in the comparison.
 2. Right-click the plot and choose **Re-predict selected interface…**.
-3. Choose flanks (default 10 residues on each side). The crop preserves contiguous
-   sequence intervals, clips at chain ends, and rejects gaps in the source sequence,
-   and nonstandard amino acids. Large inputs show a warning without disabling Predict.
+3. Choose flanks (default 10 residues on each side). Flanks stop at chain ends and at gaps.
+   A box across a gap in the model (an AlphaPulldown region, unresolved residues) keeps the
+   gap: see [Discontinuous regions](#discontinuous-regions). Nonstandard amino acids are
+   rejected. Large inputs show a warning without disabling Predict.
 4. Choose an MSA source. **Reuse and crop the source MSA** is selected automatically
    when a matching `<structure-stem>.a3m` or `input.a3m` is found beside the source.
    Embedded MSAs in AF3 `*_data.json` files are not imported automatically.
    Its first query must exactly match the plotted protein tokens. Cropping preserves
    existing paired/unpaired rows and their insertion encoding. Alternatively, supply
    a merged A3M for exactly the cropped sequences, in the displayed order.
-   Or tick **Use precomputed AlphaPulldown features** (see below): the chain IDs are taken
+   Or choose **Precomputed AlphaPulldown features** (see below): the chain IDs are taken
    from the prediction's folder name (`Q15014+Q9NV56`, `q15014_and_q9nv56`), and the region
    is cropped from the full-length features.
-5. If no suitable MSA exists, explicitly enable **Search remotely if uncached**.
+5. If no suitable MSA exists, explicitly choose **Search remotely if uncached**.
    This sends the selected sequences to `https://api.colabfold.com`, unless the exact
    query already exists in the local MSA cache. `LOCALFOLD_MMSEQS_API` can select a
    compatible private endpoint; the dialog displays the configured endpoint.
@@ -172,11 +182,13 @@ header, release, retrieval time, original sequence hash and selected ranges.
    does not emit incremental diffusion progress. The displayed AF2 fraction covers inference passes,
    not total runtime; remote queues have no known percentage or ETA. The bar reaches
    Complete only after the validated result opens. Use **Cancel job** to stop it. A process-wide file lock serializes
-   jobs across AlphaLens windows and instances. The optional **Time limit (minutes)**
+   jobs across AlphaLens windows and instances. The optional **Time limit** (under **Settings**)
    defaults to **No limit**. A positive value covers the whole job, including MSA search. Closing a running dialog cancels its job;
    closing the source model does not interrupt an already-started prediction.
 
-**Generate a new random seed for each prediction** is enabled by default. Uncheck it
+**Settings** (closed by default; its summary line shows the values) holds recycles, the seed,
+AF3 diffusion steps and samples, the time limit, the results folder and the engine path.
+**New random seed for each prediction** is enabled by default. Uncheck it
 to enter a fixed seed (including zero); the actual seed is shown in results and saved
 in the job manifest.
 
@@ -194,7 +206,8 @@ Source and result distance cutoffs are reported explicitly; missing source proba
 remain unavailable. Flanks are excluded. All outputs are retained in timestamped job directories under
 `~/.local/share/alphalens/predictions` (editable in the dialog):
 
-- `fold.pdb`, `fold_confidences.json`, `fold_summary_confidences.json`;
+- `fold.pdb` (and `fold_sample<k>.pdb` for AF3) in the source numbering, `fold_confidences.json`,
+  `fold_summary_confidences.json`; `engine_output/` keeps the engine's own structure files;
 - `input.json`, `residue_map.json`, and the supplied/cropped/searched A3M;
 - `job.json`: model/settings, engine and MSA hashes, source, timing and status;
 - `comparison.json` for region jobs, and `prediction.log`;
@@ -203,15 +216,45 @@ remain unavailable. Flanks are excluded. All outputs are retained in timestamped
   original chain/residue labels, both probabilities and cutoffs, and both distances.
 
 Residue maps preserve original chain IDs, residue numbers, insertion codes, sequence
-positions and matrix rows. Prediction chains are renamed A, B, … and renumbered from 1. The current PDB output
-format supports 62 distinct chain IDs; the earlier two-chain restriction is removed.
-MSA caches include the ordered sequences, configured endpoint and engine revision.
+positions and matrix rows. The structures are written in that numbering: the source's chain IDs
+and residue numbers for a re-predicted region (so `#1/A:120` and `#2/A:120` are the same residue),
+UniProt or input positions for sequence input. The engine numbers chains A, B, … from 1; its files
+are kept in `engine_output/`, and `job.json` records the numbering (`numbering`). Source chain IDs
+longer than one character, which PDB files cannot hold, are replaced by A, B, … and the log says
+so. The current PDB output format supports 62 distinct chain IDs.
+MSA caches include the ordered sequences, configured endpoint and the revision of the search
+client (unchanged by the `residueIds` patch, so earlier caches stay valid).
 AF2 and AF3 share matching cached MSAs, including legacy AF2 caches.
 Cache hits reuse existing alignments; they do not claim a new database search.
 
+## Discontinuous regions
+
+AlphaPulldown predicts several regions of one protein (`P1:1-100:150-200`) as **one chain with a
+gap**: its AF2 backend keeps the original residue index of each residue, and its AF3 fork takes
+the residue numbers (`residueIds`). The model then sees two segments of one chain, far apart in
+sequence, rather than a continuous chain (which bonds the ends) or two chains (another molecule).
+AlphaLens does the same, through the `residueIds` patch of its LocalFold:
+
+* **Sequence input:** several ranges a chain, `1-100,150-200` (or `1-100:150-200`); ranges must
+  follow one another without overlap; adjacent ranges simply join.
+* **Re-predicting a box across a gap:** a gap is where the residue numbers jump, a residue is
+  unresolved, or a peptide bond is missing (C–N over 2.5 Å). The source numbers become the
+  residue index when they jump at every gap (AlphaPulldown and UniProt numbering keep the true
+  gap size); otherwise residues are numbered 1, 2, … with the gaps the numbering shows, or 33
+  residues when the size is unknown (beyond the relative-position range of 32).
+* **Precomputed features** are cropped segment by segment; a reused source MSA by its columns.
+* The dialog shows the segments ("A: 98 residues in 2 segments"); `residue_map.json` holds each
+  chain's `residue_ids`, which are sent to LocalFold as `residueIds`.
+
+Check (M5 Max, 10 recycles AF3 / 3 AF2, seed 7): barnase–barstar with barnase residues 36–45
+cut out. With the gap, the ends (C35–N46) stay 13.8 Å (AF2) and 15.5 Å (AF3) apart, 16 Å
+(CA–CA) in the full-length prediction, and the rest of barnase is within 0.33 / 0.41 Å RMSD of
+the full-length prediction. Joined into a continuous chain, the ends are bonded (1.45 / 1.34 Å)
+and the rest is 1.64 / 1.60 Å away.
+
 ## Precomputed AlphaPulldown features
 
-**Use precomputed AlphaPulldown features** takes each chain's alignments from a feature file
+**Precomputed AlphaPulldown features** takes each chain's alignments from a feature file
 named by its UniProt ID, so no MSA search runs. **Features from** is the lab database
 `/g/alphafold/input_features` (default when `/g` is mounted; AF2 features of 16 proteomes under
 `alphafold2/<organism>/features/<ID>.pkl.xz`, AF3 features of two under
@@ -369,7 +412,7 @@ lists the inputs; it needs numpy and exits 0 only when every case passes.
 ## Attribution
 
 LocalFold code is by Sergey Ovchinnikov and is distributed under its
-[Beer-Ware license](https://github.com/sokrypton/localfold/blob/68c59196fa7d32c6edfc061ed369889c1cdb680b/LICENSE),
+[Beer-Ware license](https://github.com/KosinskiLab/localfold/blob/837a15ca7c72c35c75739740bc7ed71ee9d5e09b/LICENSE),
 retained beside the installed executable. AlphaFold 2 parameters are by Google DeepMind,
 under [CC BY 4.0](https://github.com/google-deepmind/alphafold#model-parameters).
 LocalFold supplies the quantized parameter representation and native inference engine;
