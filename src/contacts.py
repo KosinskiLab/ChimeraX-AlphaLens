@@ -445,32 +445,77 @@ def model_contacts(pae, cutoff):
     return mask, xyz
 
 
-DISTANCE_FAR = 40.0         # Model distances view: grey from the cutoff (dark) to this (white)
+DISTANCE_FAR = 40.0         # Model contacts view: faint grey from the cutoff to white at this distance
+
+# Model contacts view: the contacts in the shown model against the predicted ones (P at least
+# the slider threshold). Okabe-Ito colors, told apart with color-vision deficiencies.
+MODEL_ONLY, MODEL_AND_PREDICTED, PREDICTED_ONLY = 0, 1, 2
+MODEL_CATEGORY_RGB = {MODEL_AND_PREDICTED: (0, 158, 115),      # bluish green
+                      PREDICTED_ONLY: (213, 94, 0),            # vermillion
+                      MODEL_ONLY: (204, 121, 167)}             # reddish purple
+MODEL_CATEGORY_LABELS = {MODEL_AND_PREDICTED: 'in model and predicted',
+                         PREDICTED_ONLY: 'predicted, not in model',
+                         MODEL_ONLY: 'in model, not predicted'}
 
 
-def distance_view_values(dist, cutoff, contact_values=None, floor=0.0, far=DISTANCE_FAR):
+def model_view_values(dist, cutoff, contact=None, threshold=None, far=DISTANCE_FAR):
     '''
-    Values of the Model distances view, for one colormap that is grey below 0 and the
-    contact-probability colormap from 0 to 1:
+    Values of the Model contacts view (one colormap; contact symmetrized as max(P, P.T)):
 
-      pairs closer than cutoff   their contact value (predicted P on the shown contact scale,
-                                 at least floor so none disappears; 1 without contact values)
-      other pairs                -1 - t, t from 0 at the cutoff (dark grey) to 1 at far (white)
-      no coordinates             -2 (white)
+      no coordinates                              -2 (white)
+      not in contact and not predicted            -1 - t, t from 0 at the cutoff (light grey)
+                                                  to 1 at far and beyond (white)
+      in contact in the model, P < threshold       0 (MODEL_ONLY)
+      in contact and P >= threshold                1 (MODEL_AND_PREDICTED); every contact
+                                                     when there are no contact probabilities
+      P >= threshold, not in contact               2 (PREDICTED_ONLY)
 
-    Max-pooling a zoomed-out overview keeps contacts over distances, the highest P among
-    contacts and the closest pair among the rest.
+    Max-pooling a zoomed-out overview keeps the predicted contacts the model misses over
+    everything, then contacts over distances, and the closest of the other pairs.
     '''
     dist = np.asarray(dist, np.float32)
     with np.errstate(invalid='ignore'):
-        close = dist < cutoff
+        close = dist < cutoff               # NaN (no atom) compares False
         t = np.clip((dist - cutoff) / (far - cutoff), 0, 1)
-    vals = np.where(np.isnan(dist), np.float32(-2), -1 - t)
-    if contact_values is None:
-        c = np.float32(1)
+    vals = np.where(np.isnan(dist), np.float32(-2), -1 - t).astype(np.float32)
+    if contact is None:
+        vals[close] = MODEL_AND_PREDICTED
+        return vals
+    P = np.asarray(contact, np.float32)
+    predicted = np.maximum(P, P.T) >= threshold
+    vals[close & ~predicted] = MODEL_ONLY
+    vals[close & predicted] = MODEL_AND_PREDICTED
+    vals[~close & predicted & ~np.isnan(dist)] = PREDICTED_ONLY
+    return vals
+
+
+def model_contact_counts(pae, vals):
+    '''
+    Counts of the Model contacts view's categories over the pairs the dots are drawn for
+    (inter-chain; long-range for a single chain), each pair once:
+    dict(predicted, formed, missed, unpredicted, scope).
+    '''
+    keep, multi = interesting_pairs(pae, len(vals))
+    count = lambda category: int(np.count_nonzero((vals == category) & keep))
+    formed, missed = count(MODEL_AND_PREDICTED), count(PREDICTED_ONLY)
+    return dict(predicted=formed + missed, formed=formed, missed=missed, unpredicted=count(MODEL_ONLY),
+                scope='inter-chain' if multi else 'long-range')
+
+
+def interesting_pairs(pae, n):
+    '''
+    (N x N boolean mask of the pairs i < j the dots are drawn for, more than one chain): the
+    inter-chain pairs, or the long-range ones of a single chain. Boolean masks: index arrays of
+    every pair would take 16 times the memory (200 MB for 5,000 residues).
+    '''
+    chains = row_chain_ids(pae)
+    multi = len(set(chains) - {''}) > 1
+    if multi:
+        keep = chains[:, None] != chains[None, :]
     else:
-        c = np.maximum(np.asarray(contact_values, np.float32), floor)
-    return np.where(close, c, vals).astype(np.float32)
+        k = np.arange(n)
+        keep = (k[None, :] - k[:, None]) >= LONG_RANGE
+    return np.triu(keep, 1), multi
 
 
 def model_distance(pae, i, j):

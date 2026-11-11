@@ -1,12 +1,14 @@
 """
-AlphaLens plot panel: PAE matrix with a pLDDT track, plus contact-probability, model-distance,
-distogram-spread and seed / model agreement views reachable with the arrow buttons / tabs
+AlphaLens plot panel: PAE matrix with a pLDDT track, plus contact-probability, model-contact,
+distogram-spread and seed / model agreement views reachable with the tabs (or the ← / → keys)
 when the data exist.
 
-All matrices use the AlphaFold-DB green ramp (dark green = confident: low PAE, high contact
-probability, sharp distance distribution, contact in many seeds or models). Predicted
-contacts drawn on top of the matrix (dots) and on the structure (lines) have the pLDDT colors,
-banded by contact probability (orange < 0.5, yellow, light blue, dark blue >= 0.9).
+The value matrices use the AlphaFold-DB green ramp (dark green = confident: low PAE, high
+contact probability, sharp distance distribution, contact in many seeds or models). Predicted
+contacts drawn on top of the matrix (dots, rings when zoomed in so the matrix shows through)
+and on the structure (lines) have the pLDDT colors, banded by contact probability (orange
+< 0.5, yellow, light blue, dark blue >= 0.9). The Model contacts view compares the contacts
+in the shown model with the predicted ones, in three categorical colors.
 
 Interaction: scroll wheel / pinch zooms at the cursor, Shift-drag or middle-drag pans,
 "Fit" resets. When zoomed into a large matrix the
@@ -20,7 +22,8 @@ from chimerax.core.tools import ToolInstance
 from chimerax.alphafold.pae import PAEView, pae_pixmap
 
 from .contacts import (BAND_EDGES, CONTACT_COLOR_EDGES, CONTACT_COLORS, DEFAULT_MIN_P,
-                       DISTANCE_FAR, PICK_RGB, PLDDT_COLORS, contact_band, contact_rgb)
+                       DISTANCE_FAR, MODEL_AND_PREDICTED, MODEL_CATEGORY_LABELS, MODEL_CATEGORY_RGB,
+                       MODEL_ONLY, PICK_RGB, PLDDT_COLORS, PREDICTED_ONLY, contact_band, contact_rgb)
 from .hide import RowHider, true_runs
 
 # pLDDT colors used by AlphaFold / the "alphafold" palette.
@@ -31,8 +34,9 @@ MAX_DETAIL = 1200          # Max pixels per side when redrawing a zoomed region
 MAX_PIXELS_PER_RESIDUE = 40
 MAX_DOTS = 40000
 SLIDER_MIN = 0.05          # Lowest contact threshold offered by the slider
-UNDEFINED_GRAY = (190, 190, 190)   # Spread view: pairs whose distance is mostly in the last bin
-DISTANCE_NEAR_GREY = 0.42          # Model distances view: grey at the contact cutoff (white at far)
+UNDEFINED_GRAY = (222, 222, 222)   # Spread view: pairs whose distance is mostly in the last bin
+DISTANCE_NEAR_GREY = 0.80          # Model contacts view: faint grey at the contact cutoff (white at far)
+RING_MIN_PX = 10                   # Dots wider than this are drawn as rings: the matrix shows through
 
 
 def green_colormap(lo, hi, dark_at_high=False):
@@ -48,16 +52,18 @@ def green_colormap(lo, hi, dark_at_high=False):
 CONTACT_BAND_EDGES = (0.0, 0.05) + BAND_EDGES + (1.0,)
 
 
-def distance_colormap(contact_cmap):
+def model_view_colormap():
     '''
-    Colormap of the Model distances view (values from contacts.distance_view_values): grey
-    from -2 (white, far) to -1 (dark, just beyond the cutoff), then contact_cmap from 0 to 1.
+    Colormap of the Model contacts view (contacts.model_view_values): faint grey from -2 (white,
+    far or no coordinates) to -1 (light grey at the cutoff), then one color for each category.
     '''
     from chimerax.core.colors import Colormap
-    g = DISTANCE_NEAR_GREY
-    vals = [-2.0, -1.0] + [float(v) for v in contact_cmap.data_values]
-    cols = [(1.0, 1.0, 1.0, 1.0), (g, g, g, 1.0)] + [tuple(float(x) for x in c)
-                                                    for c in contact_cmap.colors]
+    g, eps = DISTANCE_NEAR_GREY, 1e-3
+    vals, cols = [-2.0, -1.0], [(1.0, 1.0, 1.0, 1.0), (g, g, g, 1.0)]
+    for k in (MODEL_ONLY, MODEL_AND_PREDICTED, PREDICTED_ONLY):
+        c = tuple(v / 255 for v in MODEL_CATEGORY_RGB[k]) + (1.0,)
+        vals += [k - 0.5 + eps, k + 0.5 - eps]
+        cols += [c, c]
     return Colormap(vals, cols)
 
 
@@ -89,9 +95,8 @@ def make_modes(cutoff=8.0):
         'pae': Mode('pae', 'PAE', 'Predicted aligned error', 'Å', '%.1f', 'mean', False),
         'contact': Mode('contact', 'Contact probability',
                         f'Predicted contact probability P(d < {c} Å)', '', '%.2f', 'max', True),
-        'model': Mode('model', 'Model distances',
-                      f'Model distances (CB–CB); pairs closer than {c} Å colored by predicted P',
-                      'Å', '%.1f', 'max', True),
+        'model': Mode('model', 'Model contacts',
+                      f'Contacts in the model (CB–CB < {c} Å) vs predicted', '', '%.0f', 'max', True),
         'std': Mode('std', 'Spread σ', 'Distogram spread (standard deviation of distance)',
                     'Å', '%.2f', 'mean', False),
         'entropy': Mode('entropy', 'Spread H', 'Distogram spread (entropy of distance bins)',
@@ -157,7 +162,11 @@ class AlphaLensView(PAEView):
         self.track = None           # (y0, y1) of pLDDT track in scene coords
         self.show_dividers = True
         self.dots = []              # [(QColor, QPolygonF in scene coords)]
+        self.dot_arrays = []        # The same points as (k, 2) arrays, for drawing rings when zoomed in
         self.dots_visible = False
+        self.cell_click_cb = None   # Model contacts view: a click on a colored pair picks it
+        self.cell_pickable_cb = None
+        self.leave_cb = None        # The pointer left the plot: the info line goes back to its hint
         self.dot_min_px = 5.0
         self.dot_xy = None          # (N, 2) scene coords of dots, for clicking
         self.dot_pairs = None       # (N, 2) matrix rows (i, j) of each dot
@@ -285,7 +294,9 @@ class AlphaLensView(PAEView):
             return
         if not self._mouse_down:
             from Qt.QtCore import Qt
-            over = self.dot_at(*self._scene_position(event)) is not None
+            x, y = self._scene_position(event)
+            over = self.dot_at(x, y) is not None or bool(
+                self.cell_pickable_cb and not self.dots_visible and self.cell_pickable_cb(int(y), int(x)))
             if over != self._over_dot:
                 self._over_dot = over
                 if over:
@@ -310,7 +321,17 @@ class AlphaLensView(PAEView):
                 self._clear_drag_box()
                 self.dot_click_cb(*hit)
                 return
+            if moved_px < 4 and self.cell_click_cb and not self.dots_visible \
+                    and self.cell_click_cb(int(y), int(x)):
+                self._mouse_down = False
+                self._clear_drag_box()
+                return
         PAEView.mouseReleaseEvent(self, event)
+
+    def leaveEvent(self, event):
+        PAEView.leaveEvent(self, event)
+        if self.leave_cb:
+            self.leave_cb()
 
     def _dot_width_px(self):
         return max(self.dot_min_px, 0.9 * self.transform().m11())
@@ -384,11 +405,17 @@ class AlphaLensView(PAEView):
                 painter.drawEllipse(QPointF(x, y), r_px / s, r_px / s)
 
     def _draw_dots(self, painter):
-        '''Contact dots in scene coordinates with a cosmetic (pixel-sized) round pen.'''
+        '''
+        Contact dots in scene coordinates with a cosmetic (pixel-sized) round pen. Zoomed in,
+        where a dot covers a matrix cell, they are rings, so that the cell's color shows through.
+        '''
         from Qt.QtGui import QPen, QColor, QPainter
         from Qt.QtCore import Qt
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         w = max(self.dot_min_px, 0.9 * self.transform().m11())
+        if w >= RING_MIN_PX and len(self.dot_arrays) == len(self.dots):
+            self._draw_rings(painter, w)
+            return
         rim = QPen(QColor(25, 25, 25))
         rim.setCosmetic(True)
         rim.setCapStyle(Qt.PenCapStyle.RoundCap)
@@ -403,6 +430,34 @@ class AlphaLensView(PAEView):
             pen.setWidthF(w)
             painter.setPen(pen)
             painter.drawPoints(poly)
+
+    def _draw_rings(self, painter, w):
+        '''Rings around the visible dots only (zoomed in, they are few).'''
+        from Qt.QtGui import QPen, QColor
+        from Qt.QtCore import Qt, QPointF
+        vis = self.mapToScene(self.viewport().rect()).boundingRect()
+        s = self.transform().m11()
+        r = (w / 2 - 1.5) / s
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        shown = []
+        for (color, _), xy in zip(self.dots, self.dot_arrays):
+            inside = ((xy[:, 0] > vis.left() - 1) & (xy[:, 0] < vis.right() + 1) &
+                      (xy[:, 1] > vis.top() - 1) & (xy[:, 1] < vis.bottom() + 1))
+            if inside.any():
+                shown.append((color, xy[inside]))
+        for pen_color, width in ((QColor(25, 25, 25), 4.0), (None, 2.2)):
+            for color, xy in shown:
+                pen = QPen(pen_color or color)
+                pen.setCosmetic(True)
+                pen.setWidthF(width)
+                painter.setPen(pen)
+                for x, y in xy:
+                    painter.drawEllipse(QPointF(float(x), float(y)), r, r)
+
+    def _label_color(self):
+        '''Text outside the matrix follows the window's theme (light text in dark mode).'''
+        from Qt.QtGui import QPalette
+        return self.palette().color(QPalette.ColorRole.WindowText)
 
     def _draw_overlay(self, painter, vp, n, bottom):
         from Qt.QtGui import QPen, QColor, QFont
@@ -464,17 +519,97 @@ class AlphaLensView(PAEView):
                 if self.zoomed:      # Readable on top of the matrix
                     painter.fillRect(QRectF(pos.x() - 2, pos.y() - fm.ascent() - 1, w + 4,
                                             fm.height() + 1), QColor(255, 255, 255, 200))
-                painter.setPen(QColor(40, 40, 40))
+                    painter.setPen(QColor(40, 40, 40))
+                else:
+                    painter.setPen(self._label_color())
                 painter.drawText(pos, cid)
-        if self.track and vp(0, 0).x() > 30:
-            ty = (vp(0, self.track[0]).y() + vp(0, self.track[1]).y()) / 2
+        if self.track:
             small = QFont(font)
             small.setBold(False)
             small.setPointSizeF(max(7.0, font.pointSizeF() - 2))
             painter.setFont(small)
             lbl = 'pLDDT'
-            painter.drawText(QPointF(vp(0, 0).x() - painter.fontMetrics().horizontalAdvance(lbl) - 3,
-                                     ty + painter.fontMetrics().ascent() / 2 - 1), lbl)
+            lw = painter.fontMetrics().horizontalAdvance(lbl)
+            if vp(0, 0).x() > lw + 5:       # Only where it fits whole, left of the track
+                ty = (vp(0, self.track[0]).y() + vp(0, self.track[1]).y()) / 2
+                painter.setPen(self._label_color())
+                painter.drawText(QPointF(vp(0, 0).x() - lw - 3,
+                                         ty + painter.fontMetrics().ascent() / 2 - 1), lbl)
+
+
+# -----------------------------------------------------------------------------
+#
+from Qt.QtWidgets import QWidget as _QWidget
+
+
+class LegendBar(_QWidget):
+    '''
+    The colour bar and legends under the plot, drawn at the widget's width. A legend wider
+    than the window is scaled down, never widens it: switching views must not resize the
+    window (the Model contacts legend used to make it about 400 px wider).
+    '''
+    HEIGHT = 32
+
+    def __init__(self, parent):
+        _QWidget.__init__(self, parent)
+        self._pm = None
+        from Qt.QtWidgets import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(self.HEIGHT)
+
+    def setPixmap(self, pm):
+        self._pm = pm
+        self.update()
+
+    def pixmap(self):
+        from Qt.QtGui import QPixmap
+        return self._pm if self._pm is not None else QPixmap()
+
+    def sizeHint(self):
+        from Qt.QtCore import QSize
+        w = int(self._pm.width() / self._pm.devicePixelRatio()) if self._pm is not None else 300
+        return QSize(min(w, 560), self.HEIGHT)
+
+    def minimumSizeHint(self):
+        from Qt.QtCore import QSize
+        return QSize(100, self.HEIGHT)
+
+    def paintEvent(self, event):
+        if self._pm is None or self._pm.isNull():
+            return
+        from Qt.QtGui import QPainter
+        from Qt.QtCore import QRectF
+        dpr = self._pm.devicePixelRatio()
+        w, h = self._pm.width() / dpr, self._pm.height() / dpr
+        scale = min(1.0, self.width() / w) if w else 1.0
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, scale < 1)
+        tw, th = w * scale, h * scale
+        p.drawPixmap(QRectF((self.width() - tw) / 2, (self.height() - th) / 2, tw, th), self._pm,
+                     QRectF(0, 0, self._pm.width(), self._pm.height()))
+        p.end()
+
+
+def _dot_groups(groups):
+    '''
+    Dots for the view from [(rgb, pairs (k, 2) of rows i < j)], each pair drawn at (i, j) and
+    (j, i): ([(QColor, QPolygonF)], [(2k, 2) arrays for rings], dot_xy, dot_pairs).
+    '''
+    from Qt.QtGui import QPolygonF, QColor
+    from Qt.QtCore import QPointF
+    dots, arrays, xys, pairs_all = [], [], [], []
+    for rgb, pairs in groups:
+        if not len(pairs):
+            continue
+        i, j = pairs[:, 0] + 0.5, pairs[:, 1] + 0.5
+        xy = np.stack([np.concatenate([j, i]), np.concatenate([i, j])], 1)
+        dots.append((QColor(*rgb), QPolygonF([QPointF(x, y) for x, y in xy])))
+        arrays.append(xy)
+        xys.append(xy)
+        pairs_all.append(np.concatenate([pairs, pairs]))
+    if not dots:
+        return None
+    return dots, arrays, np.concatenate(xys), np.concatenate(pairs_all)
 
 
 # -----------------------------------------------------------------------------
@@ -563,34 +698,35 @@ class AlphaLensPlot(ToolInstance):
         ml.addWidget(mc, stretch=1)
         layout.addWidget(mw)
 
-        # Mode switcher:  [<] [PAE][Contact probability][Model distances][Spread][Agreement] [>]  [Fit]
+        # View switcher, a segmented control (the ← / → keys step through it):
+        #   [PAE|Contact probability|Model contacts|Spread σ|Agreement]          [Fit]
         sw = QWidget(parent)
         sl = QHBoxLayout(sw)
         sl.setContentsMargins(0, 0, 0, 0)
-        sl.setSpacing(2)
-        self._left = lb = QToolButton(sw)
-        lb.setArrowType(Qt.ArrowType.LeftArrow)
-        lb.clicked.connect(lambda: self.step_mode(-1))
-        self._right = rb = QToolButton(sw)
-        rb.setArrowType(Qt.ArrowType.RightArrow)
-        rb.clicked.connect(lambda: self.step_mode(1))
-        sl.addWidget(lb)
-        sl.addStretch(1)
+        sl.setSpacing(0)
         self._tabs = {}
         group = QButtonGroup(sw)
         group.setExclusive(True)
-        for key in self._mode_cycle:
+        last = len(self._mode_cycle) - 1
+        for k, key in enumerate(self._mode_cycle):
             b = QToolButton(sw)
             b.setCheckable(True)
             b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-            b.setMinimumWidth(64)
+            b.setMinimumWidth(48)
+            radius = ('border-top-left-radius: 5px; border-bottom-left-radius: 5px;' if k == 0 else
+                      'border-top-right-radius: 5px; border-bottom-right-radius: 5px;' if k == last else '')
+            b.setStyleSheet(
+                'QToolButton { padding: 3px 9px; border: 1px solid palette(mid); margin-left: -1px;'
+                f' background: palette(button); color: palette(button-text); {radius} }}'
+                ' QToolButton:checked { background: palette(highlight); color: palette(highlighted-text);'
+                ' border-color: palette(highlight); }'
+                ' QToolButton:disabled { color: palette(mid); }')
             b.clicked.connect(lambda checked, k=key: self.set_mode(k))
             group.addButton(b)
             sl.addWidget(b)
             self._tabs[key] = b
         self._tab_group = group
         sl.addStretch(1)
-        sl.addWidget(rb)
         fit = QToolButton(sw)
         fit.setText('Fit')
         fit.setToolTip('Reset zoom (0 / Esc).  Zoom: scroll wheel, trackpad pinch or +/−.  '
@@ -625,8 +761,7 @@ class AlphaLensPlot(ToolInstance):
         gs = QGraphicsScene(gv)
         gv.setScene(gs)
 
-        self._cbar = QLabel(parent)
-        self._cbar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._cbar = LegendBar(parent)
         layout.addWidget(self._cbar)
 
         # Contact threshold slider
@@ -671,7 +806,8 @@ class AlphaLensPlot(ToolInstance):
         ps.setRange(0, 100)
         ps.setToolTip('Hide the parts of the model with pLDDT below this value')
         ps.valueChanged.connect(self._plddt_slider_moved)
-        self._plddt_value = QLabel('0', gv.viewport())
+        self._plddt_value = QLabel('hide', gv.viewport())
+        self._plddt_value.setToolTip('Hide the parts of the model with pLDDT below the slider value')
         self._plddt_timer = pdt = QTimer(parent)
         pdt.setSingleShot(True)
         pdt.setInterval(100)
@@ -687,26 +823,36 @@ class AlphaLensPlot(ToolInstance):
         self._info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._info.setFixedHeight(3 * self._info.fontMetrics().lineSpacing() + 4)
         layout.addWidget(self._info)
+        gv.leave_cb = lambda: self._set_info('')
+        gv.cell_click_cb = self._cell_clicked
+        gv.cell_pickable_cb = self._cell_pickable
 
+        # Buttons, in groups: the structure's colors | contacts on it | files
         bw = QWidget(parent)
         bl = QHBoxLayout(bw)
-        bl.setContentsMargins(0, 0, 0, 0)
-        for text, cb in (('Color PAE Domains', self._color_domains),
-                         ('Color pLDDT', self._color_plddt)):
+        bl.setContentsMargins(0, 2, 0, 0)
+        bl.setSpacing(6)
+        for text, cb, tip in (('Color pLDDT', self._color_plddt,
+                               'Color the structure in the four pLDDT bands of the track'),
+                              ('Color PAE Domains', self._color_domains,
+                               'Color the structure by ChimeraX\'s clustering of the PAE matrix')):
             b = QPushButton(text, bw)
+            b.setToolTip(tip)
             b.clicked.connect(cb)
             bl.addWidget(b)
+        bl.addSpacing(12)
         self._contacts_button = cbn = QPushButton('Show Contacts', bw)
         cbn.setCheckable(True)
         cbn.clicked.connect(self._contacts_button_clicked)
         bl.addWidget(cbn)
+        bl.addStretch(1)
         b = QPushButton('Save Image', bw)
+        b.setToolTip('Save the plot as shown (PNG)')
         b.clicked.connect(self._save_image)
         bl.addWidget(b)
         self._export_button = eb = QPushButton('Export CSV', bw)
         eb.clicked.connect(self._export_csv)
         bl.addWidget(eb)
-        bl.addStretch(1)
         layout.addWidget(bw)
 
         self._attach_structure()
@@ -715,6 +861,7 @@ class AlphaLensPlot(ToolInstance):
         self._update_controls()
         self._update_dots()
         self._redraw()
+        self._set_info('')
         tw.manage(placement=None)
 
     # ---------------------------------------------------------------------------
@@ -906,6 +1053,10 @@ class AlphaLensPlot(ToolInstance):
         if name in ('std', 'entropy'):
             self._spread_measure = name
             name = 'spread'
+        name = {'distance': 'model', 'distances': 'model'}.get(name, name)  # The view's former name
+        if name not in self._mode_cycle:
+            from chimerax.core.errors import UserError
+            raise UserError(f'Unknown view "{name}"; the views are ' + ', '.join(self._mode_cycle))
         if name not in self.available_modes():
             from chimerax.core.errors import UserError
             need = {'spread': 'a distogram',
@@ -938,14 +1089,14 @@ class AlphaLensPlot(ToolInstance):
         self._agreement_status = f'Loading the contact probabilities of {n} {kind}s ...'
         self._agreement_progress = progress
         self._sync_progress()
-        self._info.setText(self._agreement_status)
+        self._set_info('')
         self._update_controls()
 
     def agreement_loaded(self, show=False):
         self._agreement_status = None
         self._agreement_progress = None
         self._sync_progress()
-        self._info.setText('')
+        self._set_info('')
         if show:
             self._mode = 'agreement'
         self._update_controls()
@@ -956,7 +1107,7 @@ class AlphaLensPlot(ToolInstance):
         self._agreement_progress = None
         self._sync_progress()
         self._agreement_error = reason
-        self._info.setText(f'No agreement view: {reason}')
+        self._set_info(f'No agreement view: {reason}')
         self._update_controls()
 
     def _agreement_tooltip(self, enabled):
@@ -1099,11 +1250,6 @@ class AlphaLensPlot(ToolInstance):
 
     def _update_controls(self):
         avail = self.available_modes()
-        on = len(avail) > 1
-        tip = 'Switch view (or use ←/→ keys in the plot)' if on else self._data_status
-        for b in (self._left, self._right):
-            b.setEnabled(on)
-            b.setToolTip(tip)
         reasons = {'contact': 'Needs a distogram or confidence JSON contact_probs',
                    'spread': 'Needs a distogram'}
         c = f'{self._contact_cutoff():g}'
@@ -1111,14 +1257,21 @@ class AlphaLensPlot(ToolInstance):
             'pae': 'Predicted aligned error',
             'contact': f'Contact probability predicted by AlphaFold, P(d < {c} Å), from the '
                        'distogram or confidence JSON contact_probs; dots mark the pairs above the slider',
-            'model': f'Distances in the shown model (CB–CB, CA for glycine): grey from {c} Å '
-                     f'(dark) to {DISTANCE_FAR:g} Å and beyond (white); pairs closer than {c} Å '
-                     'are colored by the predicted contact probability'
-                     + ('' if self._pae.has_contact else ' (none here: one color)'),
+            'model': (f'Contacts in the shown model (CB–CB < {c} Å, CA for glycine) against the '
+                      f'predicted ones (P ≥ the slider): in both, predicted but not in the model, or '
+                      f'in the model but not predicted. Faint grey: the distance in the model, '
+                      f'{c} to {DISTANCE_FAR:g} Å. Click a colored pair to show it on the structure'
+                      if self._pae.has_contact else
+                      f'Contacts in the shown model (CB–CB < {c} Å, CA for glycine); faint grey: '
+                      f'farther pairs up to {DISTANCE_FAR:g} Å (no contact probabilities to compare)'),
             'spread': 'How spread the predicted distance distribution of each pair is',
         }
         for key, b in self._tabs.items():
             enabled = key in avail
+            if key == 'pae':
+                b.setToolTip('Predicted aligned error.  ← / → in the plot switch views')
+                b.setEnabled(True)
+                continue
             if key == 'agreement':
                 b.setToolTip(self._agreement_tooltip(enabled))
                 enabled = enabled and self._agreement_status is None
@@ -1187,24 +1340,14 @@ class AlphaLensPlot(ToolInstance):
 
     def _model_colormap_and_values(self, P):
         '''
-        Distances in the model in grey, with the pairs closer than the cutoff (the contacts in
-        the model) colored like the contact-probability view. A contact with P near 0 still
-        gets the lightest visible color, so that no model contact disappears.
+        The contacts in the model against the predicted ones at the slider threshold, one color
+        each (contacts.model_view_values), over faint grey distances; all model contacts in one
+        color without contact probabilities.
         '''
-        from .contacts import model_distances, distance_view_values
+        from .contacts import model_distances, model_view_values
         dist = model_distances(self._pae)[0]
-        c = self._contact_cutoff()
-        if P is None:
-            cmap = green_colormap(0, 1, dark_at_high=True)
-            return distance_colormap(cmap), distance_view_values(dist, c), (0, 1, None, ())
-        mode = self._modes['contact']
-        saved, self._mask_matrix = self._mask_matrix, False
-        try:
-            cmap, vals, cbar = self._colormap_and_values(mode, P)
-        finally:
-            self._mask_matrix = saved
-        floor = 0.06 if self._contact_scale == 'banded' else 1 / 6
-        return distance_colormap(cmap), distance_view_values(dist, c, vals, floor), cbar
+        vals = model_view_values(dist, self._contact_cutoff(), P, self._threshold)
+        return model_view_colormap(), vals, (-2, 2, None, ())
 
     def _render_region(self, y0, y1, x0, x1, f):
         '''RGB image of matrix rows y0:y1, columns x0:x1, pooled by f.'''
@@ -1252,18 +1395,24 @@ class AlphaLensPlot(ToolInstance):
         self._clear_detail()
         v = self._view
         v.show_dividers = self._showing_chain_dividers
-        v.dots_visible = bool(v.dots) and (vm == 'contact' or self._dots_all_views)
+        # The Model contacts view has dots of its own: by category, not by P
+        model_marks = vm == 'model' and self._pae.has_contact
+        self._model_counts = None
+        if model_marks:
+            from .contacts import model_contact_counts
+            self._model_counts = model_contact_counts(self._pae, vals)
+            self._update_model_dots(vals)
+        self._apply_dots()
+        v.dots_visible = bool(v.dots) and (vm in ('contact', 'model') or self._dots_all_views)
         v.set_image(rgb, f, n, track, keep_zoom=keep_zoom)
 
-        nav = '  ←/→ view, wheel/pinch zoom.' if len(self.available_modes()) > 1 else \
-              '  Wheel/pinch to zoom.'
         src = ''
         if mode.key in ('contact', 'model') and self._pae.has_contact \
                 and self._pae.metrics.get('contact_only'):
             note = 'distogram loading' if self._load_progress is not None else 'no distogram'
             src = f' <span style="color:gray">(confidence JSON contact_probs; {note})</span>'
         if mode.key == 'model' and not self._pae.has_contact:
-            src = ' <span style="color:gray">(no contact probabilities: contacts in one color)</span>'
+            src = ' <span style="color:gray">(no contact probabilities to compare)</span>'
         pool = (f' <span style="color:gray">[overview {f}×{f} {mode.pool}-pooled; '
                 f'zoom in for full resolution]</span>') if f > 1 else ''
         if far is not None:
@@ -1275,15 +1424,22 @@ class AlphaLensPlot(ToolInstance):
             agr = self._pae.agreement
             title = (f'Agreement: {agr.kind}s (of {agr.n}) with P(d < {agr.cutoff:g} Å) ≥ '
                      f'{self._threshold:.2f}')
+        elif model_marks:
+            title = f'{mode.title} (P ≥ {self._threshold:.2f})'
         self._heading.setText(f'<html><b>{escape(title)}</b>{src}{pool}<br>'
-                              f'{escape(str(self._pae.structure))} · {n} residues. '
-                              f'Drag a box to color residues.{nav}</html>')
+                              f'<span style="color:gray">{escape(str(self._pae.structure))} · '
+                              f'{n} residues</span></html>')
         for key, b in self._tabs.items():
             label = self._modes[key].tab if key != 'spread' else self._modes[self._spread_measure].tab
             b.setText(label)
             b.setChecked(key == vm)
         self._colorbar_args = (mode, cmap, cbar)
         self._draw_colorbar(mode, cmap, cbar)
+        self._mask_box.setEnabled(vm == 'contact')     # It blanks the contact-probability matrix only
+        self._mask_box.setToolTip('Also blank contact-matrix pixels below the threshold' if vm == 'contact'
+                                  else 'Applies to the Contact probability view')
+        if not self._info.toolTip():         # Not hovering: the hint follows the view
+            self._set_info('')
 
     def _refresh_colorbar(self):
         if getattr(self, '_colorbar_args', None) is not None:
@@ -1318,7 +1474,7 @@ class AlphaLensPlot(ToolInstance):
 
     def _plddt_slider_moved(self, value):
         self._view.plddt_line = value
-        self._plddt_value.setText(str(value))
+        self._plddt_value.setText(f'hide <{value}' if value else 'hide')
         self._place_plddt_slider()
         self._view.viewport().update()
         self._plddt_timer.start()           # Debounce while dragging
@@ -1412,30 +1568,46 @@ class AlphaLensPlot(ToolInstance):
         return self._pair_cache
 
     def _update_dots(self):
+        '''
+        The contact dots by P (every view but Model contacts), for the slider threshold;
+        rebuilt when the threshold or the data change.
+        '''
+        self._p_dots = None
+        if self._dots_on and self._pae.has_contact:
+            from .contacts import filter_pairs
+            pairs, probs = filter_pairs(*self._candidates(), self._threshold)
+            if len(pairs):
+                # Colored by P in the pLDDT-style bands, as the lines on the structure; drawn low
+                # band first, so the confident contacts end up on top
+                bands = contact_band(probs)
+                self._p_dots = _dot_groups([(CONTACT_COLORS[b], pairs[bands == b]) for b in np.unique(bands)])
+        self._apply_dots()
+
+    def _update_model_dots(self, vals):
+        '''Model contacts view: the dots of its three categories, the predicted pairs the model
+        misses drawn last, on top. Without contact probabilities there are no dots.'''
+        self._model_dots = None
+        if not (self._dots_on and self._pae.has_contact):
+            return
+        from .contacts import interesting_pairs
+        keep = interesting_pairs(self._pae, len(vals))[0]
+        groups, total = [], 0
+        for key in (MODEL_ONLY, MODEL_AND_PREDICTED, PREDICTED_ONLY):
+            ij = np.argwhere((vals == key) & keep)[:max(0, MAX_DOTS - total)]
+            total += len(ij)
+            groups.append((MODEL_CATEGORY_RGB[key], ij))
+        if total:
+            self._model_dots = _dot_groups(groups)
+
+    def _apply_dots(self):
+        '''Show the dots of the shown view: by category in Model contacts, else by P.'''
         v = self._view
-        v.dots = []
-        v.dot_xy = v.dot_pairs = None
-        if not self._dots_on or not self._pae.has_contact:
-            self._update_picked_marker()
-            return
-        from .contacts import filter_pairs
-        pairs, probs = filter_pairs(*self._candidates(), self._threshold)
-        if len(pairs) == 0:
-            self._update_picked_marker()
-            return
-        from Qt.QtGui import QPolygonF, QColor
-        from Qt.QtCore import QPointF
-        i, j = pairs[:, 0] + 0.5, pairs[:, 1] + 0.5
-        v.dot_xy = np.concatenate([np.stack([j, i], 1), np.stack([i, j], 1)])
-        v.dot_pairs = np.concatenate([pairs, pairs])
-        # Colored by P in the pLDDT-style bands, as the lines on the structure; drawn low band
-        # first, so the confident contacts end up on top
-        bands = contact_band(probs)
-        for b in np.unique(bands):
-            sel = pairs[bands == b]
-            bi, bj = sel[:, 0] + 0.5, sel[:, 1] + 0.5
-            pts = [QPointF(x, y) for x, y in zip(np.concatenate([bj, bi]), np.concatenate([bi, bj]))]
-            v.dots.append((QColor(*CONTACT_COLORS[b]), QPolygonF(pts)))
+        model = self._view_mode == 'model' and self._pae.has_contact
+        dots = getattr(self, '_model_dots', None) if model else getattr(self, '_p_dots', None)
+        if dots is None or not self._dots_on:
+            v.dots, v.dot_arrays, v.dot_xy, v.dot_pairs = [], [], None, None
+        else:
+            v.dots, v.dot_arrays, v.dot_xy, v.dot_pairs = dots
         self._update_picked_marker()
 
     # -- Picked contact (click on a dot) --------------------------------------------------
@@ -1503,80 +1675,104 @@ class AlphaLensPlot(ToolInstance):
 
     # -- Colorbar ------------------------------------------------------------------
     def _draw_colorbar(self, mode, cmap, cbar):
+        '''
+        The legend under the plot: the matrix colors, then the contact colors when dots or lines
+        are shown. Text in the window's own color, so that it reads in dark mode too; the legend
+        widget scales it down rather than widen the window.
+        '''
         lo, hi, gamma, band_ticks = cbar
-        from Qt.QtGui import QPixmap, QPainter, QColor, QImage, QPen
-        from Qt.QtCore import Qt, QRectF, QPointF
+        from Qt.QtGui import QPixmap, QPainter, QColor, QImage, QPalette
+        from Qt.QtCore import Qt, QRectF
         dpr = self._cbar.devicePixelRatioF()
-        w, gh, H = 260, 12, 30
-        x0, x1 = 20, 20 + w
-        # Legend of the contact colors when dots or lines are shown
-        dots = self._view.dots_visible or (self._struct_contacts and self._pae.has_contact)
-        model_plain = mode.key == 'model' and not self._pae.has_contact
-        extra = 170 + (260 if dots else 0) + (250 if mode.key == 'model' else 0)
-        pm = QPixmap(int((w + extra) * dpr), int(H * dpr))
+        text = self._cbar.palette().color(QPalette.ColorRole.WindowText)
+        frame = QColor(128, 128, 128)
+        w, gh, H = 200, 11, LegendBar.HEIGHT
+        x0 = 4
+        p_dots = self._view.dots_visible and not (mode.key == 'model' and self._pae.has_contact)
+        dots = p_dots or (self._struct_contacts and self._pae.has_contact)       # Lines use the P colors
+        canvas = 1400
+        pm = QPixmap(int(canvas * dpr), int(H * dpr))
         pm.setDevicePixelRatio(dpr)
         pm.fill(Qt.GlobalColor.transparent)
         p = QPainter(pm)
-        t = np.linspace(0, 1, w)
-        vals = lo + t * (hi - lo) if gamma is None else t      # gamma: bar is in display space
-        row = np.ascontiguousarray(cmap.interpolated_rgba8(vals)[:, :3][None, :, :].repeat(gh, 0))
-        img = QImage(row.data, w, gh, 3 * w, QImage.Format.Format_RGB888)
-        if model_plain:         # Model distances without P: contact swatch and distance ramp
-            p.setPen(QColor(90, 90, 90))
-            fm = p.fontMetrics()
-            rgb = tuple(int(v) for v in cmap.interpolated_rgba8([1.0])[0][:3])
-            text = f'< {self._contact_cutoff():g} Å in model'
-            p.fillRect(QRectF(x0, 2, 14, gh), QColor(*rgb))
-            p.drawRect(QRectF(x0, 2, 14, gh))
-            p.drawText(int(x0 + 18), 2 + gh, text)
-            self._draw_distance_ramp(p, x0 + 18 + fm.horizontalAdvance(text) + 14, gh)
-            p.end()
-            self._cbar.setPixmap(pm)
-            return
-        p.drawImage(QRectF(x0, 2, w, gh), img)
-        p.setPen(QColor(90, 90, 90))
-        p.drawRect(QRectF(x0, 2, w, gh))
-        if band_ticks is not None:
-            ticks = np.array(band_ticks)
-            pos = (ticks - lo) / (hi - lo if hi > lo else 1)
-        elif gamma is None:
-            if mode.key == 'pae':
-                ticks = np.linspace(lo, hi, 7)
-            else:       # Spread: round steps, not thirds of the range
-                step = next((s for s in (0.5, 1, 2, 5, 10) if (hi - lo) / s <= 5), (hi - lo) / 4)
-                ticks = np.arange(lo, hi + 1e-9, step)
-            pos = (ticks - lo) / (hi - lo if hi > lo else 1)
-        else:
-            ticks = np.array([0, 0.05, 0.25, 0.5, 1.0])
-            pos = ticks ** gamma
         fm = p.fontMetrics()
-        for tv, tp in zip(ticks, pos):
-            x = x0 + tp * w
-            p.drawLine(int(x), 2 + gh, int(x), 5 + gh)
-            s = f'{tv:g}'
-            p.drawText(int(x - fm.horizontalAdvance(s) / 2), 5 + gh + fm.ascent(), s)
-        unit = mode.unit
-        if mode.key in ('contact', 'model'):
-            unit = {'sqrt': 'P (√ scale)', 'linear': 'P', 'banded': 'P (bands)'}[self._contact_scale]
-            if mode.key == 'model':
-                unit += f', pairs < {self._contact_cutoff():g} Å'
-        elif mode.key == 'agreement':
-            unit = f'{self._pae.agreement.kind}s'
-        p.drawText(x1 + 8, 2 + gh, unit)
-        sx = x1 + 8 + fm.horizontalAdvance(unit) + 14
-        if self._view_mode == 'spread' and self._far_mask() is not None:
-            p.fillRect(QRectF(sx, 2, 14, gh), QColor(*UNDEFINED_GRAY))
-            p.drawRect(QRectF(sx, 2, 14, gh))
-            p.drawText(int(sx + 18), 2 + gh, 'far (>21.7 Å)')
-            sx += 18 + fm.horizontalAdvance('far (>21.7 Å)') + 14
-        elif mode.key == 'model':
-            sx = self._draw_distance_ramp(p, sx, gh)
+        if mode.key == 'model':
+            sx = self._draw_model_legend(p, x0, gh, text, frame)
+        else:
+            t = np.linspace(0, 1, w)
+            vals = lo + t * (hi - lo) if gamma is None else t      # gamma: bar is in display space
+            row = np.ascontiguousarray(cmap.interpolated_rgba8(vals)[:, :3][None, :, :].repeat(gh, 0))
+            p.drawImage(QRectF(x0, 2, w, gh), QImage(row.data, w, gh, 3 * w, QImage.Format.Format_RGB888))
+            p.setPen(frame)
+            p.drawRect(QRectF(x0, 2, w, gh))
+            if band_ticks is not None:
+                ticks = np.array(band_ticks)
+                pos = (ticks - lo) / (hi - lo if hi > lo else 1)
+            elif gamma is None:
+                if mode.key == 'pae':
+                    ticks = np.linspace(lo, hi, 7)
+                else:       # Spread: round steps, not thirds of the range
+                    step = next((s for s in (0.5, 1, 2, 5, 10) if (hi - lo) / s <= 5), (hi - lo) / 4)
+                    ticks = np.arange(lo, hi + 1e-9, step)
+                pos = (ticks - lo) / (hi - lo if hi > lo else 1)
+            else:
+                ticks = np.array([0, 0.05, 0.25, 0.5, 1.0])
+                pos = ticks ** gamma
+            for tv, tp in zip(ticks, pos):
+                x = x0 + tp * w
+                p.setPen(frame)
+                p.drawLine(int(x), 2 + gh, int(x), 5 + gh)
+                p.setPen(text)
+                label = f'{tv:g}'
+                p.drawText(int(x - fm.horizontalAdvance(label) / 2), 5 + gh + fm.ascent(), label)
+            unit = mode.unit
+            if mode.key == 'contact':
+                unit = {'sqrt': 'P (√ scale)', 'linear': 'P', 'banded': 'P (bands)'}[self._contact_scale]
+            elif mode.key == 'agreement':
+                unit = f'{self._pae.agreement.kind}s'
+            p.setPen(text)
+            p.drawText(x0 + w + 6, 2 + gh, unit)
+            sx = x0 + w + 6 + fm.horizontalAdvance(unit) + 18
+            if self._view_mode == 'spread' and self._far_mask() is not None:
+                label = f'undefined (P(d > {self._pae.metrics.get("far_edge", 21.7):.1f} Å) high)'
+                p.fillRect(QRectF(sx, 2, 12, gh), QColor(*UNDEFINED_GRAY))
+                p.setPen(frame)
+                p.drawRect(QRectF(sx, 2, 12, gh))
+                p.setPen(text)
+                p.drawText(int(sx + 16), 2 + gh, label)
+                sx += 16 + fm.horizontalAdvance(label) + 18
         if dots:
-            self._draw_contact_legend(p, sx, gh)
+            sx = self._draw_contact_legend(p, sx, gh, text, frame)
         p.end()
-        self._cbar.setPixmap(pm)
+        used = int(min(canvas, sx + 2))
+        out = pm.copy(0, 0, int(used * dpr), int(H * dpr))
+        out.setDevicePixelRatio(dpr)
+        self._cbar.setPixmap(out)
 
-    def _draw_contact_legend(self, p, sx, gh):
+    MODEL_LEGEND = ((MODEL_AND_PREDICTED, 'in model and predicted'), (PREDICTED_ONLY, 'predicted only'),
+                    (MODEL_ONLY, 'model only'))
+
+    def _draw_model_legend(self, p, sx, gh, text, frame):
+        '''Swatches of the Model contacts view; one swatch without contact probabilities.'''
+        from Qt.QtGui import QColor
+        from Qt.QtCore import QRectF
+        fm = p.fontMetrics()
+        c = f'{self._contact_cutoff():g}'
+        items = (self.MODEL_LEGEND if self._pae.has_contact
+                 else ((MODEL_AND_PREDICTED, f'contact in the model (< {c} Å)'),))
+        for key, label in items:
+            p.fillRect(QRectF(sx, 2, 12, gh), QColor(*MODEL_CATEGORY_RGB[key]))
+            p.setPen(frame)
+            p.drawRect(QRectF(sx, 2, 12, gh))
+            p.setPen(text)
+            p.drawText(int(sx + 16), 2 + gh, label)
+            sx += 16 + fm.horizontalAdvance(label) + 14
+        p.setPen(text)
+        note = f'CB–CB < {c} Å' + (f', P ≥ {self._threshold:.2f}' if self._pae.has_contact else '')
+        p.drawText(4, 5 + gh + fm.ascent(), note)
+        return sx + 4
+
+    def _draw_contact_legend(self, p, sx, gh, text, frame):
         '''
         Colors of the predicted contacts (dots and lines): the fixed P scale from 0 to 1, with
         the part below the slider threshold (not drawn) faded and the threshold marked.
@@ -1584,7 +1780,8 @@ class AlphaLensPlot(ToolInstance):
         from Qt.QtGui import QColor, QImage
         from Qt.QtCore import QRectF, QPointF
         fm = p.fontMetrics()
-        label = 'contact probability:'
+        label = 'contacts:'
+        p.setPen(text)
         p.drawText(int(sx), 2 + gh, label)
         sx += fm.horizontalAdvance(label) + 6
         lw = 120
@@ -1593,37 +1790,21 @@ class AlphaLensPlot(ToolInstance):
         t = self._threshold
         if t > 0:
             p.fillRect(QRectF(sx, 2, t * lw, gh), QColor(255, 255, 255, 170))
+        p.setPen(frame)
         p.drawRect(QRectF(sx, 2, lw, gh))
         for e in (0.0,) + CONTACT_COLOR_EDGES + (1.0,):
             x = sx + e * lw
+            p.setPen(frame)
             p.drawLine(int(x), 2 + gh, int(x), 5 + gh)
             if e < 1:       # "1" would run into "0.9"; the bar ends there
                 tv = f'{e:g}'
+                p.setPen(text)
                 p.drawText(int(x - fm.horizontalAdvance(tv) / 2), 5 + gh + fm.ascent(), tv)
         # Threshold: a dark tick through the bar
         x = sx + t * lw
-        pen = p.pen()
         p.setPen(QColor(20, 20, 20))
-        p.drawLine(QPointF(x, 0), QPointF(x, 2 + gh + 2))
-        p.setPen(pen)
-        return sx + lw + 20
-
-    def _draw_distance_ramp(self, p, sx, gh):
-        '''Grey ramp of the Model distances view (cutoff to DISTANCE_FAR Å); returns the next x.'''
-        from Qt.QtGui import QImage
-        from Qt.QtCore import QRectF
-        fm = p.fontMetrics()
-        label = 'distance:'
-        p.drawText(int(sx), 2 + gh, label)
-        sx += fm.horizontalAdvance(label) + 6
-        lw = 70
-        g = np.round(255 * np.linspace(DISTANCE_NEAR_GREY, 1.0, lw)).astype(np.uint8)
-        ramp = np.ascontiguousarray(np.repeat(np.stack([g, g, g], -1)[None], gh, 0))
-        p.drawImage(QRectF(sx, 2, lw, gh), QImage(ramp.data, lw, gh, 3 * lw, QImage.Format.Format_RGB888))
-        p.drawRect(QRectF(sx, 2, lw, gh))
-        for tv, tx in ((f'{self._contact_cutoff():g}', sx), (f'{DISTANCE_FAR:g}+ Å', sx + lw)):
-            p.drawText(int(tx - fm.horizontalAdvance(tv) / 2), 5 + gh + fm.ascent(), tv)
-        return sx + lw + 30
+        p.drawLine(QPointF(x, 1), QPointF(x, 2 + gh + 1))
+        return sx + lw + 12
 
     def _set_chains(self):
         from .contacts import row_chain_ids
@@ -1708,6 +1889,12 @@ class AlphaLensPlot(ToolInstance):
             md = model_distance(pae, y, x)
             if md is not None:
                 vals.append(f'model {md[1]} {md[0]:.1f} Å')
+                r = self._render
+                if self._view_mode == 'model' and r is not None and pae.has_contact:
+                    from .contacts import MODEL_CATEGORY_LABELS
+                    label = MODEL_CATEGORY_LABELS.get(int(r['vals'][y, x])) if r['vals'][y, x] >= 0 else None
+                    if label:
+                        vals[-1] += f' ({label})'
             agr = pae.agreement
             if agr is not None:
                 k = int(agr.counts(self._threshold)[y, x])
@@ -1717,8 +1904,54 @@ class AlphaLensPlot(ToolInstance):
             msg = f'{rname} ↔ {cname}:  ' + ',  '.join(vals)
         elif self._track_offset is not None and y >= self._track_offset and 0 <= x < n:
             msg = f'{pae.row_residue_or_atom_name(x)}:  pLDDT {self._plddt[x]:.1f}'
-        self._info.setText(msg)
-        self._info.setToolTip(msg)
+        self._set_info(msg)
+
+    def _set_info(self, msg):
+        '''The line under the plot: hover values, or a hint for the shown view in grey.'''
+        info = self._info
+        if msg:
+            info.setStyleSheet('')
+            info.setText(msg)
+            info.setToolTip(msg)
+            return
+        info.setStyleSheet('color: gray;')
+        info.setText(self._idle_text())
+        info.setToolTip('')
+
+    def _idle_text(self):
+        if self._agreement_status is not None:
+            return self._agreement_status
+        if self._agreement_error and self._mode == 'agreement':
+            return f'No agreement view: {self._agreement_error}'
+        c = getattr(self, '_model_counts', None)
+        if self._view_mode == 'model' and c is not None:
+            t = self._threshold
+            unpredicted = c['unpredicted']
+            return (f'In this model: {c["formed"]} of {c["predicted"]} predicted {c["scope"]} contacts '
+                    f'(P ≥ {t:.2f}) are formed, {c["missed"]} not; {unpredicted} {c["scope"]} '
+                    f'contact{"s" if unpredicted != 1 else ""} of the model '
+                    f'{"are" if unpredicted != 1 else "is"} not predicted. Click a dot or colored pair '
+                    f'to show it on the structure.')
+        hints = ['Hover for the values of a residue pair']
+        if self._view.dots_visible:
+            hints.append('click a dot to show that contact on the structure')
+        hints.append('drag a box to color its residues (right-click to re-predict it)')
+        hints.append('scroll to zoom, Shift-drag to pan, ← / → to switch views')
+        return ' · '.join(hints) + '.'
+
+    def _cell_pickable(self, i, j):
+        '''In the Model contacts view, the colored pairs can be clicked like contact dots.'''
+        r = self._render
+        if self._view_mode != 'model' or r is None or not self._pae.has_contact:
+            return False
+        n = r['n']
+        return 0 <= i < n and 0 <= j < n and i != j and r['vals'][i, j] >= 0
+
+    def _cell_clicked(self, i, j):
+        if not self._cell_pickable(i, j):
+            return False
+        self._pick_contact(min(i, j), max(i, j))
+        return True
 
     def _rectangle_select(self, xy1, xy2):
         n = self._pae.matrix_size

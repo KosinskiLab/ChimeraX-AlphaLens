@@ -24,6 +24,14 @@ log = open(os.path.join(OUT, 'render_log.txt'), 'w')
 from chimerax.core.commands import run      # noqa: E402
 from chimerax.atomic import AtomicStructure  # noqa: E402
 
+# The README images are light, whatever the system appearance (Qt 6.8 and newer can switch it)
+try:
+    from Qt.QtCore import Qt as _Qt
+    from Qt.QtGui import QGuiApplication
+    QGuiApplication.styleHints().setColorScheme(_Qt.ColorScheme.Light)
+except (AttributeError, ImportError):
+    pass
+
 
 def note(msg):
     log.write(msg + '\n')
@@ -68,13 +76,13 @@ try:
     run(session, f'alphalens #{s.id_string} mode agreement wait true')
     plot.set_threshold(0.5)
     window(plot, 720, 780)
-    plot.set_mode('model')          # Widest colour bar: let the window settle before grabbing
+    plot.set_mode('model')          # Let the window settle before grabbing
     flush(60)
     from Qt.QtGui import QImage, QPainter, QColor, QFont
     from Qt.QtCore import Qt, QRectF
     panels = []
     for mode, title in (('pae', 'PAE'), ('contact', 'Contact probability (dots: P ≥ 0.5)'),
-                        ('model', 'Model distances'), ('std', 'Spread σ'),
+                        ('model', 'Model contacts (P ≥ 0.5)'), ('std', 'Spread σ'),
                         ('agreement', 'Agreement (models with P ≥ 0.5)')):
         plot.set_mode(mode)
         flush()
@@ -117,7 +125,8 @@ try:
     font.setPointSizeF(13)
     font.setBold(True)
     p.setFont(font)
-    p.setPen(QColor(30, 30, 30))
+    from Qt.QtWidgets import QApplication
+    p.setPen(QApplication.palette().windowText().color())     # Readable on the window's background
     for k, (title, view, cbar) in enumerate(panels):
         x0, y0 = (k % cols) * (pw + gap), (k // cols) * ph
         p.drawText(QRectF(x0, y0, pw, title_h), Qt.AlignmentFlag.AlignCenter, title)

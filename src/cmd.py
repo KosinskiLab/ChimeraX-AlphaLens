@@ -1,7 +1,7 @@
 """
 Commands:
 
-  alphalens open <dir-or-structure-file> [rank N] [mode pae|contact|distance|std|entropy|agreement]
+  alphalens open <dir-or-structure-file> [rank N] [mode pae|contact|model|std|entropy|agreement]
                 [cutoff 8] [contacts true|false] [minProb 0.5] [saveContacts file.csv] ...
   alphalens [#model] [paeFile path] [distogram path] [mode ...] [cutoff 8] [palette ..] [range ..]
                 [contacts true|false] [minProb 0.5] [saveContacts file.csv]
@@ -79,7 +79,7 @@ def alphalens(session, structure=None, pae_file=None, distogram=None, mode=None,
     from .pae import AlphaLensPAE
 
     if mode == 'distance':
-        mode = 'model'                  # Model distances view; "model" is its name up to 0.5
+        mode = 'model'                  # Model contacts view ("distance": its name in 0.6 to 1.3)
     if isinstance(structure, str):      # "alphalens <path>": the same as "alphalens open <path>"
         if pae_file is not None:
             raise UserError('"paeFile" needs an open structure, e.g. "alphalens #1 paeFile ..."')
@@ -183,7 +183,7 @@ def alphalens(session, structure=None, pae_file=None, distogram=None, mode=None,
             if mode == 'contact':
                 plot.set_mode('contact')
         if mode == 'model':
-            plot.set_mode('model')          # Model distances; contacts colored by P once loaded
+            plot.set_mode('model')          # Model contacts; compared with P once loaded
         if dpath and not wait and pae.has_contact:
             _apply_contacts(session, pae, plot, contacts, min_prob)     # Redrawn once loaded
 

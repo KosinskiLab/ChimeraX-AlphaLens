@@ -98,42 +98,63 @@ def check_prediction(c, pkg, label, path):
 
     tabs = {k: b.text() for k, b in plot._tabs.items()}
     c.check(f'{label} tab labels', tabs['contact'] == 'Contact probability'
-            and tabs['model'] == 'Model distances', str(tabs))
+            and tabs['model'] == 'Model contacts', str(tabs))
+    widths = set()
     for key in ('pae', 'contact', 'model', 'spread'):
         plot._tabs[key].click()
         c.pump(0.4)
         heading = plot._heading.text().split('</b>')[0].replace('<html><b>', '')
         c.check(f'{label} view {key}', plot._view_mode == key, heading[:100])
         plot.save_image(str(c.out / f'{label}_{key}.png'))
+        widths.add(plot.tool_window.ui_area.window().width())
+    c.check(f'{label} switching views keeps the window width', len(widths) == 1, str(sorted(widths)))
 
-    # Model distances: model contacts colored by P over grey distances, in one matrix
+    # Model contacts: the model's contacts against the predicted ones, over faint distances
     plot._tabs['model'].click()
     c.pump(0.4)
     vals = plot._render['vals']
     mask = contacts.model_contacts(pae, 8.0)[0]
     dist = contacts.model_distances(pae)[0]
     P = pae.metrics['contact']
-    far = ~mask & ~np.isnan(dist)
-    expected_contacts = np.maximum(np.sqrt(np.clip(P[mask], 0, 1)), 1 / 6)
-    expected_far = -1 - np.clip((dist[far] - 8) / (contacts.DISTANCE_FAR - 8), 0, 1)
-    c.check(f'{label} Model distances values', int((vals >= 0).sum()) == int(mask.sum())
-            and np.allclose(vals[mask], expected_contacts, atol=1e-5)
-            and np.allclose(vals[far], expected_far, atol=1e-5),
-            f'{int(np.triu(mask, 1).sum())} contacts, distances up to {np.nanmax(dist):.0f} Å')
+    predicted = np.maximum(P, P.T) >= plot.threshold
+    expected = contacts.model_view_values(dist, 8.0, P, plot.threshold)
+    c.check(f'{label} Model contacts values', np.array_equal(vals, expected)
+            and (vals[mask & predicted] == contacts.MODEL_AND_PREDICTED).all()
+            and (vals[mask & ~predicted] == contacts.MODEL_ONLY).all()
+            and (vals[~mask & predicted & ~np.isnan(dist)] == contacts.PREDICTED_ONLY).all(),
+            f'{int(np.triu(mask & predicted, 1).sum())} in both, '
+            f'{int(np.triu(~mask & predicted, 1).sum())} predicted only, '
+            f'{int(np.triu(mask & ~predicted, 1).sum())} model only')
     r = plot._render
-    rgb = plot._render_region(0, r['n'], 0, r['n'], r['f'])
-    grey = (rgb[..., 0] == rgb[..., 1]) & (rgb[..., 1] == rgb[..., 2]) & (rgb[..., 0] < 250)
-    green = rgb[..., 1] > rgb[..., 0] + 10
-    c.check(f'{label} Model distances image: grey distances and green contacts',
-            bool(grey.any() and green.any()), f'{int(grey.sum())} grey, {int(green.sum())} green pixels')
-    c.check(f'{label} Model distances colour bar', not plot._cbar.pixmap().isNull())
+    rgb = plot._render_region(0, r['n'], 0, r['n'], 1)
+    both = (rgb == np.array(contacts.MODEL_CATEGORY_RGB[contacts.MODEL_AND_PREDICTED], np.uint8)).all(-1)
+    c.check(f'{label} Model contacts image: model contacts in the "both" color',
+            bool(both[mask & predicted].all()), f'{int(both.sum())} pixels')
+    counts = plot._model_counts
+    c.check(f'{label} Model contacts counts in the info line', counts is not None
+            and f'{counts["formed"]} of {counts["predicted"]}' in plot._info.text(), plot._info.text()[:120])
+    dot_rgb = {(q.red(), q.green(), q.blue()) for q, _ in plot._view.dots}
+    c.check(f'{label} Model contacts dots by category', plot._view.dots_visible
+            and dot_rgb <= set(contacts.MODEL_CATEGORY_RGB.values())
+            and len(plot._view.dot_pairs) == 2 * (counts['predicted'] + counts['unpredicted']),
+            f'{sorted(dot_rgb)}, {len(plot._view.dot_pairs) // 2} pairs')
+    c.check(f'{label} Model contacts legend', not plot._cbar.pixmap().isNull())
+    i0, j0 = (int(v) for v in np.argwhere(np.triu(mask & predicted, 1))[0])
+    plot._dots_box.setChecked(False)       # Without dots, the colored pairs themselves are clicked
+    c.pump(0.2)
+    c.check(f'{label} Model contacts: a colored pair can be clicked',
+            plot._cell_clicked(i0, j0) and plot._picked == (i0, j0))
+    plot._dots_box.setChecked(True)
+    plot.clear_picked_contact()
     for name in ('distance', 'model'):            # "model": the view's name up to 0.5
         run(session, f'alphalens #{s.id_string} mode pae')
         run(session, f'alphalens #{s.id_string} mode {name}')
         c.pump(0.3)
         c.check(f'{label} "mode {name}" command', plot._view_mode == 'model')
 
-    # Hover, structure contacts, clicked contact, pLDDT colors, CSV export
+    # Hover, structure contacts, clicked contact, pLDDT colors, CSV export (contact view: P dots)
+    plot._tabs['contact'].click()
+    c.pump(0.3)
     pairs, _ = contacts.contact_pairs(pae, 0.5)
     i, j = (int(v) for v in (pairs[0] if len(pairs) else
                              np.unravel_index(np.argmax(np.triu(P, 1)), P.shape)))

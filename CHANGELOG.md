@@ -1,5 +1,62 @@
 # Changelog
 
+## 1.4.0
+
+* **Model contacts** replaces the Model distances view. It answers the view's question directly:
+  each pair is green when the shown model forms it (CB–CB < 8 Å) and the prediction supports it
+  (P ≥ the slider threshold), vermillion when it is predicted but not formed in the model, purple
+  when the model has it but the prediction does not; farther pairs are faint grey. The line under
+  the slider counts them for the inter-chain pairs ("87 of 88 predicted inter-chain contacts are
+  formed, 1 not; 11 contacts of the model are not predicted"), so AF3 samples and AF2 models can
+  be compared from the Model menu. Its dots take the three colors, so the inter-chain pairs stay
+  visible in a zoomed-out overview; a dot or colored pair is clicked to show it on the structure.
+  Until now the model's contacts were drawn in the green of P, under the contact dots that cover
+  the same pairs, so at an interface they could hardly be seen; most of the matrix was grey
+  distances. `mode model` (or `distance`) still selects it.
+* The Model menu of a local AF3 prediction lists its five samples, best first, so they can be
+  compared; it listed only the opened one.
+* Zoomed in, contact dots become rings, so the matrix cell under a dot shows its color.
+* Switching views no longer widens the window: the legend under the plot is drawn to the
+  window's width (the Model distances legend made the window about 400 px wider, and it stayed so).
+* Readable in dark mode: chain labels, the pLDDT label and the legend text follow the window's
+  colors; they were dark grey on the dark ChimeraX background.
+* A quieter window: the views are a segmented control (the ← / → arrow buttons are gone; the keys
+  still switch views); the heading is the view's name and one grey line about the model, and the
+  interaction hints moved to the line under the slider, shown while the pointer is not on the plot;
+  buttons are grouped (structure colors, contacts, files); the pLDDT slider is labeled "hide";
+  the "pLDDT" label is no longer clipped; undefined spread is light grey instead of mid grey.
+* Asking the plot for an unknown view now names the views; `distance` works as `model`.
+* Discontinuous regions, as AlphaPulldown predicts them. A box dragged across a gap in the
+  model (an AlphaPulldown region such as `P1:1-100:150-200`, or unresolved residues) is
+  re-predicted as one chain with the gap kept; sequence input takes several ranges a chain
+  (`1-100,150-200`). The model sees the gap through the residue index, as AlphaPulldown's AF2 and
+  AF3 backends do: the segments stay one chain, far apart in sequence, rather than being joined
+  into a continuous chain or split into separate chains. Barnase with residues 36–45 cut out:
+  the gap's ends stay 14–15 Å apart (16 Å in the full-length model) and the rest is within
+  0.3–0.4 Å of the full-length prediction; joined into a continuous chain, the ends are bonded
+  and the rest is 1.6 Å away. Precomputed AlphaPulldown features are cropped segment by segment.
+* Predicted structures are written in the source numbering: the chain IDs and residue numbers of
+  the re-predicted region (insertion codes included), or the UniProt positions of a sequence
+  range, so `#1/A:120` and `#2/A:120` are the same residue. The engine's own files (chains A, B,
+  ... numbered from 1) are kept in `engine_output/`; `job.json` records the numbering.
+* Until now a box across a gap in an AlphaPulldown region was predicted as one continuous chain,
+  fusing the two segments: the gap was invisible to the crop, which only looked for unresolved
+  residues. Flanks now stop at gaps as at chain ends.
+* AlphaPulldown notation in the sequence box: `P0A836:1-100+P0AGE9`, `P69905:2` (two copies),
+  `Q8I2G6:2:1-100:150-200`. Each identifier is looked up once.
+* A redesigned prediction dialog: the chains in a table (entry, length, range; hover for the
+  sequence), one alignment choice with only its own fields shown (reuse the source MSA,
+  precomputed features, an A3M file with Browse…, or the ColabFold search), and recycles, seed,
+  AF3 sampling, time limit, results folder and engine path under **Settings**, closed by default
+  with a one-line summary. The sequence dialog is about 650 px tall instead of 1,150. The plot's
+  hint line mentions that a dragged box can be re-predicted from the right-click menu.
+* LocalFold comes from KosinskiLab's fork (`github.com/KosinskiLab/localfold`, protected branch
+  `alphalens`), pinned at `837a15c`: upstream's `68c5919` plus the residueIds patch. Upstream is
+  moving the native engines into private repositories, which would have broken first-time setup.
+  Engines built by an earlier AlphaLens are rebuilt once by **Update & Predict**; without
+  residueIds the new engines give the same structures as before (identical coordinates, AF2 and
+  AF3). Cached MSAs stay valid.
+
 ## 1.3.0
 
 * Local prediction on Linux x86_64 with an NVIDIA GPU. **Install & Predict** builds LocalFold's

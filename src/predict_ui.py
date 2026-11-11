@@ -9,7 +9,7 @@ import uuid
 from Qt.QtCore import QTimer
 from Qt.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFormLayout, QHBoxLayout,
                           QLabel, QLineEdit, QPlainTextEdit, QProgressBar, QPushButton,
-                          QScrollArea, QSpinBox, QVBoxLayout, QWidget)
+                          QSpinBox, QVBoxLayout, QWidget)
 from . import predict
 from . import predict_contacts
 from . import predict_features
@@ -21,6 +21,23 @@ PLATFORM_TEXT = {'metal': 'Local protein prediction on Apple Silicon (Metal)',
 SETUP_REQUIREMENTS = {'metal': 'Requires Apple Silicon and Xcode Command Line Tools',
                       'cuda': 'Requires an NVIDIA GPU, the CUDA toolkit (nvcc, cuBLAS) and g++',
                       None: 'Requires Apple Silicon macOS, or Linux x86_64 with an NVIDIA GPU'}
+
+
+def peptide_bonded(a, b):
+    """b follows a in one continuous segment: bonded C-N and no jump in the residue numbers.
+
+    AlphaPulldown regions (P1:1-100:150-200) are one chain whose numbering jumps across the gap,
+    with no unresolved positions in between, so position in the chain alone cannot see the gap.
+    """
+    step = b.number - a.number
+    if not (step == 1 or (step == 0 and b.insertion_code != a.insertion_code)):
+        return False
+    c, n = a.find_atom('C'), b.find_atom('N')
+    if c is None or n is None:
+        return False
+    import numpy as np
+    # 1.33 A bonded; 2.5 A tolerates the stretched bonds of low-confidence predicted regions.
+    return float(np.linalg.norm(c.coord - n.coord)) <= 2.5
 
 
 def snapshot(plot, flanks):
@@ -37,8 +54,11 @@ def snapshot(plot, flanks):
         if not isinstance(r, Residue) or r.polymer_type != Residue.PT_AMINO or r not in indices:
             rows.append(None)
         else:
+            i = indices[r]
+            previous = r.chain.residues[i - 1] if i else None
             rows.append(dict(chain_id=r.chain_id, number=int(r.number), insertion_code=r.insertion_code,
-                             aa=r.one_letter_code, chain_index=indices[r]))
+                             aa=r.one_letter_code, chain_index=i,
+                             break_before=previous is not None and not peptide_bonded(previous, r)))
     chains = predict.crop_chains(rows, plot._prediction_region, flanks)
     rra = pae.row_residues_or_atoms()
     for c in chains:
@@ -158,8 +178,60 @@ def show_prediction_report(session, directory):
     return dialog
 
 
+class Section(QWidget):
+    """A titled block that opens and closes; a one-line summary stands in for it while closed."""
+    def __init__(self, title, expanded=False):
+        super().__init__()
+        from Qt.QtCore import Qt
+        from Qt.QtWidgets import QToolButton
+        outer = QVBoxLayout(self); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(2)
+        header = QHBoxLayout(); outer.addLayout(header)
+        self.button = QToolButton(); self.button.setText(title); self.button.setCheckable(True)
+        self.button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.button.setStyleSheet('QToolButton { border: none; font-weight: bold; }')
+        self.summary = QLabel(); self.summary.setStyleSheet('color: gray;')
+        # The summary takes the free width; alone (open), the button keeps to the left
+        header.addWidget(self.button, 0, Qt.AlignmentFlag.AlignLeft); header.addWidget(self.summary, 1)
+        self.body = QWidget(); outer.addWidget(self.body)
+        self._arrows = (Qt.ArrowType.RightArrow, Qt.ArrowType.DownArrow)
+        self.button.toggled.connect(self.set_expanded)
+        self.button.setChecked(expanded); self.set_expanded(expanded)
+
+    def set_expanded(self, expanded):
+        self.button.setArrowType(self._arrows[bool(expanded)])
+        self.body.setVisible(expanded); self.summary.setVisible(not expanded)
+        window = self.window()
+        if window is not self and window.isVisible():
+            # Give the space back when closing; never shrink below what is shown
+            QTimer.singleShot(0, lambda: window.resize(window.width(), window.sizeHint().height()))
+
+
+def _option(text, tooltip=''):
+    """An alignment choice: looks like a radio button, but can also be cleared (no choice yet)."""
+    from Qt.QtWidgets import QRadioButton
+    button = QRadioButton(text); button.setAutoExclusive(False)
+    if tooltip:
+        button.setToolTip(tooltip)
+    return button
+
+
+def _indented(*widgets, form=False):
+    """Details of an option, indented beneath it and shown only while it is chosen."""
+    box = QWidget(); layout = QFormLayout(box) if form else QHBoxLayout(box)
+    layout.setContentsMargins(24, 0, 0, 4)
+    if form:
+        layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        for label, widget in widgets:
+            layout.addRow(label, widget)
+    else:
+        for widget in widgets:
+            layout.addWidget(widget, 1 if isinstance(widget, QLineEdit) else 0)
+    return box
+
+
 class PredictionDialog(QDialog):
     def __init__(self, plot=None, session=None):
+        from Qt.QtWidgets import QGroupBox, QHeaderView, QTableWidget, QAbstractItemView
         session = plot.session if plot is not None else session
         super().__init__(session.ui.main_window)
         self.plot, self.session = plot, session
@@ -167,25 +239,62 @@ class PredictionDialog(QDialog):
         self.entries = self.lookup_future = None
         self.job = self.output_model = self.comparison = None
         self.setup_job = self.pending_prediction = None
-        self.setWindowTitle('Local protein prediction · experimental')
-        self.resize(660, 400)
+        self.setWindowTitle('AlphaLens prediction · experimental')
+        self.resize(640, 400)
         layout = QVBoxLayout(self)
-        intro = QLabel(PLATFORM_TEXT.get(native_platform(), PLATFORM_TEXT[None]) + '\n'
-                       'Model weights download on the first run and are cached locally.')
-        intro.setWordWrap(True); layout.addWidget(intro)
+        title = QLabel('Re-predict the selected interface' if plot is not None else 'Predict a structure')
+        title.setStyleSheet('font-size: 15px; font-weight: bold;')
+        layout.addWidget(title)
+        intro = QLabel(PLATFORM_TEXT.get(native_platform(), PLATFORM_TEXT[None])
+                       + '. Model weights download on the first run and are cached locally.')
+        intro.setWordWrap(True); intro.setStyleSheet('color: gray;'); layout.addWidget(intro)
+
+        # ---- What to predict
         self.input_widgets = []
+        self.flanks = QSpinBox(self); self.flanks.setRange(0, 100); self.flanks.setValue(10)
+        self.flanks.setSuffix(' residues'); self.flanks.setToolTip(
+            'Added on each side of the selected residues, up to chain ends and chain breaks; '
+            'excluded from the score comparison')
+        self.preview = QLabel(); self.preview.setWordWrap(True)
         if plot is None:
-            label = QLabel('Paste a raw sequence, multiple FASTA entries, or UniProt IDs.\n'
-                           'UniProt lookup sends only the IDs to UniProt; review the sequences before predicting.')
-            label.setWordWrap(True); layout.addWidget(label)
-            self.input_text = QPlainTextEdit(); self.input_text.setMaximumHeight(100)
-            self.input_text.setPlaceholderText('P69905\nP68871\n\nor >chain_A\nSEQUENCE\n>chain_B\nSEQUENCE')
+            self.input_text = QPlainTextEdit(); self.input_text.setFixedHeight(
+                4*self.input_text.fontMetrics().lineSpacing() + 12)
+            self.input_text.setPlaceholderText('UniProt IDs: P69905 P68871 · AlphaPulldown style: '
+                                               'P0A836:1-100+P0AGE9, P69905:2\n'
+                                               'a raw sequence, or FASTA:\n>chain_A\nSEQUENCE')
+            self.input_text.setToolTip('Paste a raw sequence, FASTA entries, or UniProt IDs. UniProt lookup '
+                                       'sends only the IDs to UniProt. AlphaPulldown notation sets copies '
+                                       '(ID:2) and a 1-based range (ID:25-120); "+" joins the chains of one '
+                                       'complex.')
             layout.addWidget(self.input_text)
-            self.load_button = QPushButton('Load / resolve sequences'); layout.addWidget(self.load_button)
-            self.resolved = QPlainTextEdit(); self.resolved.setReadOnly(True); self.resolved.setMaximumHeight(100)
-            self.resolved.setPlaceholderText('Resolved sequences will appear here for review.')
-            layout.addWidget(self.resolved)
+            row = QHBoxLayout(); layout.addLayout(row)
+            self.load_button = QPushButton('Load sequences')
+            self.load_button.setToolTip('Resolve the input (UniProt lookup in the background) for review')
+            row.addWidget(self.preview, 1); row.addWidget(self.load_button)
+            self.preview.setText('Paste the input, then Load sequences to review the chains.')
+            self.chain_table = QTableWidget(0, 4)
+            self.chain_table.setHorizontalHeaderLabels(['Chain', 'Entry', 'Length', 'Range (optional)'])
+            self.chain_table.verticalHeader().hide()
+            self.chain_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            self.chain_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+            header = self.chain_table.horizontalHeader()
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+            for column in (0, 2, 3):
+                header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+            self.chain_table.hide()
+            layout.addWidget(self.chain_table)
+            self.ranges = []
             self.input_widgets = [self.input_text, self.load_button]
+            self.flanks.hide()
+        else:
+            row = QHBoxLayout(); layout.addLayout(row)
+            row.addWidget(self.preview, 1)
+            row.addWidget(QLabel('Flanks')); row.addWidget(self.flanks)
+        self.size_warning = QLabel(); self.size_warning.setWordWrap(True)
+        self.size_warning.setStyleSheet('color: #a65c00;'); self.size_warning.hide()
+        layout.addWidget(self.size_warning)
+
+        # ---- Model
         form = QFormLayout(); form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         layout.addLayout(form)
         self.backend = QComboBox(); self.backend.addItem('AlphaFold 2 (monomer / multimer)', 'af2')
@@ -197,104 +306,118 @@ class PredictionDialog(QDialog):
         self.af3_terms_links = QLabel('<a href="https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_TERMS_OF_USE.md">AF3 parameter terms</a> · '
                                      '<a href="https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_PROHIBITED_USE_POLICY.md">Prohibited-use policy</a>')
         self.af3_terms_links.setOpenExternalLinks(True); form.addRow(self.af3_terms_links)
-        self.af3_steps = QSpinBox(); self.af3_steps.setRange(1, 1000); self.af3_steps.setValue(200)
-        self.af3_steps_label = QLabel('AF3 diffusion steps')
-        form.addRow(self.af3_steps_label, self.af3_steps)
-        self.af3_samples = QSpinBox(); self.af3_samples.setRange(1, 10); self.af3_samples.setValue(5)
-        self.af3_samples_label = QLabel('AF3 diffusion samples')
-        form.addRow(self.af3_samples_label, self.af3_samples)
-        for widget in (self.af3_terms, self.af3_terms_links, self.af3_steps, self.af3_steps_label,
-                       self.af3_samples, self.af3_samples_label):
-            widget.hide()
-        self.flanks = QSpinBox(self); self.flanks.setRange(0, 100); self.flanks.setValue(10)
-        if plot is not None:
-            form.addRow('Flanking residues on each side', self.flanks)
-        else:
-            self.flanks.hide()
-            self.ranges = []
-            self.range_area = QScrollArea(); self.range_area.setWidgetResizable(True)
-            self.range_area.setFixedHeight(100)
-            ranges_widget = QWidget(); self.range_form = QFormLayout(ranges_widget)
-            self.range_area.setWidget(ranges_widget)
-            form.addRow('Chain ranges (optional)', self.range_area)
-        self.preview = QLabel(); form.addRow('Selected sequences', self.preview)
-        self.size_warning = QLabel(); self.size_warning.setWordWrap(True)
-        self.size_warning.setMinimumHeight(2*self.size_warning.fontMetrics().lineSpacing()+4)
-        self.size_warning.setStyleSheet('color: #a65c00;')
-        form.addRow(self.size_warning)
-        self.executable = QLineEdit(predict.default_executable()); form.addRow('LocalFold executable', self.executable)
-        self.setup_hint = QLabel(); self.setup_hint.setWordWrap(True)
-        form.addRow(self.setup_hint)
-        self.output = QLineEdit(str(predict.data_directory() / 'predictions')); form.addRow('Results directory', self.output)
-        self.msa = QLineEdit(); self.msa.setPlaceholderText('Existing A3M for exactly the selected sequence(s)')
-        form.addRow('Existing MSA (A3M)', self.msa)
-        self.reuse = QCheckBox('Reuse and crop the source MSA (no upload)')
+
+        # ---- Alignment: one choice; the details of the chosen one appear beneath it
+        msa_box = QGroupBox('Alignment (MSA)'); layout.addWidget(msa_box)
+        msa_layout = QVBoxLayout(msa_box)
+        self.reuse = _option('Reuse and crop the MSA of this prediction (no upload)')
         self.reuse.setEnabled(self.source_msa is not None)
         self.reuse.setChecked(self.source_msa is not None)
         if self.source_msa is None:
             self.reuse.setToolTip('No matching .a3m or input.a3m beside this structure. '
-                                 'MSAs embedded in AF3 JSON are not imported automatically.')
+                                  'MSAs embedded in AF3 JSON are not imported automatically.')
         if plot is not None:
-            form.addRow(self.reuse)
-        api = os.environ.get('LOCALFOLD_MMSEQS_API', 'https://api.colabfold.com').rstrip('/')
-        self.search = QCheckBox(f'Search remotely if uncached: send sequences to {api}')
-        form.addRow(self.search)
-        self.features = QCheckBox('Use precomputed AlphaPulldown features (no MSA search)')
-        self.features.setToolTip('Alignments from AlphaPulldown feature files, one a protein: AF2 '
-                                 '<ID>.pkl[.xz] (AF-Multimer pairing by species) or, for AlphaFold 3, '
-                                 '<ID>_af3_input.json[.xz]. Read and converted when the prediction starts.')
-        form.addRow(self.features)
+            msa_layout.addWidget(self.reuse)
+        self.features = _option('Precomputed AlphaPulldown features (no search)',
+                                'Alignments from AlphaPulldown feature files, one a protein: AF2 '
+                                '<ID>.pkl[.xz] (AF-Multimer pairing by species) or, for AlphaFold 3, '
+                                '<ID>_af3_input.json[.xz]. Read and converted when the prediction starts.')
+        msa_layout.addWidget(self.features)
         self.features_root = QLineEdit(predict_features.default_root())
         self.features_root.setToolTip(f'The lab database ({predict_features.LAB_ROOT}, through the /g mount), '
                                       f'the public copy ({predict_features.PUBLIC_ROOT}; only the IDs are '
                                       'sent and the files are cached in ~/.cache/alphalens/features), or '
                                       'a folder of AlphaPulldown features')
-        form.addRow('Features from', self.features_root)
         self.features_names = QLineEdit()
         self.features_names.setPlaceholderText('UniProt ID of each chain, e.g. A: P0A836, B: P0AGE9')
         self.features_names.setToolTip('The name of each chain\'s feature file (UniProt accession), as '
                                        '"A: P0A836, B: P0AGE9" or in chain order. Filled in from the '
                                        'prediction\'s folder name or the UniProt lookup when possible.')
-        form.addRow('Feature IDs', self.features_names)
+        self.features_details = _indented(('Feature IDs', self.features_names),
+                                          ('From', self.features_root), form=True)
+        msa_layout.addWidget(self.features_details)
+        self.use_a3m = _option('A3M file')
+        msa_layout.addWidget(self.use_a3m)
+        self.msa = QLineEdit(); self.msa.setPlaceholderText('Existing A3M for exactly the selected sequence(s)')
+        browse = QPushButton('Browse…'); browse.clicked.connect(self.browse_a3m)
+        self.msa_details = _indented(self.msa, browse)
+        msa_layout.addWidget(self.msa_details)
+        api = os.environ.get('LOCALFOLD_MMSEQS_API', 'https://api.colabfold.com').rstrip('/')
+        self.search = _option(f'Search remotely if uncached: send sequences to {api}',
+                              'MMseqs2 search on the ColabFold server, unless the same query is in the '
+                              'local MSA cache. Queues can take minutes.')
+        msa_layout.addWidget(self.search)
+        self.msa_hint = QLabel('Choose an alignment to enable Predict.')
+        self.msa_hint.setWordWrap(True)
+        self.msa_hint.setStyleSheet('color: #a65c00; font-weight: bold;')
+        self.msa_hint.setMinimumHeight(self.msa_hint.fontMetrics().lineSpacing()+4)
+        msa_layout.addWidget(self.msa_hint)
         self._guessed_names = ''
         if plot is not None:
             filename = getattr(plot.pae.structure, 'filename', None)
             guess = predict_features.guess_names(filename, structure_chain_ids(plot)) if filename else {}
             self._guessed_names = predict_features.format_names(guess)
             self.features_names.setText(self._guessed_names)
-        self.msa_hint = QLabel('Choose an MSA to enable Predict: enter an A3M file above, use precomputed '
-                              'features or check “Search remotely if uncached”.')
-        self.msa_hint.setWordWrap(True)
-        self.msa_hint.setStyleSheet('color: #a65c00; font-weight: bold;')
-        self.msa_hint.setMinimumHeight(2*self.msa_hint.fontMetrics().lineSpacing()+4)
-        form.addRow(self.msa_hint)
+            if self._guessed_names:
+                self.features.setText(f'Precomputed AlphaPulldown features (no search) · {self._guessed_names}')
+
+        # ---- Settings most predictions never change
+        self.advanced = Section('Settings')
+        layout.addWidget(self.advanced)
+        settings = QFormLayout(self.advanced.body)
+        settings.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        settings.setContentsMargins(24, 0, 0, 0)
+        self.recycles = QSpinBox(); self.recycles.setRange(0, 10); self.recycles.setValue(3)
+        settings.addRow('Recycles', self.recycles)
         self.seed = QSpinBox(); self.seed.setRange(0, 2147483647); self.seed.setValue(predict.random_seed())
-        form.addRow('Seed', self.seed)
-        self.randomize_seed = QCheckBox('Generate a new random seed for each prediction')
+        self.randomize_seed = QCheckBox('new random seed for each prediction')
         self.randomize_seed.setChecked(True); self.seed.setEnabled(False)
         self.randomize_seed.toggled.connect(lambda checked: self.seed.setEnabled(not checked))
-        form.addRow(self.randomize_seed)
-        self.recycles = QSpinBox(); self.recycles.setRange(0, 10); self.recycles.setValue(3)
-        form.addRow('Recycles', self.recycles)
+        seed_row = QHBoxLayout(); seed_row.addWidget(self.seed); seed_row.addWidget(self.randomize_seed, 1)
+        settings.addRow('Seed', seed_row)
+        self.af3_steps = QSpinBox(); self.af3_steps.setRange(1, 1000); self.af3_steps.setValue(200)
+        self.af3_steps_label = QLabel('AF3 diffusion steps')
+        settings.addRow(self.af3_steps_label, self.af3_steps)
+        self.af3_samples = QSpinBox(); self.af3_samples.setRange(1, 10); self.af3_samples.setValue(5)
+        self.af3_samples_label = QLabel('AF3 diffusion samples')
+        settings.addRow(self.af3_samples_label, self.af3_samples)
         self.time_limit = QSpinBox(); self.time_limit.setRange(0, 10080)
         self.time_limit.setSpecialValueText('No limit'); self.time_limit.setValue(0)
-        form.addRow('Time limit (minutes)', self.time_limit)
-        self.status = QPlainTextEdit('Ready'); self.status.setReadOnly(True)
-        self.status.setFixedHeight(5*self.status.fontMetrics().lineSpacing()+16)
-        layout.addWidget(self.status)
+        self.time_limit.setSuffix(' min')
+        settings.addRow('Time limit', self.time_limit)
+        self.output = QLineEdit(str(predict.data_directory() / 'predictions'))
+        settings.addRow('Results folder', self.output)
+        self.executable = QLineEdit(predict.default_executable())
+        settings.addRow('LocalFold engine', self.executable)
+        for widget in (self.af3_terms, self.af3_terms_links, self.af3_steps, self.af3_steps_label,
+                       self.af3_samples, self.af3_samples_label):
+            widget.hide()
+        self.setup_hint = QLabel(); self.setup_hint.setWordWrap(True)
+        self.setup_hint.setStyleSheet('color: gray;')
+        layout.addWidget(self.setup_hint)
+
+        # ---- Running
+        self.progress_row = QWidget(); progress = QHBoxLayout(self.progress_row)
+        progress.setContentsMargins(0, 0, 0, 0)
         self.progress_label = QLabel('Not started'); self.progress_label.setWordWrap(True)
-        layout.addWidget(self.progress_label)
         self.progress_bar = QProgressBar(); self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0); self.progress_bar.setTextVisible(False)
-        layout.addWidget(self.progress_bar)
+        self.progress_bar.setFixedWidth(160)
+        progress.addWidget(self.progress_label, 1); progress.addWidget(self.progress_bar)
+        layout.addWidget(self.progress_row)
+        self.progress_row.hide()            # Shown from the first Predict on
+        self.status = QPlainTextEdit('Ready'); self.status.setReadOnly(True)
+        self.status.setFixedHeight(4*self.status.fontMetrics().lineSpacing()+14)
+        layout.addWidget(self.status)
         buttons = QHBoxLayout(); layout.addLayout(buttons)
         self.start_button = QPushButton('Predict'); self.cancel_button = QPushButton('Cancel job')
+        self.start_button.setDefault(True)
         self.cancel_button.setEnabled(False)
         self.report_button = QPushButton('Prediction report…'); self.report_button.setEnabled(False)
         self.report_directory = None
         self.report_button.clicked.connect(lambda: show_prediction_report(self.session, self.report_directory))
-        buttons.addWidget(self.start_button); buttons.addWidget(self.cancel_button)
-        buttons.addWidget(self.report_button)
+        buttons.addWidget(self.report_button); buttons.addStretch(1)
+        buttons.addWidget(self.cancel_button); buttons.addWidget(self.start_button)
         self.start_button.clicked.connect(self.start)
         self.cancel_button.clicked.connect(self.cancel)
         self.flanks.valueChanged.connect(self.refresh)
@@ -303,21 +426,37 @@ class PredictionDialog(QDialog):
         if plot is None:
             self.input_text.textChanged.connect(self.invalidate_input)
             self.load_button.clicked.connect(self.load_sequences)
-        sources = (self.reuse, self.search, self.features)
+        sources = (self.reuse, self.features, self.use_a3m, self.search)
         for box in sources:
             box.toggled.connect(lambda checked, box=box: [b.setChecked(False) for b in sources
                                                           if b is not box] if checked else None)
             box.toggled.connect(self.msa_controls)
+        self.msa.textChanged.connect(lambda text: self.use_a3m.setChecked(True) if text.strip() else None)
         self.features_names.textChanged.connect(self.refresh)
         self.features_root.textChanged.connect(self.refresh)
         self.msa.textChanged.connect(self.refresh)
         self.executable.textChanged.connect(self.refresh)
         self.backend.currentIndexChanged.connect(self.backend_changed)
         self.af3_terms.toggled.connect(self.refresh)
+        for widget in (self.recycles, self.time_limit, self.af3_steps, self.af3_samples):
+            widget.valueChanged.connect(self.refresh)
+        self.randomize_seed.toggled.connect(self.refresh)
         self.timer = QTimer(self); self.timer.setInterval(100); self.timer.timeout.connect(self.poll)
         QApplication.instance().aboutToQuit.connect(self.shutdown)
         self.msa_controls()
         self.refresh()
+        self.fit_height()
+
+    def fit_height(self):
+        '''Grow to show everything (rows were added); never shrink what the user enlarged.'''
+        QTimer.singleShot(0, lambda: self.resize(self.width(), max(self.height(), self.sizeHint().height())))
+
+    def browse_a3m(self):
+        from Qt.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(self, 'Alignment for the selected sequences', '',
+                                              'A3M alignments (*.a3m *.a3m.gz);;All files (*)')
+        if path:
+            self.msa.setText(path)
 
     def backend_changed(self):
         backend = self.backend.currentData()
@@ -327,6 +466,7 @@ class PredictionDialog(QDialog):
                        self.af3_samples, self.af3_samples_label):
             widget.setVisible(backend == 'af3')
         self.refresh()
+        self.fit_height()
 
     def display(self, shown):
         """ChimeraX's Tools menu calls display(True) on the returned tool."""
@@ -337,11 +477,10 @@ class PredictionDialog(QDialog):
         self.close()
 
     def msa_controls(self, *args):
-        self.msa.setEnabled(not self.reuse.isChecked() and not self.search.isChecked()
-                            and not self.features.isChecked())
-        for widget in (self.features_root, self.features_names):
-            widget.setEnabled(self.features.isChecked())
+        self.features_details.setVisible(self.features.isChecked())
+        self.msa_details.setVisible(self.use_a3m.isChecked())
         self.refresh()
+        self.fit_height()
 
     def feature_request(self, chains):
         '''dict(root, names) for the chains of this prediction, from the Feature IDs field.'''
@@ -360,6 +499,7 @@ class PredictionDialog(QDialog):
                     names=[mapping[c['source_chain']] for c in chains])
 
     def set_progress(self, stage, completed=None, total=None):
+        self.progress_row.show()
         self.progress_label.setText(stage)
         if total is None:
             self.progress_bar.setRange(0, 0)
@@ -399,9 +539,37 @@ class PredictionDialog(QDialog):
             self.set_progress('Cancelling…')
 
     def invalidate_input(self):
-        self.entries = None
-        self.resolved.clear()
+        if self.entries is not None:
+            self.entries = None
+            self.set_chain_rows([])
         self.refresh()
+
+    def set_chain_rows(self, entries):
+        '''One table row per chain: what was resolved, and its optional range.'''
+        from Qt.QtWidgets import QTableWidgetItem
+        for field in self.ranges:
+            if field in self.input_widgets:
+                self.input_widgets.remove(field)
+        self.chain_table.setRowCount(0)
+        self.ranges = []
+        for row, (cid, entry) in enumerate(zip(predict.chain_ids(len(entries)) if entries else [], entries)):
+            self.chain_table.insertRow(row)
+            cells = (cid, entry['label'], str(len(entry['sequence'])))
+            for column, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                item.setToolTip(f'>{entry["label"]}\n{entry["sequence"]}')
+                self.chain_table.setItem(row, column, item)
+            field = QLineEdit(entry.get('range', '')); field.setPlaceholderText('whole chain, or 25-120')
+            field.setFrame(False)
+            field.textChanged.connect(self.refresh)
+            self.chain_table.setCellWidget(row, 3, field)
+            self.ranges.append(field)
+        self.input_widgets.extend(self.ranges)
+        rows = min(len(entries), 6)
+        self.chain_table.setFixedHeight(self.chain_table.horizontalHeader().height() + 4
+                                        + sum(self.chain_table.rowHeight(r) for r in range(rows)))
+        self.chain_table.setVisible(bool(entries))
+        self.fit_height()
 
     def load_sequences(self):
         from concurrent.futures import Future
@@ -430,25 +598,14 @@ class PredictionDialog(QDialog):
         self.input_text.setEnabled(True); self.load_button.setEnabled(True)
         try:
             self.entries = self.lookup_future.result()
-            for field in self.ranges:
-                self.input_widgets.remove(field)
-            while self.range_form.rowCount():
-                self.range_form.removeRow(0)
-            self.ranges = []
-            for cid in predict.chain_ids(len(self.entries)):
-                field = QLineEdit(); field.setPlaceholderText('Whole chain, or 25-120')
-                self.range_form.addRow(f'Chain {cid}', field)
-                field.textChanged.connect(self.refresh)
-                self.ranges.append(field)
-            self.input_widgets.extend(self.ranges)
-            self.resolved.setPlainText('\n'.join(f'>{e["label"]} ({len(e["sequence"])} residues)\n{e["sequence"]}'
-                                                 for e in self.entries))
+            self.set_chain_rows(self.entries)
             names = {cid: e.get('accession') or next(iter(predict_features.accessions_in(e['label'])), None)
                      for cid, e in zip(predict.chain_ids(len(self.entries)), self.entries)}
             if all(names.values()) and self.features_names.text() in ('', self._guessed_names):
                 self._guessed_names = predict_features.format_names(names)
                 self.features_names.setText(self._guessed_names)
-            self.log_message('Review the resolved sequences, choose ranges/MSA, then click Predict.')
+            self.log_message('Review the chains (hover for the sequence), set ranges if needed, choose '
+                             'an alignment, then click Predict.')
         except Exception as e:
             self.show_error(str(e))
         self.lookup_future = None
@@ -471,26 +628,43 @@ class PredictionDialog(QDialog):
         return any(job is not None and job.state == 'running' for job in (self.job, self.setup_job))
 
     def needs_setup(self):
+        '''The managed engine is missing, or was built from an earlier LocalFold revision.'''
         path = Path(self.executable.text()).expanduser().resolve()
         managed = predict.data_directory() / 'bin' / f'localfold-{self.backend.currentData()}'
-        return path == managed.resolve() and not path.exists()
+        return path == managed.resolve() and (not path.exists() or predict.engine_outdated(path))
 
     def refresh(self, *args):
         needs_setup = self.needs_setup()
-        self.setup_hint.setText('First use: Install & Predict downloads and builds LocalFold in the background. '
-                                + SETUP_REQUIREMENTS.get(native_platform(), SETUP_REQUIREMENTS[None])
-                                + '; setup can be cancelled.')
+        update = needs_setup and Path(self.executable.text()).expanduser().exists()
+        self.setup_hint.setText(
+            ('This AlphaLens uses a newer LocalFold engine; Update & Predict rebuilds it in the background '
+             '(about a minute, once). ' if update else
+             'First use: Install & Predict downloads and builds LocalFold in the background. ')
+            + SETUP_REQUIREMENTS.get(native_platform(), SETUP_REQUIREMENTS[None]) + '; setup can be cancelled.')
         self.setup_hint.setVisible(needs_setup)
-        self.start_button.setText('Install & Predict' if needs_setup else 'Predict')
-        msa_ready = (self.reuse.isChecked() or self.search.isChecked() or bool(self.msa.text().strip())
+        # '&&': a single & is Qt's mnemonic marker and would not be shown
+        self.start_button.setText(('Update && Predict' if update else 'Install && Predict') if needs_setup else 'Predict')
+        msa_ready = (self.reuse.isChecked() or self.search.isChecked()
+                     or (self.use_a3m.isChecked() and bool(self.msa.text().strip()))
                      or (self.features.isChecked() and bool(self.features_names.text().strip())
                          and bool(self.features_root.text().strip())))
         self.msa_hint.setVisible(not msa_ready)
+        af3 = self.backend.currentData() == 'af3'
+        summary = [f'{self.recycles.value()} recycles',
+                   'random seed' if self.randomize_seed.isChecked() else f'seed {self.seed.value()}']
+        if af3:
+            summary.append(f'{self.af3_steps.value()} steps × {self.af3_samples.value()} samples')
+        summary.append(f'{self.time_limit.value()} min limit' if self.time_limit.value() else 'no time limit')
+        self.advanced.summary.setText(' · '.join(summary))
         try:
             chains, _ = self.prediction_input()
-            preview = ' + '.join(f'{c["source_chain"]}: {len(c["sequence"])} residues' for c in chains[:4])
+            preview = ' + '.join(f'{c["source_chain"]}: {len(c["sequence"])} residues'
+                                 + (f' in {predict.segment_count(c)} segments' if c.get('residue_ids') else '')
+                                 for c in chains[:4])
             if len(chains) > 4:
                 preview += f' + … ({len(chains)} chains total)'
+            if len(chains) > 1:
+                preview += f' · {sum(len(c["sequence"]) for c in chains)} in total'
             self.preview.setText(preview)
             self.preview.setToolTip('\n'.join(c['sequence'] for c in chains))
             warning = predict.size_warning(chains)
@@ -503,10 +677,10 @@ class PredictionDialog(QDialog):
             self.preview.setText(str(e)); self.start_button.setEnabled(False)
 
     def set_busy_controls(self, busy):
-        for widget in (self.flanks, self.executable, self.output, self.msa, self.search, self.seed,
+        for widget in (self.flanks, self.executable, self.output, self.msa_details, self.search, self.seed,
                        self.recycles, self.time_limit, self.randomize_seed, self.backend, self.af3_terms,
-                       self.af3_steps, self.af3_samples, self.start_button, self.features,
-                       self.features_root, self.features_names, *self.input_widgets):
+                       self.af3_steps, self.af3_samples, self.start_button, self.features, self.use_a3m,
+                       self.features_details, *self.input_widgets):
             widget.setEnabled(not busy)
         self.reuse.setEnabled(not busy and self.source_msa is not None)
         self.cancel_button.setEnabled(busy)
@@ -524,7 +698,7 @@ class PredictionDialog(QDialog):
                 self.seed.setValue(predict.random_seed())
             chains, source = self.prediction_input()
             name = datetime.now().strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:6]
-            msa = (self.msa.text().strip() or None) if self.msa.isEnabled() else None
+            msa = (self.msa.text().strip() or None) if self.use_a3m.isChecked() else None
             crop = None
             if self.reuse.isChecked():
                 msa, query = self.source_msa
