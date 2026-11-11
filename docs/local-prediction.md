@@ -1,6 +1,6 @@
 # Experimental local protein and interface prediction
 
-AlphaLens 1.4.0 can predict protein complexes from sequences or UniProt IDs, or re-predict
+AlphaLens 1.4.1 can predict protein complexes from sequences or UniProt IDs, or re-predict
 selected regions spanning multiple protein chains, with AlphaFold 2 or AlphaFold 3 on
 Apple Silicon, using [LocalFold's native Metal implementation](https://github.com/KosinskiLab/localfold/tree/837a15ca7c72c35c75739740bc7ed71ee9d5e09b/metal),
 or on Linux with an NVIDIA GPU, using its [native CUDA implementation](https://github.com/KosinskiLab/localfold/tree/837a15ca7c72c35c75739740bc7ed71ee9d5e09b/cuda)
@@ -12,7 +12,7 @@ have no native LocalFold engine and are not supported.
 
 ## Setup
 
-Install the AlphaLens 1.4.0 wheel. The local prediction feature remains experimental.
+Install the AlphaLens 1.4.1 wheel. The local prediction feature remains experimental.
 On a Mac, the engine requires Apple Silicon, macOS 13 or newer and Xcode Command Line Tools.
 On Linux, see [Linux with an NVIDIA GPU (CUDA)](#linux-with-an-nvidia-gpu-cuda) below.
 No separate Python ML environment is needed. With a missing default engine, the button
@@ -141,8 +141,9 @@ for a sequence). Optional per-chain ranges are **1-based and inclusive** (e.g. `
 the tested barnase segment from `P00648`); several ranges, `1-100,150-200`, make one chain
 with a gap (see [Discontinuous regions](#discontinuous-regions)). Optional ranges select domains from longer UniProt proteins; there is no fixed
 residue-count cap. Residue maps
-retain positions in the original input sequence. Nonstandard amino acids in the
-selected ranges are rejected.
+retain positions in the original input sequence. X (an unknown residue) is folded as
+AlphaFold's UNK; U, O, B, Z and J are refused, naming the residue and what to use instead
+(C for selenocysteine, K for pyrrolysine, X for the ambiguous codes).
 
 Supply an A3M whose query exactly matches the selected sequence(s), use precomputed
 AlphaPulldown features (below), or explicitly choose remote MSA search. The local MSA cache
@@ -161,8 +162,14 @@ header, release, retrieval time, original sequence hash and selected ranges.
 2. Right-click the plot and choose **Re-predict selected interface…**.
 3. Choose flanks (default 10 residues on each side). Flanks stop at chain ends and at gaps.
    A box across a gap in the model (an AlphaPulldown region, unresolved residues) keeps the
-   gap: see [Discontinuous regions](#discontinuous-regions). Nonstandard amino acids are
-   rejected. Large inputs show a warning without disabling Predict.
+   gap: see [Discontinuous regions](#discontinuous-regions). Ligand and nucleic-acid rows in
+   the box are left out; a modified residue (AF3 treats it atom by atom) inside the box is
+   refused. Large inputs show a warning without disabling Predict.
+
+   **Predict** is off only while something it needs is missing: a box across two protein chains,
+   an alignment (and its A3M file or feature IDs), acceptance of the AF3 terms, an engine at the
+   given path, or the end of a running job. The reason is shown above the buttons, and again when
+   the pointer rests on Predict.
 4. Choose an MSA source. **Reuse and crop the source MSA** is selected automatically
    when a matching `<structure-stem>.a3m` or `input.a3m` is found beside the source.
    Embedded MSAs in AF3 `*_data.json` files are not imported automatically.

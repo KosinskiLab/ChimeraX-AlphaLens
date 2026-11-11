@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.4.1
+
+* **Predict** is off only when something it needs is missing, and says what: the reason is shown
+  above the buttons and when the pointer rests on the button. Until now the reason was a plain
+  line under the dialog's title (for example after a box dragged inside one chain), or nothing at
+  all: clicking the chosen alignment option again cleared it, and Predict went grey.
+* The reasons name the fix: the box covers chain A only (drag it across two chains, in a block such
+  as A × B); choose an alignment; enter the A3M file; enter the feature ID of chain B; accept the
+  AF3 terms; no LocalFold engine at the given path (also a file that is not executable, which
+  used to fail only after the click); a prediction is running; click Load sequences (the input
+  changed); the input could not be read (with the UniProt or parsing error).
+* Fewer false stops: X (an unknown residue) is folded as AlphaFold's UNK by both engines, so it is
+  no longer refused; ligand and nucleic-acid rows in a dragged box are left out instead of
+  refusing the box. U, O, B, Z and J are refused with the residue and what to use instead.
+* Add `tests/chimerax_predict_button_check.py`: every case where Predict is off or must stay on,
+  with the hover tooltip of the disabled button, in a real window.
+
 ## 1.4.0
 
 * **Model contacts** replaces the Model distances view. It answers the view's question directly:
