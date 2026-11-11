@@ -22,16 +22,17 @@ the pLDDT bands. The ringed one was clicked; its values are in the line under th
 |---|---|---|
 | PAE | predicted aligned error (Å) | 0–30 Å |
 | Contact probability | predicted P(d < 8 Å) from the distogram, or `contact_probs` in the confidences JSON (AlphaFold3 and local predictions) if there is no distogram | √P scale, so weak contacts show |
-| Model distances | CB–CB distances in the shown model; the pairs closer than 8 Å (contacts in the model) colored by the predicted P | distances grey, 8 Å dark to 40 Å and beyond white; contacts as the contact-probability view |
+| Model contacts | the contacts in the shown model (CB–CB < 8 Å) against the predicted ones (P ≥ the slider threshold) | green: in the model and predicted; vermillion: predicted, not in the model; purple: in the model, not predicted; faint grey: farther pairs, 8 to 40 Å |
 | Spread σ / H | standard deviation (Å) or entropy (bits) of the predicted distance distribution | 0 to the 99th percentile of the model |
 | Agreement | number of AF3 seeds or AF2 models in which the pair has P ≥ the slider threshold | 0 to the number of seeds or models |
 
 <p align="center"><img src="docs/images/views.png" width="760"
-  alt="The PAE, contact-probability, model-distance, spread and agreement views of one prediction, and its contacts drawn on the structure"></p>
+  alt="The PAE, contact-probability, model-contact, spread and agreement views of one prediction, and its contacts drawn on the structure"></p>
 
 *The five views of the same prediction, each with the predicted contacts as dots, and its
-inter-chain contacts with P ≥ 0.5 drawn on the structure by Show Contacts. In the spread view, grey marks pairs whose distance is mostly beyond
-the last distogram bin. The agreement view counts the five AlphaFold2 models in which each pair has
+inter-chain contacts with P ≥ 0.5 drawn on the structure by Show Contacts. The Model contacts view
+marks the predicted pairs by its own colors instead of dots. In the spread view, light grey marks
+pairs whose distance is mostly beyond the last distogram bin. The agreement view counts the five AlphaFold2 models in which each pair has
 P ≥ 0.5.*
 
 ## Install
@@ -146,7 +147,9 @@ bar above the plot shows how far it has come; the Spread tab turns on when it fi
 
 ## Using the plot
 
-* **Views:** arrows, tabs or the ← / → keys. Hovering shows the values for a residue pair.
+* **Views:** the tabs, or the ← / → keys in the plot. Hovering shows the values for a residue pair;
+  otherwise the line under the slider gives a hint for the shown view. Switching views keeps the
+  window's size.
 * **Zoom:** scroll wheel, trackpad pinch, or + / −. **Pan:** Shift-drag or middle-drag. **Fit**
   (or 0 / Esc) resets the view. Matrices larger than 900 residues are pooled for display
   (contacts max-pooled, so no contact disappears; PAE and spread mean-pooled). When you zoom in,
@@ -155,16 +158,18 @@ bar above the plot shows how far it has come; the Spread tab turns on when it fi
 * **Model:** the dropdown lists the AF2 ranked models or AF3 samples of the same prediction that
   are present locally. The chosen model opens in the same window, superposed on the previous one,
   which is hidden; the view and zoom are kept.
-* **Contact dots:** in every view, inter-chain pairs above the slider threshold (pairs at least
-  24 matrix positions apart for a single chain) are drawn as dots that stay visible at any zoom.
+* **Contact dots:** in every view but Model contacts, inter-chain pairs above the slider threshold
+  (pairs at least 24 matrix positions apart for a single chain) are drawn as dots that stay
+  visible at any zoom. Zoomed in, where a dot would cover a whole matrix cell, it becomes a ring,
+  so that the cell's own color shows through.
   Their color is a fixed scale of P with the pLDDT colors and bands (P × 100 as the score):
   orange below 0.5, yellow 0.5–0.7, light blue 0.7–0.9, dark blue 0.9 and above. The slider
   only decides which pairs are drawn, not their color; the legend next to the color bar fades
   the range below the threshold. Untick **dots on plot** next to the slider to see the matrix
   colors underneath; right-click to keep the dots to the contact-probability view. At most the 40,000 strongest pairs are
   shown as dots; CSV export is not capped by this display limit.
-* **Hide by pLDDT:** the vertical slider right of the pLDDT track hides the parts of the model
-  with pLDDT below its value; a line marks the value and hidden residues fade on the track.
+* **Hide by pLDDT:** the vertical slider right of the pLDDT track ("hide") hides the parts of the
+  model with pLDDT below its value; a line marks the value and hidden residues fade on the track.
 * **Hide selected:** drag along the pLDDT track to select residues, then right-click the plot and
   choose Hide selected. It also hides residues selected in the 3D view. Show hidden restores them.
 * **Contact probability ≥ slider:** one threshold on the predicted P (0.05–1, default 0.2) for
@@ -184,24 +189,26 @@ bar above the plot shows how far it has come; the Spread tab turns on when it fi
   Contacts restores all. The log lists the strongest pairs. By default, dragging a box also colors
   those residues (an off-diagonal box uses two colors); this can be switched off in the
   right-click menu.
-* **Model distances:** the distances between the CB atoms (CA for glycine, the atoms the
-  distogram describes) in the shown model, in grey from 8 Å (dark) to 40 Å and beyond (white).
-  The pairs closer than 8 Å, the contacts in the model, are colored by the predicted contact
-  probability on the same scale as the contact-probability view, so one matrix shows how far apart
-  the parts of the model are and which of its contacts the prediction supports. Contacts with P
-  near 0 get the lightest green, so none disappears; in a zoomed-out overview the contacts are
-  kept over the distances. Flip to the contact-probability view with ← / → at the same zoom: a
-  contact that is predicted but grey here is not formed in this model. Hovering gives the CB–CB
-  distance in the model in every view. Without contact probabilities (AF2 without a distogram)
-  the contacts are drawn in one color.
+* **Model contacts:** compares the contacts in the shown model, CB–CB closer than 8 Å (CA for
+  glycine: the atoms the distogram describes), with the predicted contacts, P ≥ the slider
+  threshold. Each pair is green when it is in the model and predicted, vermillion when it is
+  predicted but not formed in the model, and purple when the model has it but the prediction
+  does not support it; the other pairs are faint grey, darker for closer pairs (8 to 40 Å). The
+  line under the slider counts them for the inter-chain pairs, for example "87 of 88 predicted
+  inter-chain contacts (P ≥ 0.50) are formed, 1 not; 11 inter-chain contacts of the model are not
+  predicted": switch between AF3 samples or AF2 models in the Model menu to see which one forms
+  the predicted interface. Click a colored pair to show it on the structure, as a dot. Hovering
+  gives the category and the CB–CB distance in the model (in every view). In a zoomed-out
+  overview, the predicted contacts the model misses are kept over the others. Without contact
+  probabilities (AF2 without a distogram), the model's contacts are drawn in one color.
 * **Color pLDDT** colors the structure in the four AlphaFold pLDDT bands (< 50, 50–70, 70–90,
   > 90), as the pLDDT track of the plot, instead of ChimeraX's smooth "alphafold" palette.
 * **Color PAE Domains** colors the structure using ChimeraX's PAE domain clustering.
 * Large models that ChimeraX shows as spheres are switched to cartoon the first time contact lines
   are drawn, because the lines would otherwise be hidden inside the atoms.
 * **Spread:** the last distogram bin collects every distance above 21.7 Å, so the spread is
-  undefined where that bin dominates. Pairs with P(d > 21.7 Å) > 0.5 are drawn grey; the threshold
-  is in the right-click menu.
+  undefined where that bin dominates. Pairs with P(d > 21.7 Å) > 0.5 are drawn light grey; the
+  threshold is in the right-click menu.
 * **Right-click menu:** contact color scale (√P, linear, or bands at 0.05 / 0.2 / 0.5 / 0.8),
   spread as standard deviation or entropy, color the plot from the structure, chain divider
   lines, pLDDT track, Log agreement table, and Save image.
@@ -274,7 +281,7 @@ not saved.
 ## Commands
 
     alphalens [#model] [paeFile file] [distogram file]
-             [mode pae|contact|distance|std|entropy|agreement]
+             [mode pae|contact|model|std|entropy|agreement]
              [cutoff 8] [contacts true|false] [minProb 0.5] [saveContacts file.csv]
              [palette name] [range low,high] [dividerLines true|false] [wait true|false]
     alphalens open path [rank N] [same options except paeFile]
@@ -283,8 +290,8 @@ not saved.
 | Option | Meaning |
 |---|---|
 | `paeFile`, `distogram` | files with non-standard names; otherwise they are found next to the structure |
-| `mode` | view to show: `contact` the predicted contact probability, `distance` the distances and contacts in the model (`model` also works), `std` / `entropy` the spread; `agreement` reads every seed or model first and logs the agreement table |
-| `cutoff` | contact distance in Å (default 8), also for the contacts in the Model distances view; needs a distogram, because `contact_probs` are fixed at 8 Å |
+| `mode` | view to show: `contact` the predicted contact probability, `model` the contacts in the model against the predicted ones (`distance`, its former name, also works), `std` / `entropy` the spread; `agreement` reads every seed or model first and logs the agreement table |
+| `cutoff` | contact distance in Å (default 8), also for the contacts in the Model contacts view; needs a distogram, because `contact_probs` are fixed at 8 Å |
 | `contacts`, `minProb` | draw or remove the contacts with P ≥ minProb on the structure (default 0.5; also moves the slider) |
 | `saveContacts` | write the contacts to a CSV file as Export CSV does, with P ≥ minProb if given, otherwise the slider threshold (0.2 without a plot) |
 | `palette`, `range` | PAE color map, as in `alphafold pae` |
@@ -402,7 +409,7 @@ predictions with distograms:
     ALPHALENS_WINDOW_DIRS="/path/to/af3_prediction;/path/to/af2_prediction" \
         ChimeraX --exit --cmd "open tests/chimerax_window_check.py"
 
-It opens each prediction as a user would and checks every view, the Model distances matrix, hover,
+It opens each prediction as a user would and checks every view, the Model contacts matrix, hover,
 contacts on the structure, the clicked contact, pLDDT colors, CSV export, agreement and model
 switching. It tests this checkout without installing it (`ALPHALENS_SOURCE=installed` tests the
 installed bundle) and exits with status 1 if any check fails; the script header lists the options.

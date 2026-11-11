@@ -63,7 +63,8 @@ def issue3():
     d1=contacts.model_distances(pae)[0][0,2]
     live=contacts.model_distance(pae,0,2)[0]
     assert np.isclose(d1,live),f'matrix {d1}, hover {live}, original {d0}'
-    assert p._render['vals'][0,2] < 0, 'plot still shows a model contact'
+    assert p._render['vals'][0,2] not in (contacts.MODEL_ONLY, contacts.MODEL_AND_PREDICTED), \
+        'plot still shows a model contact'
     assert not contacts.model_contacts(pae,8.)[0][0,2]
     # Changing active coordinate sets must update both the cached matrix and plot.
     s=pae.structure
