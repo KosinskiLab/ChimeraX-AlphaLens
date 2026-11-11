@@ -1,17 +1,20 @@
 # Experimental local protein and interface prediction
 
-AlphaLens 1.2.1 can predict protein complexes from sequences or UniProt IDs, or re-predict
+AlphaLens 1.3.0 can predict protein complexes from sequences or UniProt IDs, or re-predict
 selected regions spanning multiple protein chains, with AlphaFold 2 or AlphaFold 3 on
-Apple Silicon, using [LocalFold's native Metal implementation](https://github.com/sokrypton/localfold/tree/68c59196fa7d32c6edfc061ed369889c1cdb680b/metal).
+Apple Silicon, using [LocalFold's native Metal implementation](https://github.com/sokrypton/localfold/tree/68c59196fa7d32c6edfc061ed369889c1cdb680b/metal),
+or on Linux with an NVIDIA GPU, using its [native CUDA implementation](https://github.com/sokrypton/localfold/tree/68c59196fa7d32c6edfc061ed369889c1cdb680b/cuda)
+at the same revision. Both take the same options and write the same output files.
 The prediction runs in a separate process; ChimeraX remains interactive. The original
 structure stays open, and the result gets its own AlphaLens plot. The integration uses
-LocalFold’s native Metal executable, not its browser WebGPU backend; other GPU backends
-are not yet connected to AlphaLens.
+LocalFold’s native executables, not its browser WebGPU backend. Windows and Intel Macs
+have no native LocalFold engine and are not supported.
 
 ## Setup
 
-Install the AlphaLens 1.2.1 wheel. The local prediction feature remains experimental.
-The engine requires Apple Silicon, macOS 13 or newer and Xcode Command Line Tools.
+Install the AlphaLens 1.3.0 wheel. The local prediction feature remains experimental.
+On a Mac, the engine requires Apple Silicon, macOS 13 or newer and Xcode Command Line Tools.
+On Linux, see [Linux with an NVIDIA GPU (CUDA)](#linux-with-an-nvidia-gpu-cuda) below.
 No separate Python ML environment is needed. With a missing default engine, the button
 reads **Install & Predict**. Clicking it downloads and builds only the selected backend
 in the background, then runs the prediction using the input/settings captured at that
@@ -58,6 +61,55 @@ Choose **AlphaFold 2** or **AlphaFold 3** in the model selector. Weights are cac
 
 These are quantized AlphaFold parameters run by LocalFold, not models trained by
 AlphaLens. AF3 weights are not bundled or redistributed in the AlphaLens wheel.
+
+## Linux with an NVIDIA GPU (CUDA)
+
+On Linux x86_64, **Install & Predict** builds LocalFold's CUDA engines from the same pinned
+revision as the Metal ones. They take the same options and write the same files, so the
+dialog, contact head, reports and plots are unchanged. Setup needs:
+
+- an NVIDIA GPU from the T4 on (Turing, Ampere, Ada, Hopper, Blackwell) and its driver;
+  Blackwell needs the CUDA 12.8 toolkit or newer;
+- the CUDA 12 toolkit (`nvcc`, cuBLAS) and `g++` on `PATH` while setup runs; on a cluster,
+  for example, `module load CUDA/12.8.0` before starting ChimeraX or the setup script;
+- `git`, `curl`, `gzip` and `sha256sum`, and glibc 2.28 or newer.
+
+Each engine is compiled for the GPU generation `nvidia-smi` reports (its compute capability),
+and setup writes the toolkit's library directory into it: predictions run without the CUDA
+module loaded. The receipt beside each engine records the compute capability, and AlphaLens
+refuses to predict on a GPU of another generation. Built on an A100 (8.0) and run on an H100
+(9.0), the pinned engines gave NaN for AF2-Multimer and AF3, and an AF2 monomer 3.4 Å from the
+crystal that passed every output check. To switch generations with the same home directory (for
+example A100 and H100 nodes), delete `~/.local/share/alphalens/bin/localfold-*` and click
+**Install & Predict** on the new GPU.
+On a cluster, run setup on a GPU node; on a login node without a GPU, setup stops with
+"No NVIDIA GPU found".
+
+At the pinned revision, LocalFold's CUDA build script also builds a featuriser for its design
+model (RFD4-Proteina), which AlphaLens does not use. On glibc older than 2.34 (Rocky/RHEL 8,
+Ubuntu 20.04) it fails to link, and the build rewrites two committed probe binaries. Setup
+restores those files and continues only when that featuriser is the sole failure and every
+requested engine was built; any other failure stops setup with the build log. The build logs to
+LocalFold's fixed `/tmp/localfold-cuda-build.log`; if another user's copy is in the way,
+setup names the file to remove.
+
+Checked on EMBL's cluster on 2026-11-11 (A100-PCIE-40GB, driver 590.48, CUDA 12.8.0, g++ 12.3,
+Rocky Linux 8.10, 8 cores). Fresh setup took 125 s for AF2 and 177 s for AF3, excluding weights.
+Barnase–barstar (PDB 1BRS chains A/D, 195 residues, cached MSA, seed 1), against the crystal
+and against Metal on the M5 Max with the same seed and MSA:
+
+| Case | Cα RMSD to 1BRS | Cα RMSD to Metal | ipTM (Metal) | pLDDT (Metal) | Interface pairs at P ≥ 0.5 (Metal) |
+|---|---|---|---|---|---|
+| AF2-Multimer with the contact head | 0.640 Å | 0.054 Å | 0.921 (0.922) | 97.39 (97.42) | 46 (46) |
+| AF2 monomer (barnase) | 0.379 Å | 0.011 Å | – | 97.44 (97.42) | – |
+| AF3, five samples × 200 steps | 0.603 Å | 0.262 Å | 0.93 (0.94) | 95.79 (95.90) | 52 (52) |
+
+With weights cached, the predictions took 3.6, 3.2 and 13.8 s; repeats at the same seed gave
+byte-identical structures. Built on an H100 80GB (driver 590.44, the same toolchain), setup took
+119 and 170 s, and the same cases gave Cα RMSDs to 1BRS of 0.637, 0.377 and 0.605 Å (0.047,
+0.021 and 0.263 Å to Metal), in 2.0, 1.8 and 2.5 s with weights cached. This shows the CUDA engines reproduce the Metal results on one
+small known complex; it is not a general accuracy benchmark. The
+[recorded check](local-prediction-cuda-check.json) has the per-case values.
 
 ## Predict from sequence, FASTA, or UniProt
 
@@ -196,9 +248,10 @@ predicted contacts at P ≥ 0.5.
 ## Large inputs and time limits
 
 There is **no fixed residue-count cap**. Above 1,024 total residues across all chains (including flanks), the dialog shows a non-blocking warning about runtime
-and GPU memory. Predict remains enabled. The pinned native engine checks its estimated
+and GPU memory. Predict remains enabled. On a Mac, the pinned native engine checks its estimated
 allocations against Metal's recommended working-set budget and refuses an input that
-does not fit; removing the count cap does not remove physical memory requirements.
+does not fit. The CUDA engines size their work to the card's free memory. Removing the count
+cap does not remove physical memory requirements.
 
 The optional **Time limit (minutes)** defaults to **No limit**. Set a positive number
 to cancel after that duration, including MSA search. **Cancel job** and closing the
@@ -305,6 +358,13 @@ public pilot. It checks the Tools-menu entry and `alphalens predict` command, re
 `RNBR_BACAM` against live UniProt, and runs actual FASTA-pair, raw-monomer and
 UniProt-monomer predictions. It reuses matching pilot alignments, verifies absent
 monomer ipTM and source comparisons, and checks original UniProt residue numbering and Escape-key cancellation.
+
+`tests/localfold_engine_check.py` needs no ChimeraX and runs on macOS (Metal) and Linux (CUDA).
+It runs real AF2-Multimer (with the contact head), AF2-monomer and AF3 predictions of
+barnase–barstar through `PredictionJob` with an installed engine, then scores each against the
+1BRS crystal (LocalFold's `tools/fixtures/1brs-crystal.pdb`). `--reference` compares each case
+with an earlier run, for example on the other platform. `python3 tests/localfold_engine_check.py --help`
+lists the inputs; it needs numpy and exits 0 only when every case passes.
 
 ## Attribution
 
