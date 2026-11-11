@@ -83,8 +83,9 @@ residue-count cap. Residue maps
 retain positions in the original input sequence. Nonstandard amino acids in the
 selected ranges are rejected.
 
-Supply an A3M whose query exactly matches the selected sequence(s), or explicitly
-choose remote MSA search. The local MSA cache is checked first. Click **Predict**.
+Supply an A3M whose query exactly matches the selected sequence(s), use precomputed
+AlphaPulldown features (below), or explicitly choose remote MSA search. The local MSA cache
+is checked first. Click **Predict**.
 With AF2, single chains use the monomer model and complexes use multimer. AF3 handles
 both through its own model. Single chains report pTM/pLDDT; complexes also report ipTM.
 Sequence-only jobs open a new PAE plot without inventing a comparison to a source
@@ -106,6 +107,9 @@ header, release, retrieval time, original sequence hash and selected ranges.
    Its first query must exactly match the plotted protein tokens. Cropping preserves
    existing paired/unpaired rows and their insertion encoding. Alternatively, supply
    a merged A3M for exactly the cropped sequences, in the displayed order.
+   Or tick **Use precomputed AlphaPulldown features** (see below): the chain IDs are taken
+   from the prediction's folder name (`Q15014+Q9NV56`, `q15014_and_q9nv56`), and the region
+   is cropped from the full-length features.
 5. If no suitable MSA exists, explicitly enable **Search remotely if uncached**.
    This sends the selected sequences to `https://api.colabfold.com`, unless the exact
    query already exists in the local MSA cache. `LOCALFOLD_MMSEQS_API` can select a
@@ -152,6 +156,42 @@ format supports 62 distinct chain IDs; the earlier two-chain restriction is remo
 MSA caches include the ordered sequences, configured endpoint and engine revision.
 AF2 and AF3 share matching cached MSAs, including legacy AF2 caches.
 Cache hits reuse existing alignments; they do not claim a new database search.
+
+## Precomputed AlphaPulldown features
+
+**Use precomputed AlphaPulldown features** takes each chain's alignments from a feature file
+named by its UniProt ID, so no MSA search runs. **Features from** is the lab database
+`/g/alphafold/input_features` (default when `/g` is mounted; AF2 features of 16 proteomes under
+`alphafold2/<organism>/features/<ID>.pkl.xz`, AF3 features of two under
+`alphafold3/<organism>/features/<ID>_af3_input.json.xz`), its public copy
+`https://s3.embl.de/alphapulldown` (default otherwise; only the IDs are sent, files are cached
+in `~/.cache/alphalens/features`), or any AlphaPulldown feature folder. `ALPHALENS_FEATURES_DIR`
+sets the default.
+
+* AF2 pickles: AlphaPulldown's `MonomericObject`/`ChoppedObject` (its `feature_dict`) or
+  AlphaFold's per-chain feature dict, plain or `.xz`/`.gz`/`.bz2`. They are read without
+  AlphaPulldown or AlphaFold installed: the unpickler builds numpy arrays and stands in for
+  their classes, and refuses anything else. `msa` becomes each chain's unpaired A3M (deletion
+  counts as insertions); for a heteromer, `msa_all_seq` is paired by species exactly as
+  AlphaFold-Multimer's `msa_pairing.pair_sequences` and `reorder_paired_rows` do (checked
+  row for row on lab pairs). LocalFold receives `--a3m=<one a chain>` and
+  `--paired-a3m=<one a chain>` and merges, crops and deduplicates them as for a search.
+* AF3 JSON (`<ID>_af3_input.json`): used by the AlphaFold 3 model when every chain has one;
+  `unpairedMsa` and `pairedMsa` go into the job, and AF3's own species pairing applies.
+* A feature file of a whole complex (AF-Multimer `features.pkl` with several `asym_id`s) is
+  refused; templates are not used.
+
+The prediction's process finds, reads (or downloads) and converts the features before it
+becomes LocalFold, so ChimeraX stays responsive while a file comes over the `/g` mount (a few
+seconds each). The job folder keeps `features/chain_*.a3m`, `features/paired_*.a3m` and
+`features/features.json` (file, sha256, residue range, row counts). A failure there is
+reported as "precomputed features: …" (missing IDs, a sequence that is not in the features,
+a damaged read). Feature runs do not add to the MSA cache.
+
+Measured on this Mac (M5 Max), Q15014+Q9NV56 (288 + 204 residues) from the lab database:
+features ready in 2 s, the AF2-Multimer prediction in 11 s; ipTM 0.595 and pTM 0.570
+reproduce the AlphaPulldown model of the same features (iptm+ptm 0.592), with the same 86
+predicted contacts at P ≥ 0.5.
 
 ## Large inputs and time limits
 

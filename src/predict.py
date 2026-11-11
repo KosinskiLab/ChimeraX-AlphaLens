@@ -61,6 +61,16 @@ def default_executable(backend='af2'):
     return os.environ.get(variable, '') or shutil.which(name) or str(data_directory() / 'bin' / name)
 
 
+def chimerax_python():
+    '''The Python running ChimeraX, for the helper steps run before LocalFold.'''
+    python = Path(sys.executable)
+    if not python.name.startswith('python'):
+        python = Path(sys.exec_prefix) / 'bin' / f'python{sys.version_info.major}.{sys.version_info.minor}'
+    if not python.is_file():
+        raise ValueError('Could not locate the ChimeraX Python interpreter for preparing the prediction.')
+    return python
+
+
 def digest(path):
     h = hashlib.sha256()
     with open(path, 'rb') as f:
@@ -265,6 +275,9 @@ class PredictionProgress:
             elif line.startswith('search:'):
                 self.stage = 'MSA search · ' + line[len('search:'):].strip()[:160]
                 self.total = None
+            elif line.startswith('features:'):
+                self.stage = 'Precomputed features · ' + line[len('features:'):].strip()[:160]
+                self.total = None
             elif re.match(r'(?:af3|monomer|multimer)(?:-\d+)?:', line):
                 self.stage, self.total = 'Downloading model weights', None
             elif line.startswith(('input:', 'trunk:')):
@@ -279,7 +292,7 @@ class PredictionJob:
     def __init__(self, directory, chains, *, executable=None, search=False, msa=None,
                  seed=None, recycles=None, max_msa=512, max_extra=1024, source=None,
                  cache=None, timeout=None, msa_crop=None, backend='af2', accept_af3_terms=False,
-                 diffusion_steps=200, diffusion_samples=5):
+                 diffusion_steps=200, diffusion_samples=5, features=None):
         validate_chains(chains)
         if backend not in ('af2', 'af3'):
             raise ValueError('Choose the AF2 or AF3 prediction model.')
@@ -293,10 +306,15 @@ class PredictionJob:
             recycles = 10 if backend == 'af3' else 3
         if seed is None:
             seed = random_seed()
-        if search and msa:
-            raise ValueError('Choose remote search or an existing merged MSA, not both.')
-        if not search and not msa:
-            raise ValueError('Choose remote search or supply an MSA for this prediction.')
+        # features: dict(root=folder or URL, names=[feature name (UniProt ID) of each chain])
+        if features is not None and (not features.get('root') or len(features.get('names') or ()) != len(chains)
+                                     or not all(features['names'])):
+            raise ValueError('Give the feature folder or URL and a UniProt ID for every chain.')
+        if sum(map(bool, (search, msa, features))) > 1:
+            raise ValueError('Choose one alignment source: remote search, an existing merged MSA or '
+                             'precomputed features.')
+        if not search and not msa and not features:
+            raise ValueError('Choose remote search, supply an MSA or use precomputed features for this prediction.')
         for value, lo, hi, label in ((seed, 0, 2**31-1, 'seed'), (recycles, 0, 10, 'recycles'),
                                       (max_msa, 1, 512, 'MSA rows'), (max_extra, 0, 2048, 'extra MSA rows')):
             if not isinstance(value, int) or not lo <= value <= hi:
@@ -328,6 +346,7 @@ class PredictionJob:
             self.options.update(steps=diffusion_steps, samples=diffusion_samples, update='euler', schedule='karras')
         self.source = source or {}
         self.search = search
+        self.features = features
         self.msa = Path(msa).expanduser().resolve() if msa else None
         self.msa_crop = msa_crop
         if msa_crop and not msa:
@@ -373,7 +392,8 @@ class PredictionJob:
             args = [str(self.executable), f'--job={self.directory}/input.json', f'--model={self.model}',
                     f'--out={self.directory}/fold.pdb', f'--weights-dir={self.cache}']
             args += [f'--{k.replace("_", "-")}={v}' for k, v in self.options.items()]
-            args += [f'--a3m={self.directory}/input.a3m'] if alignment else ['--search']
+            if not self.features:       # The features step adds its own alignment arguments
+                args += [f'--a3m={self.directory}/input.a3m'] if alignment else ['--search']
             provenance = self.executable.with_suffix('.json')
             engine_info = json.loads(provenance.read_text()) if provenance.exists() else {}
             binary_hash = digest(self.executable)
@@ -386,7 +406,8 @@ class PredictionJob:
                                  timeout_seconds=self.timeout,
                                  msa_crop=self.msa_crop,
                                  source_msa_sha256=digest(alignment) if alignment else None,
-                                 msa_source=('supplied' if self.msa else 'cache') if alignment else self.api,
+                                 msa_source=(f'precomputed features from {self.features["root"]}' if self.features
+                                             else ('supplied' if self.msa else 'cache') if alignment else self.api),
                                  input_sha256=digest(self.directory / 'input.json'))
             self.log = (self.directory / 'prediction.log').open('w')
             env = os.environ.copy()
@@ -404,17 +425,26 @@ class PredictionJob:
             launch = args
             if self.model == MODEL and revision == ENGINE_REVISION:
                 from .predict_weights import HEAD_SHA256
-                python = Path(sys.executable)
-                if not python.name.startswith('python'):
-                    python = Path(sys.exec_prefix) / 'bin' / f'python{sys.version_info.major}.{sys.version_info.minor}'
-                if not python.is_file():
-                    raise ValueError('Could not locate the ChimeraX Python interpreter for weight preparation.')
+                python = chimerax_python()
                 launch = [str(python), '-B', str(Path(__file__).with_name('predict_weights.py')), str(self.cache), *args]
                 self.weights_cache = self.cache / 'alphalens-contacts'
                 self.manifest['contact_head_sha256'] = HEAD_SHA256
                 self.manifest['weights_directory'] = str(self.weights_cache)
                 self.manifest['args'] = [f'--weights-dir={self.weights_cache}'
                                         if a.startswith('--weights-dir=') else a for a in args]
+            if self.features:
+                # Find, read (network mounts, downloads) and convert the features in the job's own
+                # process, which then becomes LocalFold: the window never waits on them.
+                spec = self.directory / 'features_spec.json'
+                write_json(spec, dict(directory=str(self.directory / 'features'), root=str(self.features['root']),
+                                      backend=self.backend, job=str(self.directory / 'input.json'),
+                                      chains=[dict(chain_id=cid, name=name, sequence=c['sequence'],
+                                                   start_hint=int(c['residue_map'][0].get('number', 1)) - 1)
+                                              for cid, name, c in zip(chain_ids(len(self.chains)),
+                                                                      self.features['names'], self.chains)]))
+                launch = [str(chimerax_python()), '-B', str(Path(__file__).with_name('predict_features.py')),
+                          str(spec), '--', *launch]
+                self.manifest['features_root'] = str(self.features['root'])
             self.process = subprocess.Popen(launch, stdout=self.log, stderr=subprocess.STDOUT,
                                             stdin=subprocess.DEVNULL, start_new_session=True, env=env)
             self.state = 'running'
@@ -482,17 +512,25 @@ class PredictionJob:
             elif code:
                 self.state = 'failed'
                 text = (self.directory / 'prediction.log').read_text(errors='replace')
-                self.error = f'LocalFold exited with status {code}. ' + text[-700:]
+                from .predict_features import ERROR_PREFIX
+                failed = [line for line in text.splitlines() if line.startswith(ERROR_PREFIX)]
+                self.error = (failed[-1][len('Error: '):] if self.features and failed
+                              else f'LocalFold exited with status {code}. ' + text[-700:])
             else:
                 self.result = validate_result(self.directory, self.chains)
-                searched = self.directory / 'fold.a3m'
-                alignment = searched if searched.exists() else self.directory / 'input.a3m'
-                # Supplied/cropped alignments are reusable too; no second remote query.
-                validate_a3m(alignment, ''.join(c['sequence'] for c in self.chains))
-                self.msa_cache.parent.mkdir(parents=True, exist_ok=True)
-                part = self.msa_cache.with_suffix('.part')
-                shutil.copyfile(alignment, part); part.replace(self.msa_cache)
-                self.manifest['msa_sha256'] = digest(alignment)
+                if self.features:
+                    # The feature files are the record; their alignments are not a merged MSA
+                    provenance = self.directory / 'features' / 'features.json'
+                    self.manifest['features'] = json.loads(provenance.read_text()) if provenance.exists() else None
+                else:
+                    searched = self.directory / 'fold.a3m'
+                    alignment = searched if searched.exists() else self.directory / 'input.a3m'
+                    # Supplied/cropped alignments are reusable too; no second remote query.
+                    validate_a3m(alignment, ''.join(c['sequence'] for c in self.chains))
+                    self.msa_cache.parent.mkdir(parents=True, exist_ok=True)
+                    part = self.msa_cache.with_suffix('.part')
+                    shutil.copyfile(alignment, part); part.replace(self.msa_cache)
+                    self.manifest['msa_sha256'] = digest(alignment)
                 weights = self.weights_cache / ('model-multimer' if len(self.chains) > 1 else 'model') / 'manifest.json'
                 if self.backend == 'af2' and weights.is_file():
                     self.manifest['weights_manifest_sha256'] = digest(weights)
