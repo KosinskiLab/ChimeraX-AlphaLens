@@ -74,10 +74,14 @@ dialog, contact head, reports and plots are unchanged. Setup needs:
   for example, `module load CUDA/12.8.0` before starting ChimeraX or the setup script;
 - `git`, `curl`, `gzip` and `sha256sum`, and glibc 2.28 or newer.
 
-Each engine is compiled for the GPU generation `nvidia-smi` reports, and setup writes the
-toolkit's library directory into it: predictions run without the CUDA module loaded.
-To use a different GPU generation from the same home directory (for example A100 and H100
-nodes), delete `~/.local/share/alphalens/bin/localfold-*` and set up again on the new one.
+Each engine is compiled for the GPU generation `nvidia-smi` reports (its compute capability),
+and setup writes the toolkit's library directory into it: predictions run without the CUDA
+module loaded. The receipt beside each engine records the compute capability, and AlphaLens
+refuses to predict on a GPU of another generation. Built on an A100 (8.0) and run on an H100
+(9.0), the pinned engines gave NaN for AF2-Multimer and AF3, and an AF2 monomer 3.4 Å from the
+crystal that passed every output check. To switch generations with the same home directory (for
+example A100 and H100 nodes), delete `~/.local/share/alphalens/bin/localfold-*` and click
+**Install & Predict** on the new GPU.
 On a cluster, run setup on a GPU node; on a login node without a GPU, setup stops with
 "No NVIDIA GPU found".
 
@@ -101,7 +105,9 @@ and against Metal on the M5 Max with the same seed and MSA:
 | AF3, five samples × 200 steps | 0.603 Å | 0.262 Å | 0.93 (0.94) | 95.79 (95.90) | 52 (52) |
 
 With weights cached, the predictions took 3.6, 3.2 and 13.8 s; repeats at the same seed gave
-byte-identical structures. This shows the CUDA engines reproduce the Metal results on one
+byte-identical structures. Built on an H100 80GB (driver 590.44, the same toolchain), setup took
+119 and 170 s, and the same cases gave Cα RMSDs to 1BRS of 0.637, 0.377 and 0.605 Å (0.047,
+0.021 and 0.263 Å to Metal), in 2.0, 1.8 and 2.5 s with weights cached. This shows the CUDA engines reproduce the Metal results on one
 small known complex; it is not a general accuracy benchmark. The
 [recorded check](local-prediction-cuda-check.json) has the per-case values.
 

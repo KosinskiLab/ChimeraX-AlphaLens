@@ -148,6 +148,8 @@ def cuda_source(tmp_path, monkeypatch):
         return state['dirty'] if state['built'] else ''
 
     def run(args, cwd=None, env=None, check=False, **k):
+        if args[0] == 'nvidia-smi':
+            return subprocess.CompletedProcess(args, 0, stdout='8.0\n')
         state['calls'].append((args, (env or {}).get('LOCALFOLD_RPATH')))
         if args[0] == 'bash':
             for port in state['ports']:
@@ -169,6 +171,7 @@ def test_cuda_install_builds_with_toolkit_rpath_and_records_backend(tmp_path, cu
     assert state['calls'] == [(['bash', 'cuda/build.sh', 'af2'], str(toolkit / 'lib64'))]
     receipt = json.loads((tmp_path / 'prefix' / 'bin' / 'localfold-af2.json').read_text())
     assert receipt['native'] == 'cuda' and receipt['revision'] == setup.REVISION
+    assert receipt['cuda_compute_capability'] == '8.0'
     assert os.access(tmp_path / 'prefix' / 'bin' / 'localfold-af2', os.X_OK)
 
 

@@ -45,6 +45,17 @@ def check_platform():
     return native
 
 
+def cuda_compute_capability():
+    """The first NVIDIA GPU's compute capability ('8.0' for an A100), as cuda/build.sh reads it; None without one."""
+    try:
+        gpu = subprocess.run(['nvidia-smi', '--query-gpu=compute_cap', '--format=csv,noheader'],
+                             capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = gpu.stdout.split()
+    return lines[0] if gpu.returncode == 0 and lines else None
+
+
 def check_prerequisites():
     native = check_platform()
     if native == 'metal':
@@ -62,9 +73,7 @@ def check_prerequisites():
             raise RuntimeError(f'Missing {name}. {CUDA_HINT}')
     if not shutil.which('nvidia-smi'):
         raise RuntimeError('Missing nvidia-smi. Install the NVIDIA driver, then retry Predict.')
-    gpu = subprocess.run(['nvidia-smi', '--query-gpu=compute_cap', '--format=csv,noheader'],
-                         capture_output=True, text=True)
-    if gpu.returncode or not gpu.stdout.strip():
+    if not cuda_compute_capability():
         raise RuntimeError('No NVIDIA GPU found: nvidia-smi reported none. Run setup on a machine with an NVIDIA GPU.')
     for path in CUDA_BUILD_FILES:
         if os.path.lexists(path) and not os.access(path, os.W_OK):
@@ -166,8 +175,11 @@ def install(prefix, models, source=None):
             checksum = hashlib.sha256(temporary.read_bytes()).hexdigest()
             info = target.with_suffix('.json')
             receipt = info.with_suffix('.json.part')
-            receipt.write_text(json.dumps(dict(repository=REPOSITORY, revision=head, sha256=checksum, native=native),
-                                          indent=2)+'\n', encoding='utf-8')
+            info_data = dict(repository=REPOSITORY, revision=head, sha256=checksum, native=native)
+            if native == 'cuda':
+                # Engines are compiled for this GPU generation only; predict.py refuses them on another.
+                info_data['cuda_compute_capability'] = cuda_compute_capability()
+            receipt.write_text(json.dumps(info_data, indent=2)+'\n', encoding='utf-8')
             temporary.replace(target)
             receipt.replace(info)
             progress(f'Installed {target}')
