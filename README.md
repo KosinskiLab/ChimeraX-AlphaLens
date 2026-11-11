@@ -7,8 +7,9 @@ AlphaFold2/AlphaFold3 predictions and running small local protein predictions. L
 ChimeraX's built-in AlphaFold error plot, it shows the PAE matrix with a pLDDT track. It adds views
 computed from the predicted distogram, compares the predicted contacts with the contacts in the
 model, shows which contacts are reproduced across seeds or models, draws the predicted contacts on
-the structure and exports them to CSV. On Apple Silicon, it can also predict from raw
-sequences, FASTA or UniProt IDs, or re-predict an interface selected in the plot.
+the structure and exports them to CSV. On Apple Silicon Macs and on Linux with an NVIDIA GPU,
+it can also predict from raw sequences, FASTA or UniProt IDs, or re-predict an interface
+selected in the plot.
 
 <p align="center"><img src="docs/images/contacts.png" width="640"
   alt="AlphaLens plot in the contact-probability view, with dots on the inter-chain contacts"></p>
@@ -35,16 +36,18 @@ P ≥ 0.5.*
 
 ## Install
 
-Version 1.3.0 can take the alignments of a local prediction from precomputed AlphaPulldown
-features (the lab database, its public copy or a feature folder) instead of an MSA search,
-colors predicted contacts by a fixed P scale in the pLDDT colors, and adds a "dots on plot"
-switch next to the slider. Since 1.2.1, AlphaLens sets up LocalFold when you first predict,
-reopens saved local prediction folders, and keeps the selected-region preview in sync with
-the plot.
+Version 1.3.0 adds local prediction on Linux with an NVIDIA GPU, through LocalFold's CUDA
+engines, beside the Metal engines on Apple Silicon. It can take the alignments of a local
+prediction from precomputed AlphaPulldown features (the lab database, its public copy or a
+feature folder) instead of an MSA search, colors predicted contacts by a fixed P scale in the
+pLDDT colors, and adds a "dots on plot" switch next to the slider. Since 1.2.1, AlphaLens sets
+up LocalFold when you first predict, reopens saved local prediction folders, and keeps the
+selected-region preview in sync with the plot.
 
 Requires ChimeraX 1.6 or newer; tested with 1.10 and 1.12. The bundle is pure Python, so one wheel works on
-macOS, Linux and Windows. The optional local prediction engine currently requires
-Apple Silicon macOS 13 or newer and is tested with ChimeraX 1.12.
+macOS, Linux and Windows. The optional local prediction engine requires Apple Silicon
+macOS 13 or newer (Metal), or Linux x86_64 with an NVIDIA GPU (CUDA). It is not available
+on Windows or on Intel Macs. It is tested with ChimeraX 1.12.
 
 1. Download `chimerax_alphalens-<version>-py3-none-any.whl` from the
    [Releases](https://github.com/KosinskiLab/AlphaLens/releases) page. Keep the file name:
@@ -76,18 +79,21 @@ ChimeraX builds a `pyproject.toml` bundle from its current directory, whatever p
 `devel`: without the `cd`, `devel install` fails with "package directory 'src' does not exist"
 (seen in ChimeraX 1.10).
 
-### Optional local prediction engine (Apple Silicon)
+### Optional local prediction engine (Apple Silicon or Linux with an NVIDIA GPU)
 
 Open **AlphaLens Prediction**, choose the model and input, then click **Install & Predict**
 if that engine is missing. AlphaLens downloads and builds the selected LocalFold engine
 in the background, then starts the prediction with the submitted input and settings.
-**Cancel setup** stops installation; retry the same button when ready. Setup requires
+**Cancel setup** stops installation; retry the same button when ready. On a Mac, setup requires
 Xcode Command Line Tools (`xcode-select --install` if missing). A fresh AF3 engine build
-took about 30 seconds on the tested M5 Max, excluding model weights and MSA search. The plugin installation
+took about 30 seconds on the tested M5 Max, excluding model weights and MSA search. On Linux,
+setup compiles LocalFold's CUDA engines for the machine's GPU (NVIDIA T4 or newer) and needs
+the CUDA toolkit (`nvcc`, cuBLAS 12) and `g++`; see the
+[prediction guide](docs/local-prediction.md#linux-with-an-nvidia-gpu-cuda). The plugin installation
 and opening its prediction dialog do not install engines. Existing engines are reused.
 
 For optional manual installation of both engines, download
-[setup_localfold.py](https://github.com/KosinskiLab/AlphaLens/releases/download/v1.2.1/setup_localfold.py)
+[setup_localfold.py](https://github.com/KosinskiLab/AlphaLens/releases/download/v1.3.0/setup_localfold.py)
 and run `python3 ~/Downloads/setup_localfold.py`. First-use setup uses ChimeraX's bundled
 Python. The first AF2 prediction downloads about 77 MB of model weights; AF3 downloads
 about 277 MB after you accept DeepMind's terms in the dialog.
@@ -303,7 +309,7 @@ contacts reached in any seed, with P per seed:
 
 ## Local protein and interface prediction (experimental)
 
-On Apple Silicon, AlphaLens predicts protein complexes from raw sequences,
+On Apple Silicon, or on Linux with an NVIDIA GPU, AlphaLens predicts protein complexes from raw sequences,
 FASTA or UniProt IDs using `alphalens predict` (also under Tools → Structure Prediction
 → AlphaLens Prediction). It can also re-predict regions spanning multiple protein chains.
 Drag an interface box, then right-click **Re-predict selected interface…**.
@@ -320,8 +326,9 @@ A job folder opens again later with `alphalens open <job folder>`.
 The original structure is retained. There is no fixed residue-count cap;
 inputs above 1,024 total residues (including flanks) show a warning and can still run.
 The engine checks its estimated GPU-memory requirement. The optional time limit defaults
-to **No limit**; **Cancel job** remains available. This integration uses native Metal;
-LocalFold’s browser WebGPU backend is not connected to AlphaLens.
+to **No limit**; **Cancel job** remains available. This integration uses LocalFold's native
+engines: Metal on macOS and CUDA on Linux. LocalFold’s browser WebGPU backend is not connected
+to AlphaLens.
 Tested 175–195-residue predictions
 took about 2–3 seconds with cached MSAs on an M5 Max. A full 799-residue pair took
 25.9 seconds with a supplied MSA and a 3.26 GB engine-reported buffer peak. Fresh

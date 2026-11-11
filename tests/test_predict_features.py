@@ -34,8 +34,14 @@ def feature_dict(seq, rows, deletions=None, all_rows=None, species=None):
 
 def monomeric_object(seq, fd, description='X'):
     '''A pickle as AlphaPulldown writes it: alphapulldown.objects.MonomericObject with a runner.'''
-    mod = types.ModuleType('alphapulldown.objects')
-    jack = types.ModuleType('alphafold.data.tools.jackhmmer')
+    # Pickling imports each class's module, parents first: stand in for the whole packages, so
+    # this works without AlphaPulldown or AlphaFold installed, as the reader must.
+    names = ('alphapulldown', 'alphapulldown.objects', 'alphafold', 'alphafold.data',
+             'alphafold.data.tools', 'alphafold.data.tools.jackhmmer')
+    stand_ins = {name: types.ModuleType(name) for name in names}
+    for name in ('alphapulldown', 'alphafold', 'alphafold.data', 'alphafold.data.tools'):
+        stand_ins[name].__path__ = []
+    mod, jack = stand_ins['alphapulldown.objects'], stand_ins['alphafold.data.tools.jackhmmer']
 
     class MonomericObject:
         pass
@@ -45,8 +51,9 @@ def monomeric_object(seq, fd, description='X'):
     MonomericObject.__module__, Jackhmmer.__module__ = mod.__name__, jack.__name__
     MonomericObject.__qualname__, Jackhmmer.__qualname__ = 'MonomericObject', 'Jackhmmer'
     mod.MonomericObject, jack.Jackhmmer = MonomericObject, Jackhmmer
-    saved = {k: sys.modules.get(k) for k in (mod.__name__, jack.__name__)}
-    sys.modules[mod.__name__], sys.modules[jack.__name__] = mod, jack
+    missing = object()
+    saved = {k: sys.modules.get(k, missing) for k in names}
+    sys.modules.update(stand_ins)
     try:
         obj = MonomericObject()
         obj.description, obj.sequence, obj.feature_dict = description, seq, fd
@@ -55,7 +62,7 @@ def monomeric_object(seq, fd, description='X'):
         return pickle.dumps(obj, protocol=4)
     finally:
         for k, v in saved.items():
-            if v is None:
+            if v is missing:
                 sys.modules.pop(k, None)
             else:
                 sys.modules[k] = v
