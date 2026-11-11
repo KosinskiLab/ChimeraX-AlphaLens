@@ -2,6 +2,15 @@
 
 ## 1.3.0
 
+* Local prediction on Linux x86_64 with an NVIDIA GPU. **Install & Predict** builds LocalFold's
+  CUDA engines, from the same pinned revision as the Metal ones, when `nvcc`, cuBLAS and `g++`
+  are available. A missing tool, a machine without a GPU and another user's LocalFold build
+  files are reported with what to do. The engines find cuBLAS without the CUDA module loaded.
+  Checked on an A100 against the 1BRS crystal and the Metal results (see the prediction guide).
+* `job.json` names the engine: "LocalFold native Metal" or "LocalFold native CUDA". The AF3
+  settings that work around the Metal tensor path are set on macOS only.
+* Add `tests/localfold_engine_check.py`: real AF2-Multimer, AF2-monomer and AF3 predictions
+  through `PredictionJob` without ChimeraX, scored against 1BRS and, optionally, an earlier run.
 * Local predictions can take their alignments from precomputed AlphaPulldown features instead of
   an MSA search: tick **Use precomputed AlphaPulldown features** in the prediction dialog. The
   features come from the lab database (`/g/alphafold/input_features`), its public copy

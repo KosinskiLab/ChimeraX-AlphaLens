@@ -84,3 +84,115 @@ def test_source_checkout_and_concurrent_setup_are_preserved(tmp_path,monkeypatch
         setup.install(prefix,['af2'],source)
     assert (source/'keep').read_text()=='user data'
     assert not (prefix/'bin').exists()
+
+
+@pytest.mark.parametrize('system,machine,native', [
+    ('Darwin', 'arm64', 'metal'), ('Linux', 'x86_64', 'cuda'), ('Linux', 'AMD64', 'cuda'),
+    ('Darwin', 'x86_64', None), ('Linux', 'aarch64', None), ('Windows', 'AMD64', None)])
+def test_native_platform(monkeypatch, system, machine, native):
+    monkeypatch.setattr(setup.platform, 'system', lambda: system)
+    monkeypatch.setattr(setup.platform, 'machine', lambda: machine)
+    assert setup.native_platform() == native
+
+
+@pytest.fixture
+def linux(monkeypatch):
+    monkeypatch.setattr(setup.platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(setup.platform, 'machine', lambda: 'x86_64')
+
+
+def test_cuda_prerequisite_errors_are_actionable(linux, monkeypatch):
+    tools = {'git', 'curl', 'gzip', 'sha256sum', 'g++', 'nvidia-smi'}
+    monkeypatch.setattr(setup.shutil, 'which', lambda name: f'/usr/bin/{name}' if name in tools else None)
+    with pytest.raises(RuntimeError, match='Missing nvcc.*CUDA toolkit'):
+        setup.check_prerequisites()
+    tools.add('nvcc')
+    monkeypatch.setattr(setup.subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout='\n'))
+    with pytest.raises(RuntimeError, match='No NVIDIA GPU'):
+        setup.check_prerequisites()
+    monkeypatch.setattr(setup.subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout='8.0\n'))
+    monkeypatch.setattr(setup, 'CUDA_BUILD_FILES', ())
+    assert setup.check_prerequisites() == 'cuda'
+
+
+def test_cuda_build_files_of_another_user_are_reported(linux, monkeypatch, tmp_path):
+    monkeypatch.setattr(setup.shutil, 'which', lambda name: f'/usr/bin/{name}')
+    monkeypatch.setattr(setup.subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout='8.0\n'))
+    stale = tmp_path / 'localfold-cuda-build.log'
+    stale.write_text('')
+    monkeypatch.setattr(setup, 'CUDA_BUILD_FILES', (str(stale),))
+    monkeypatch.setattr(setup.os, 'access', lambda path, mode: False)
+    with pytest.raises(RuntimeError, match='belongs to another user'):
+        setup.check_prerequisites()
+
+
+@pytest.fixture
+def cuda_source(tmp_path, monkeypatch):
+    """A clean pinned checkout stand-in whose build is scripted by each test."""
+    toolkit = tmp_path / 'cuda-12.8'
+    (toolkit / 'bin').mkdir(parents=True)
+    (toolkit / 'lib64').mkdir()
+    (toolkit / 'lib64' / 'libcublas.so.12').write_text('')
+    source = tmp_path / 'source'
+    source.mkdir()
+    (source / 'LICENSE').write_text('beerware')
+    log = tmp_path / 'localfold-cuda-build.log'
+    monkeypatch.setattr(setup, 'CUDA_BUILD_FILES', (str(tmp_path / 'marker'), str(log)))
+    monkeypatch.setattr(setup, 'check_prerequisites', lambda: 'cuda')
+    monkeypatch.setattr(setup.shutil, 'which', lambda name: str(toolkit / 'bin' / name) if name == 'nvcc' else None)
+    state = dict(built=False, calls=[], dirty='', code=0, log='', ports=['af2'])
+
+    def check_output(args, **k):
+        if args[-1] == 'HEAD':
+            return setup.REVISION
+        return state['dirty'] if state['built'] else ''
+
+    def run(args, cwd=None, env=None, check=False, **k):
+        state['calls'].append((args, (env or {}).get('LOCALFOLD_RPATH')))
+        if args[0] == 'bash':
+            for port in state['ports']:
+                binary = Path(cwd) / 'cuda' / port / f'localfold-{port}'
+                binary.parent.mkdir(parents=True, exist_ok=True)
+                binary.write_text('#!/bin/sh\n')
+                binary.chmod(0o755)
+            log.write_text(state['log'])
+            state['built'] = True
+        return subprocess.CompletedProcess(args, state['code'] if args[0] == 'bash' else 0)
+    monkeypatch.setattr(setup.subprocess, 'check_output', check_output)
+    monkeypatch.setattr(setup.subprocess, 'run', run)
+    return source, toolkit, state
+
+
+def test_cuda_install_builds_with_toolkit_rpath_and_records_backend(tmp_path, cuda_source):
+    source, toolkit, state = cuda_source
+    setup.install(tmp_path / 'prefix', ['af2'], source)
+    assert state['calls'] == [(['bash', 'cuda/build.sh', 'af2'], str(toolkit / 'lib64'))]
+    receipt = json.loads((tmp_path / 'prefix' / 'bin' / 'localfold-af2.json').read_text())
+    assert receipt['native'] == 'cuda' and receipt['revision'] == setup.REVISION
+    assert os.access(tmp_path / 'prefix' / 'bin' / 'localfold-af2', os.X_OK)
+
+
+def test_cuda_build_restores_rewritten_probes_and_tolerates_unused_featuriser(tmp_path, cuda_source, capsys):
+    # Seen on EL8 (glibc 2.28): rfd4p-featurise fails to link, two committed probes are rewritten,
+    # and the requested engine is built. The next engine's setup needs a clean checkout.
+    source, _, state = cuda_source
+    state.update(code=1, dirty=' M cuda/rfd4p/featurise/assign-probe\n M cuda/rfd4p/featurise/superpose-probe\n',
+                 log='built the featurisers\nFAILED rfd4p-featurise\nbuilt af2 for sm_80\n')
+    setup.install(tmp_path / 'prefix', ['af2'], source)
+    assert (['git', '-C', str(source), 'checkout', '--', 'cuda/rfd4p/featurise/assign-probe',
+             'cuda/rfd4p/featurise/superpose-probe'], None) in state['calls']
+    assert 'design-model featuriser did not build' in capsys.readouterr().out
+    assert (tmp_path / 'prefix' / 'bin' / 'localfold-af2').is_file()
+
+
+@pytest.mark.parametrize('log,ports', [
+    ('FAILED rfd4p-featurise\nFAILED af2 for sm_80\n', ['af2']),       # the engine itself failed
+    ('FAILED the standalone object\n', ['af2']),                        # what the engines link
+    ('FAILED rfd4p-featurise\n', []),                                   # no engine binary
+    ('', ['af2'])])                                                     # nonzero without a FAILED line
+def test_cuda_build_failures_that_matter_stop_setup(tmp_path, cuda_source, log, ports):
+    source, _, state = cuda_source
+    state.update(code=1, log=log, ports=ports)
+    with pytest.raises(subprocess.CalledProcessError):
+        setup.install(tmp_path / 'prefix', ['af2'], source)
+    assert not (tmp_path / 'prefix' / 'bin' / 'localfold-af2').exists()

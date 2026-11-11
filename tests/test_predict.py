@@ -4,6 +4,7 @@ import sys
 import time
 
 import pytest
+from alphalens import predict
 from alphalens.predict import PredictionJob, PredictionProgress, crop_chains, size_warning, validate_a3m, validate_chains, validate_result
 
 
@@ -177,7 +178,8 @@ def test_no_implicit_sequence_upload(runner):
         runner()
 
 
-def test_af3_terms_gate_options_and_cross_model_msa_cache(runner):
+def test_af3_terms_gate_options_and_cross_model_msa_cache(runner, monkeypatch):
+    monkeypatch.setattr(predict.sys, 'platform', 'darwin')
     with pytest.raises(ValueError, match='terms'):
         runner(search=True, backend='af3')
     first = finish(runner(search=True).start())
@@ -194,6 +196,18 @@ def test_af3_terms_gate_options_and_cross_model_msa_cache(runner):
     assert '--update=euler' in af3.manifest['args'] and '--schedule=karras' in af3.manifest['args']
     assert not any(a.startswith('--max-extra') for a in af3.manifest['args'])
     assert af3.manifest['af3_terms_accepted'] is True
+    assert af3.manifest['engine'] == 'LocalFold native Metal'
+
+
+def test_cuda_engine_label_and_no_metal_settings(runner, monkeypatch):
+    monkeypatch.setattr(predict.sys, 'platform', 'linux')
+    af3 = finish(runner('af3-cuda', search=True, backend='af3', accept_af3_terms=True).start())
+    assert af3.state == 'complete', af3.error
+    assert af3.manifest['engine'] == 'LocalFold native CUDA'
+    assert 'runtime_environment' not in af3.manifest
+    af2 = finish(runner('af2-cuda', search=True, seed=2).start())
+    assert af2.state == 'complete', af2.error
+    assert af2.manifest['engine'] == 'LocalFold native CUDA'
 
 
 def test_invalid_contact_matrix_is_rejected(runner):
@@ -290,3 +304,12 @@ def test_a3m_headers_in_any_encoding_pass_through(tmp_path, monkeypatch):
     validate_a3m(source, 'ACDE')
     crop_a3m(source, cropped, 'ACDE', [0, 1, 3])
     assert cropped.read_bytes() == b'>query caf\xc3\xa9\nACE\n>hit \xe9t\xe9\nAaCE\n'
+
+
+def test_engine_platform_follows_the_os_not_python_architecture(monkeypatch):
+    # An x86_64 Python under Rosetta reports machine x86_64 but still launches the Metal engine.
+    import platform
+    monkeypatch.setattr(platform, 'machine', lambda: 'x86_64')
+    for system, native in (('darwin', 'metal'), ('linux', 'cuda'), ('win32', None)):
+        monkeypatch.setattr(predict.sys, 'platform', system)
+        assert predict.engine_platform() == native
