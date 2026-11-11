@@ -13,6 +13,11 @@ import sys
 import time
 
 from .predict_setup import REVISION as ENGINE_REVISION, cuda_compute_capability
+# The revision before the residueIds patch: its search client, AF2 weight walk and outputs are the
+# current one's, so its cached MSAs stay valid and its engines take the contact head too.
+PREVIOUS_REVISION = '68c59196fa7d32c6edfc061ed369889c1cdb680b'
+MSA_CACHE_REVISION = PREVIOUS_REVISION
+CONTACT_HEAD_REVISIONS = (ENGINE_REVISION, PREVIOUS_REVISION)
 NATIVE_NAMES = dict(metal='Metal', cuda='CUDA')
 MODEL = 'model_1_multimer_v3'
 MONOMER_MODEL = 'model_1_ptm'
@@ -68,6 +73,18 @@ def default_executable(backend='af2'):
     name = f'localfold-{backend}'
     variable = 'ALPHALENS_LOCALFOLD_AF3' if backend == 'af3' else 'ALPHALENS_LOCALFOLD'
     return os.environ.get(variable, '') or shutil.which(name) or str(data_directory() / 'bin' / name)
+
+
+def engine_outdated(executable):
+    '''A managed engine (AlphaLens's own bin folder) built from an earlier pinned LocalFold revision.'''
+    path = Path(executable).expanduser()
+    try:
+        if path.parent.resolve() != (data_directory() / 'bin').resolve() or not path.is_file():
+            return False
+        revision = json.loads(path.with_suffix('.json').read_text()).get('revision')
+    except (OSError, ValueError):
+        return False
+    return bool(revision) and revision != ENGINE_REVISION
 
 
 def chimerax_python():
@@ -126,6 +143,10 @@ def validate_chains(chains):
             raise ValueError('Use nonempty protein sequences with the 20 standard amino acids.')
         if len(chain['residue_map']) != len(seq):
             raise ValueError('The sequence and residue mapping have different lengths.')
+        ids = chain.get('residue_ids')
+        if ids is not None and (len(ids) != len(seq) or not all(isinstance(i, int) and 1 <= i <= 9999 for i in ids)
+                                or any(b <= a for a, b in zip(ids, ids[1:]))):
+            raise ValueError('Residue numbers of a gapped chain must increase, one per residue, from 1 to 9999.')
 
 
 def size_warning(chains):
@@ -134,6 +155,47 @@ def size_warning(chains):
         return (f'Large prediction: {total:,} residues including flanks. More GPU memory '
                 'and time may be needed. You can proceed.')
     return ''
+
+
+def residue_label(row):
+    return f"{row['chain_id']}:{row['number']}{row.get('insertion_code') or ''}"
+
+
+def is_break(a, b):
+    """Residue b does not follow a in one continuous segment (a gap, or unresolved residues)."""
+    return bool(b.get('break_before')) or b['chain_index'] != a['chain_index'] + 1
+
+
+def gapped_residue_ids(selected):
+    """Residue numbers for a chain made of discontinuous segments, None for one segment.
+
+    LocalFold (job residueIds) uses them as the residue index, so the model sees the gaps as
+    AlphaPulldown's discontinuous regions do: one chain, far apart in sequence. The source
+    numbers are used when they increase and jump at every break (AlphaPulldown and UniProt
+    numbering); otherwise 1, 2, ... with the gap sizes the numbering or missing residues give,
+    or 33 (beyond the relative-position range) when the size is unknown.
+    """
+    breaks = [k for k in range(1, len(selected)) if is_break(selected[k - 1], selected[k])]
+    if not breaks:
+        return None
+    numbers = [r['number'] for r in selected]
+    if (not any(r.get('insertion_code') for r in selected) and all(1 <= n <= 9999 for n in numbers)
+            and all(b > a for a, b in zip(numbers, numbers[1:]))
+            and all(numbers[k] - numbers[k - 1] > 1 for k in breaks)):
+        return numbers
+    ids = [1]
+    for k in range(1, len(selected)):
+        a, b = selected[k - 1], selected[k]
+        jump = max(b['number'] - a['number'], b['chain_index'] - a['chain_index']) if k in breaks else 1
+        ids.append(ids[-1] + (jump if k not in breaks or jump > 1 else 33))
+    if ids[-1] > 9999:
+        raise ValueError('The selected segments span more than 9,999 residues.')
+    return ids
+
+
+def segment_count(chain):
+    ids = chain.get('residue_ids')
+    return 1 + sum(b - a > 1 for a, b in zip(ids, ids[1:])) if ids else 1
 
 
 def crop_chains(rows, region, flanks=10):
@@ -157,18 +219,25 @@ def crop_chains(rows, region, flanks=10):
     chains = []
     for cid, core_rows in selected_cores.items():
         start, end = min(core_rows), max(core_rows)
+        # A box across a gap keeps it: one chain of segments (residue_ids), as AlphaPulldown's
+        # discontinuous regions. Flanks extend up to chain ends and chain breaks, never across them.
         for _ in range(flanks):
-            if start and rows[start - 1] and rows[start - 1]['chain_id'] == cid:
+            if start and rows[start - 1] and rows[start - 1]['chain_id'] == cid \
+                    and not rows[start].get('break_before'):
                 start -= 1
-            if end + 1 < len(rows) and rows[end + 1] and rows[end + 1]['chain_id'] == cid:
+            if end + 1 < len(rows) and rows[end + 1] and rows[end + 1]['chain_id'] == cid \
+                    and not rows[end + 1].get('break_before'):
                 end += 1
         selected = rows[start:end + 1]
-        if any(r is None or r['chain_id'] != cid for r in selected) or any(
-                b['chain_index'] != a['chain_index'] + 1 for a, b in zip(selected, selected[1:])):
-            raise ValueError('The crop crosses missing residues; choose a complete contiguous interval.')
-        chains.append(dict(source_chain=cid, sequence=''.join(r['aa'] for r in selected),
-                           residue_map=[dict(r, source_row=i) for i, r in enumerate(selected, start)],
-                           core_rows=sorted(core_rows)))
+        if any(r is None or r['chain_id'] != cid for r in selected):
+            raise ValueError('The selected box must contain protein residues only.')
+        chain = dict(source_chain=cid, sequence=''.join(r['aa'] for r in selected),
+                     residue_map=[dict(r, source_row=i) for i, r in enumerate(selected, start)],
+                     core_rows=sorted(core_rows))
+        ids = gapped_residue_ids(selected)
+        if ids:
+            chain['residue_ids'] = ids
+        chains.append(chain)
     validate_chains(chains)
     return chains
 
@@ -229,6 +298,124 @@ def crop_a3m(path, destination, source_query, columns):
     validate_a3m(destination, ''.join(source_query[i] for i in columns))
 
 
+ENGINE_OUTPUT = 'engine_output'
+_ENGINE_PDB = re.compile(r'fold(_sample\d+)?\.pdb')
+
+
+def engine_structure(directory):
+    """The engine's own fold.pdb (numbered 1..N per chain A, B, ...), wherever it now is."""
+    d = Path(directory)
+    raw = d / ENGINE_OUTPUT / 'fold.pdb'
+    return raw if raw.is_file() else d / 'fold.pdb'
+
+
+def source_numbering(chains):
+    """Chain IDs and residue numbers of the source for each predicted chain.
+
+    Returns (chain_ids, numbers, note): chain_ids[k] replaces the k-th prediction chain ID,
+    numbers[k] is a list of (number, insertion code) or None to keep 1..N. A chain keeps its
+    prediction ID unless every chain has a distinct one-character source ID, as PDB requires.
+    """
+    ids = list(chain_ids(len(chains)))
+    sources = [{r.get('chain_id') for r in c['residue_map']} for c in chains]
+    singles = [next(iter(s)) if len(s) == 1 else None for s in sources]
+    notes = []
+    if all(isinstance(x, str) and len(x) == 1 and x.strip() for x in singles) and len(set(singles)) == len(singles):
+        target_ids = singles
+    else:
+        target_ids = ids
+        notes.append('chain IDs kept as A, B, ...: the source IDs are not distinct single characters')
+    numbers = []
+    for cid, c in zip(target_ids, chains):
+        labels = duplicate_insertion_codes([(r.get('number'), r.get('insertion_code') or '') for r in c['residue_map']])
+        if (labels and all(isinstance(n, int) and -999 <= n <= 9999 and len(i) <= 1 for n, i in labels)
+                and len(set(labels)) == len(labels)):
+            numbers.append(labels)
+        else:
+            numbers.append(None)
+            notes.append(f'chain {cid} numbered from 1: its source numbering does not fit a PDB file')
+    return target_ids, numbers, '; '.join(notes)
+
+
+def duplicate_insertion_codes(labels):
+    '''Repeated residue numbers (overlapping AlphaPulldown regions, 1-10:2-5) told apart as
+    AlphaPulldown's AlphaFold 3 output does: the second occurrence 2A, the third 2B, ... to Z.
+    Returns None when a number repeats more than 27 times.'''
+    seen, out = {}, []
+    for number, code in labels:
+        if code:
+            out.append((number, code))
+            continue
+        k = seen[number] = seen.get(number, 0) + 1
+        if k > 27:
+            return None
+        out.append((number, '' if k == 1 else chr(ord('A') + k - 2)))
+    return out
+
+
+def renumber_outputs(directory, chains):
+    """Write the predicted structures in the source numbering, keeping the engine's own files.
+
+    fold.pdb and fold_sample<k>.pdb get the source chain IDs and residue numbers (UniProt
+    positions for sequence input, the original labels for a re-predicted region, gaps and
+    insertion codes included). The engine's files move to engine_output/. Returns the
+    numbering record for job.json.
+    """
+    d = Path(directory)
+    target_ids, numbers, note = source_numbering(chains)
+    ids = list(chain_ids(len(chains)))
+    if list(target_ids) == ids and all(n is None or n == [(e, '') for e in engine_numbers(c)]
+                                       for n, c in zip(numbers, chains)):
+        return dict(scheme='prediction', note=note or 'the source numbering is already 1..N per chain')
+    mapping = {}
+    for pid, tid, labels, chain in zip(ids, target_ids, numbers, chains):
+        if labels is None:
+            mapping[pid] = tid
+        else:
+            for engine_number, label in zip(engine_numbers(chain), labels):
+                mapping[(pid, engine_number)] = (tid, *label)
+    raw = d / ENGINE_OUTPUT
+    raw.mkdir(exist_ok=True)
+    for path in sorted(d.iterdir()):
+        if not _ENGINE_PDB.fullmatch(path.name):
+            continue
+        # Always from the engine's file, so renumbering twice cannot compound
+        source = raw / path.name if (raw / path.name).exists() else path
+        out = []
+        for line in source.read_text().splitlines():
+            if line.startswith(('ATOM', 'HETATM')) and len(line) >= 27:
+                pid, number = line[21], int(line[22:26])
+                tid, new, icode = mapping.get((pid, number)) or (mapping.get(pid, pid), number, '')
+                line = f'{line[:21]}{tid}{new:4d}{icode or " "}{line[27:]}'
+            out.append(line)
+        if source is path:
+            path.replace(raw / path.name)
+        part = path.with_suffix('.pdb.part')
+        part.write_text('\n'.join(out) + '\n')
+        part.replace(path)
+    return dict(scheme='source', chain_ids=dict(zip(ids, target_ids)), engine_output=ENGINE_OUTPUT,
+                note=note or None)
+
+
+def feature_segments(chain):
+    """A gapped chain's segments, each [sequence, 0-based start hint], for the feature crop; None for one."""
+    ids = chain.get('residue_ids')
+    if not ids:
+        return None
+    segments, seq, rmap = [], chain['sequence'], chain['residue_map']
+    for k, aa in enumerate(seq):
+        if k == 0 or ids[k] != ids[k - 1] + 1:
+            segments.append([aa, int(rmap[k].get('number', ids[k])) - 1])
+        else:
+            segments[-1][0] += aa
+    return segments
+
+
+def engine_numbers(chain):
+    """The residue numbers the engine writes for a chain: its residue_ids, or 1..n."""
+    return list(chain.get('residue_ids') or range(1, len(chain['sequence']) + 1))
+
+
 def validate_result(directory, chains):
     d = Path(directory)
     confidences = json.loads((d / 'fold_confidences.json').read_text())
@@ -237,7 +424,7 @@ def validate_result(directory, chains):
     n = sum(sizes)
     ids = chain_ids(len(chains))
     expected_ids = [cid for cid, size in zip(ids, sizes) for _ in range(size)]
-    expected_res = [i for size in sizes for i in range(1, size + 1)]
+    expected_res = [i for c in chains for i in engine_numbers(c)]
     if confidences.get('token_chain_ids') != expected_ids or confidences.get('token_res_ids') != expected_res:
         raise ValueError('Prediction token order does not match the requested chains and residues.')
     pae = confidences.get('pae', [])
@@ -252,7 +439,7 @@ def validate_result(directory, chains):
     # Check the structure independently of the confidence file, including sequence identity.
     three = dict(zip('ALA CYS ASP GLU PHE GLY HIS ILE LYS LEU MET ASN PRO GLN ARG SER THR VAL TRP TYR'.split(), AMINO_ACIDS))
     residues, coordinates = {}, {}
-    for line in (d / 'fold.pdb').read_text().splitlines():
+    for line in engine_structure(d).read_text().splitlines():
         if line.startswith('ATOM'):
             xyz = [float(line[a:b]) for a, b in ((30, 38), (38, 46), (46, 54))]
             if not all(math.isfinite(v) for v in xyz):
@@ -260,7 +447,7 @@ def validate_result(directory, chains):
             if line[12:16].strip() == 'CA':
                 residues[(line[21], int(line[22:26]))] = three.get(line[17:20], 'X')
                 coordinates[(line[21], int(line[22:26]))] = xyz
-    expected = {(cid, i + 1): aa for cid, c in zip(ids, chains) for i, aa in enumerate(c['sequence'])}
+    expected = {(cid, n): aa for cid, c in zip(ids, chains) for n, aa in zip(engine_numbers(c), c['sequence'])}
     if residues != expected:
         raise ValueError('Returned structure sequence or numbering does not match the job.')
     from .predict_geometry import check_ca_geometry
@@ -386,10 +573,10 @@ class PredictionJob:
             raise ValueError('An MSA crop requires a source alignment.')
         self.api = os.environ.get('LOCALFOLD_MMSEQS_API', 'https://api.colabfold.com').rstrip('/')
         sequences = [c['sequence'] for c in chains]
-        key = json.dumps([ENGINE_REVISION, self.api, sequences])
+        key = json.dumps([MSA_CACHE_REVISION, self.api, sequences])
         self.msa_cache = self.cache / 'msa' / (hashlib.sha256(key.encode()).hexdigest() + '.a3m')
         self.legacy_msa_caches = [self.cache / 'msa' / (hashlib.sha256(json.dumps(
-            [ENGINE_REVISION, model, self.api, sequences]).encode()).hexdigest() + '.a3m')
+            [MSA_CACHE_REVISION, model, self.api, sequences]).encode()).hexdigest() + '.a3m')
             for model in (self.model, MODEL if len(chains) > 1 else MONOMER_MODEL)]
 
     def start(self):
@@ -418,7 +605,8 @@ class PredictionJob:
                 validate_a3m(self.directory / 'input.a3m', query)
             job = dict(name=self.directory.name, dialect='alphafold3', version=1,
                        modelSeeds=[self.options['seed']], sequences=[
-                           {'protein': {'id': cid, 'sequence': c['sequence']}}
+                           {'protein': dict(id=cid, sequence=c['sequence'],
+                                            **({'residueIds': c['residue_ids']} if c.get('residue_ids') else {}))}
                            for cid, c in zip(chain_ids(len(self.chains)), self.chains)])
             write_json(self.directory / 'input.json', job)
             write_json(self.directory / 'residue_map.json', self.chains)
@@ -432,6 +620,9 @@ class PredictionJob:
             binary_hash = digest(self.executable)
             revision = engine_info.get('revision') if engine_info.get('sha256') == binary_hash else 'unverified'
             native = engine_platform()
+            if any(c.get('residue_ids') for c in self.chains) and revision == PREVIOUS_REVISION:
+                raise ValueError(f'Keeping the gaps between regions needs LocalFold {ENGINE_REVISION[:7]}; this '
+                                 f'engine is {revision[:7]}. Delete {self.executable} and click Install & Predict.')
             self.manifest = dict(engine='LocalFold native ' + NATIVE_NAMES.get(native, 'engine'), revision=revision,
                                  executable_sha256=binary_hash, model=self.model,
                                  weights=('LocalFold AF3 int8 parameters (DeepMind AF3 terms)'
@@ -456,7 +647,7 @@ class PredictionJob:
                     env.update(runtime)
                     self.manifest['runtime_environment'] = runtime
             launch = args
-            if self.model == MODEL and revision == ENGINE_REVISION:
+            if self.model == MODEL and revision in CONTACT_HEAD_REVISIONS:
                 from .predict_weights import HEAD_SHA256
                 python = chimerax_python()
                 launch = [str(python), '-B', str(Path(__file__).with_name('predict_weights.py')), str(self.cache), *args]
@@ -472,7 +663,8 @@ class PredictionJob:
                 write_json(spec, dict(directory=str(self.directory / 'features'), root=str(self.features['root']),
                                       backend=self.backend, job=str(self.directory / 'input.json'),
                                       chains=[dict(chain_id=cid, name=name, sequence=c['sequence'],
-                                                   start_hint=int(c['residue_map'][0].get('number', 1)) - 1)
+                                                   start_hint=int(c['residue_map'][0].get('number', 1)) - 1,
+                                                   segments=feature_segments(c))
                                               for cid, name, c in zip(chain_ids(len(self.chains)),
                                                                       self.features['names'], self.chains)]))
                 launch = [str(chimerax_python()), '-B', str(Path(__file__).with_name('predict_features.py')),
@@ -551,6 +743,7 @@ class PredictionJob:
                               else f'LocalFold exited with status {code}. ' + text[-700:])
             else:
                 self.result = validate_result(self.directory, self.chains)
+                self.manifest['numbering'] = renumber_outputs(self.directory, self.chains)
                 if self.features:
                     # The feature files are the record; their alignments are not a merged MSA
                     provenance = self.directory / 'features' / 'features.json'

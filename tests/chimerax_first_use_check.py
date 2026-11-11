@@ -40,7 +40,7 @@ def main():
         dialog.executable.setText(str(prefix/'bin'/f'localfold-{backend}'))
         dialog.msa.setText(str(pilot/'fold.a3m'));dialog.output.setText(str(out/'predictions'))
         dialog.randomize_seed.setChecked(False);dialog.seed.setValue(42)
-        assert dialog.start_button.text()=='Install & Predict'
+        assert dialog.start_button.text().replace('&&', '&')=='Install & Predict'
         assert dialog.start_button.isEnabled() and not prefix.exists()
         real_setup=setup.SetupJob
         worker=out/'fake-setup.py'

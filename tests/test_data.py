@@ -249,6 +249,12 @@ def test_local_prediction_samples_open_by_rank(tmp_path):
     assert files.pae_path == str(job / 'fold_sample0_confidences.json')
     with pytest.raises(ValueError, match='3 sample'):
         data.structure_path_for_directory(str(job), 3)
+    # The plot's Model menu lists them, best first, as for AlphaFold 3
+    models = data.prediction_models(str(job / 'fold.pdb'))
+    assert [m['label'] for m in models] == ['top model = sample 2', '#1  sample 2  score 0.670',
+                                            '#2  sample 0  score 0.650', '#3  sample 1  score 0.640']
+    assert [m['path'] for m in models] == [str(job / f) for f in
+                                           ('fold.pdb', 'fold_sample2.pdb', 'fold_sample0.pdb', 'fold_sample1.pdb')]
 
 
 def test_other_layouts_are_not_taken_for_a_local_prediction(tmp_path):

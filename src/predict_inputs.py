@@ -63,8 +63,48 @@ def fetch_uniprot(identifier):
     return record
 
 
+def parse_alphapulldown(text):
+    """Chains in AlphaPulldown's fold notation, as [(identifier, copies, [(start, end), ...])].
+
+    ID[:copies][:start-end[:start-end...]], chains joined by "+" (or whitespace): P69905:2,
+    P0A836:1-100+P0AGE9, Q8I2G6:2:1-100:150-200. Ranges are 1-based and inclusive.
+    """
+    text = text.strip()
+    if ';' in text or (',' in text and ':' not in text):
+        # AlphaPulldown's older protein lists: proteinA,4,1-100;proteinB
+        text = text.replace(';', '+').replace(',', ':')
+    chains = []
+    for token in re.split(r'[\s+]+', text.upper()):
+        if not token:
+            continue
+        identifier, *parts = token.split(':')
+        if not _IDENTIFIER.fullmatch(identifier):
+            raise ValueError(f'{identifier or token}: use a UniProt accession or entry ID in '
+                             'AlphaPulldown notation, such as P0A836:1-100+P0AGE9.')
+        copies, ranges = 1, []
+        for i, part in enumerate(parts):
+            interval = re.fullmatch(r'(\d+)-(\d+)', part)
+            if interval:
+                start, end = map(int, interval.groups())
+                if not 1 <= start <= end:
+                    raise ValueError(f'{token}: a range runs from a residue to a later one, such as 25-120.')
+                ranges.append((start, end))
+            elif part.isdigit() and i == 0 and int(part) >= 1:
+                copies = int(part)
+            else:
+                raise ValueError(f'{token}: after the ID come the number of copies (ID:2) and/or '
+                                 'ranges (ID:25-120:150-200).')
+        for (a, b), (c, d) in zip(ranges, ranges[1:]):
+            if c <= b:
+                raise ValueError(f'{token}: AlphaLens takes the regions of a chain in sequence order, without '
+                                 f'overlap ({a}-{b} then {c}-{d}). AlphaPulldown also folds regions out of order '
+                                 'or overlapping, with repeated or decreasing residue numbers; reorder or merge them.')
+        chains.append((identifier, copies, ranges))
+    return chains
+
+
 def resolve_entries(text, fetcher=None):
-    """One raw sequence, FASTA entries, or whitespace-separated UniProt IDs."""
+    """One raw sequence, FASTA entries, whitespace-separated UniProt IDs, or AlphaPulldown notation."""
     text = text.strip()
     if not text:
         raise ValueError('Paste a protein sequence, FASTA entries, or UniProt IDs.')
@@ -72,6 +112,19 @@ def resolve_entries(text, fetcher=None):
         raise ValueError('Input is too large for this prototype.')
     if text.startswith('>'):
         entries = parse_fasta(text)
+    elif any(c in text for c in ':+;') or (',' in text and not text.replace(',', '').replace(' ', '').isalpha()):
+        specs = parse_alphapulldown(text)
+        chain_ids(sum(copies for _, copies, _ in specs))
+        fetch = fetcher or fetch_uniprot
+        fetched, entries = {}, []
+        for identifier, copies, ranges in specs:
+            if identifier not in fetched:
+                fetched[identifier] = fetch(identifier)
+            for _ in range(copies):
+                entry = dict(fetched[identifier])
+                if ranges:
+                    entry['range'] = ','.join(f'{a}-{b}' for a, b in ranges)
+                entries.append(entry)
     else:
         words = text.upper().split()
         if all(_IDENTIFIER.fullmatch(w) for w in words):
@@ -87,8 +140,33 @@ def resolve_entries(text, fetcher=None):
     return entries
 
 
+def parse_ranges(interval, length, cid):
+    """'25-120' or several, '1-100,150-200' (also ':' or spaces between them): [(start, end)], 1-based."""
+    text = interval.strip()
+    if not text:
+        return [(1, length)]
+    parts = [p for p in re.split(r'[\s,;:]+', text) if p]
+    ranges = []
+    for part in parts:
+        match = re.fullmatch(r'(\d+)-(\d+)', part)
+        if not match:
+            raise ValueError(f'Chain {cid}: enter a range such as 25-120 (several as 1-100,150-200), '
+                             'or leave it blank.')
+        a, b = map(int, match.groups())
+        if not 1 <= a <= b <= length:
+            raise ValueError(f'Chain {cid}: the range must be within 1-{length}.')
+        if ranges and a <= ranges[-1][1]:
+            raise ValueError(f'Chain {cid}: ranges must follow one another along the sequence without overlap.')
+        ranges.append((a, b))
+    return ranges
+
+
 def sequence_chains(entries, ranges=None):
-    """Apply optional 1-based inclusive ranges and record original sequence positions."""
+    """Apply optional 1-based inclusive ranges and record original sequence positions.
+
+    Several ranges in one chain make one chain with gaps (residue_ids: the positions), as
+    AlphaPulldown predicts discontinuous regions; adjacent ranges simply join.
+    """
     chains, provenance = [], []
     ranges = list(ranges or [])
     if any(interval.strip() for interval in ranges[len(entries):]):
@@ -97,21 +175,20 @@ def sequence_chains(entries, ranges=None):
     offset = 0
     for cid, entry, interval in zip(chain_ids(len(entries)), entries, ranges):
         seq = entry['sequence']
-        start, end = 1, len(seq)
-        if interval.strip():
-            match = re.fullmatch(r'\s*(\d+)\s*-\s*(\d+)\s*', interval)
-            if not match:
-                raise ValueError(f'Chain {cid}: enter a range such as 25-120, or leave it blank.')
-            start, end = map(int, match.groups())
-            if not 1 <= start <= end <= len(seq):
-                raise ValueError(f'Chain {cid}: the range must be within 1-{len(seq)}.')
+        intervals = parse_ranges(interval, len(seq), cid)
+        positions = [i for a, b in intervals for i in range(a - 1, b)]
         mapping = [dict(chain_id=cid, number=i+1, insertion_code='', chain_index=i,
-                        aa=seq[i], source_row=offset+i) for i in range(start-1, end)]
-        chains.append(dict(source_chain=cid, sequence=seq[start-1:end], residue_map=mapping,
-                           core_rows=[r['source_row'] for r in mapping]))
-        info = {k: v for k, v in entry.items() if k != 'sequence'}
-        info.update(chain_id=cid, full_length=len(seq), range=[start, end],
+                        aa=seq[i], source_row=offset+i) for i in positions]
+        chain = dict(source_chain=cid, sequence=''.join(seq[i] for i in positions), residue_map=mapping,
+                     core_rows=[r['source_row'] for r in mapping])
+        if any(b != a + 1 for a, b in zip(positions, positions[1:])):
+            chain['residue_ids'] = [i + 1 for i in positions]
+        chains.append(chain)
+        info = {k: v for k, v in entry.items() if k not in ('sequence', 'range')}
+        info.update(chain_id=cid, full_length=len(seq), range=[intervals[0][0], intervals[-1][1]],
                     full_sequence_sha256=hashlib.sha256(seq.encode()).hexdigest())
+        if len(intervals) > 1:
+            info['ranges'] = [list(r) for r in intervals]
         provenance.append(info)
         offset += len(seq)
     validate_chains(chains)

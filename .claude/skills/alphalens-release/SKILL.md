@@ -46,6 +46,18 @@ ALPHALENS_MAPPING_SOURCE="<prediction with contact probabilities>" ALPHALENS_TES
     $CX --cmd "open tests/chimerax_prediction_mapping_check.py"
 ```
 
+and the gapped-chain check (about 30 s, real AF2 and AF3 runs; needs engines at the pinned
+LocalFold revision or newer, set `ALPHALENS_LOCALFOLD`/`ALPHALENS_LOCALFOLD_AF3` to test engines
+without rebuilding the managed ones; exit status 0):
+
+```bash
+ALPHALENS_PILOT="<barnase-barstar LocalFold folder>" ALPHALENS_TEST_OUTPUT="<new folder>" \
+    $CX --cmd "open tests/chimerax_gapped_prediction_check.py"
+```
+
+`tests/test_alphapulldown_parity.py` mirrors AlphaPulldown's region and numbering tests; when
+AlphaPulldown changes how it handles regions, update it there first.
+
 ## 3. Build and check the wheel
 
 1. `cd` into the checkout first (the build needs it), then `$CX --nogui --exit --cmd "devel build . exit true"`.
