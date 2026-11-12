@@ -580,13 +580,20 @@ def _resolve_structure(session, structure):
 
 # -----------------------------------------------------------------------------
 #
-def _open_structure(session, spath, log=True):
-    '''Open a predicted model file and give it a short recognisable name.'''
+def _open_structure(session, spath, log=True, log_info=True):
+    '''
+    Open a predicted model file and give it a short recognisable name. log_info False leaves
+    out ChimeraX's report on the model (chain table, ModelCIF scores as residue attributes):
+    for another model of a prediction already reported. ChimeraX 1.12 makes that report in
+    time quadratic in the chain length: 1.5 s of the 1.6 s it takes to open a 2,800-residue
+    AF3 model.
+    '''
     from chimerax.core.errors import UserError
     from chimerax.core.commands import run, quote_path_if_necessary
     from chimerax.atomic import AtomicStructure
     from . import data
-    models = run(session, f'open {quote_path_if_necessary(spath)}', log=log)
+    models = run(session, f'open {quote_path_if_necessary(spath)}' + ('' if log_info else ' logInfo false'),
+                 log=log)
     structs = [m for m in (models or []) if isinstance(m, AtomicStructure)]
     if not structs:
         raise UserError(f'No atomic structure opened from {spath}')
@@ -633,7 +640,7 @@ def switch_model(session, plot, spath):
     s = next((m for m in session.models.list(type=AtomicStructure)
               if getattr(m, 'filename', None) and os.path.realpath(m.filename) == real), None)
     if s is None:
-        s = _open_structure(session, spath)
+        s = _open_structure(session, spath, log_info=False)    # The prediction is already reported
         if not old.deleted:
             try:        # Same sequence, so CA atoms pair up one to one
                 run(session, f'align #{s.id_string}@CA toAtoms #{old.id_string}@CA '

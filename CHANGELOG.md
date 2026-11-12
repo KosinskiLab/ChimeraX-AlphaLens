@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.4.2
+
+* The re-predict dialog opens at once: 0.06 s instead of 0.44 s for a 677-residue prediction,
+  0.08 s instead of 2.9 s for 2,783 residues. Typing in the dialog or changing the flanks no
+  longer stalls (it took 1.5 s a keystroke at 2,783 residues). The crop looked up each residue's
+  neighbour through `chain.residues`, which ChimeraX rebuilds on every access, and ran twice on
+  opening and again on every change; it now builds each chain's residues once, and the dialog's
+  preview reuses the crop until the box, the flanks or the model change (Predict always crops
+  afresh).
+* Switching models in the plot's Model menu is about twice as fast for large AF3 models (1.5 s
+  instead of 2.9 s at 2,783 residues): the other model of the prediction opens without ChimeraX's
+  report on it, which ChimeraX 1.12 makes in time quadratic in the chain length.
+* Measured (M5 Max, real window): the right-click menu opens in under 20 ms, views switch in
+  10-200 ms, the sequence dialog and the prediction report in under 0.1 s.
+
 ## 1.4.1
 
 * **Predict** is off only when something it needs is missing, and says what: the reason is shown
