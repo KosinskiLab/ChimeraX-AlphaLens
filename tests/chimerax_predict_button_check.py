@@ -66,11 +66,13 @@ def hover_tooltip(widget):
     from Qt.QtGui import QHelpEvent
     from Qt.QtCore import QEvent
     from Qt.QtWidgets import QApplication, QToolTip
-    QToolTip.hideText()
     pos = widget.rect().center()
-    QApplication.sendEvent(widget, QHelpEvent(QEvent.Type.ToolTip, pos, widget.mapToGlobal(pos)))
-    pump(0.3, until=QToolTip.isVisible)
-    return QToolTip.text() if QToolTip.isVisible() else ''
+    for attempt in range(3):            # A window just opened may not show it the first time
+        QToolTip.hideText()
+        QApplication.sendEvent(widget, QHelpEvent(QEvent.Type.ToolTip, pos, widget.mapToGlobal(pos)))
+        if pump(0.4, until=QToolTip.isVisible):
+            return QToolTip.text()
+    return ''
 
 
 def expect(name, dialog, off=None, says=None):
@@ -96,6 +98,7 @@ def main():
         plot = s._alphalens_plot
         n_a = len(s.chains[0].residues)
         d = plot._predict_interface()
+        pump(2, until=lambda: d.isVisible() and d.windowHandle() is not None and d.windowHandle().isExposed())
         d.output.setText(str(OUT / 'jobs'))
         d.backend.setCurrentIndex(d.backend.findData('af2'))
         expect('region: no box', d, True, 'Drag a box')
@@ -142,6 +145,7 @@ def main():
 
         # Sequence input
         d = ui.show_prediction_dialog(session=session)
+        pump(2, until=lambda: d.isVisible() and d.windowHandle() is not None and d.windowHandle().isExposed())
         d.output.setText(str(OUT / 'jobs'))
         d.backend.setCurrentIndex(d.backend.findData('af2'))
         expect('sequence: nothing pasted', d, True, 'Paste a sequence')

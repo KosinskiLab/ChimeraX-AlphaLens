@@ -1,6 +1,6 @@
 # Experimental local protein and interface prediction
 
-AlphaLens 1.4.1 can predict protein complexes from sequences or UniProt IDs, or re-predict
+AlphaLens 1.4.2 can predict protein complexes from sequences or UniProt IDs, or re-predict
 selected regions spanning multiple protein chains, with AlphaFold 2 or AlphaFold 3 on
 Apple Silicon, using [LocalFold's native Metal implementation](https://github.com/KosinskiLab/localfold/tree/837a15ca7c72c35c75739740bc7ed71ee9d5e09b/metal),
 or on Linux with an NVIDIA GPU, using its [native CUDA implementation](https://github.com/KosinskiLab/localfold/tree/837a15ca7c72c35c75739740bc7ed71ee9d5e09b/cuda)
@@ -12,7 +12,7 @@ have no native LocalFold engine and are not supported.
 
 ## Setup
 
-Install the AlphaLens 1.4.1 wheel. The local prediction feature remains experimental.
+Install the AlphaLens 1.4.2 wheel. The local prediction feature remains experimental.
 On a Mac, the engine requires Apple Silicon, macOS 13 or newer and Xcode Command Line Tools.
 On Linux, see [Linux with an NVIDIA GPU (CUDA)](#linux-with-an-nvidia-gpu-cuda) below.
 No separate Python ML environment is needed. With a missing default engine, the button
