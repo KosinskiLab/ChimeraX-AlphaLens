@@ -635,7 +635,13 @@ def switch_model(session, plot, spath):
     from chimerax.atomic import AtomicStructure
     from chimerax.core.commands import run
     from .pae import AlphaLensPAE
+    from . import predict_compare as pc
     old = plot.pae.structure
+    # A comparison with the source follows the shown sample: end it here, start it again below
+    following = None
+    if not old.deleted and pc.comparing(old):
+        following = getattr(old, '_alphalens_superposed', 'chain')
+        pc.compare_view(session, old, False)
     real = os.path.realpath(spath)
     s = next((m for m in session.models.list(type=AtomicStructure)
               if getattr(m, 'filename', None) and os.path.realpath(m.filename) == real), None)
@@ -668,6 +674,13 @@ def switch_model(session, plot, spath):
                         contact_probs, pae_path, on_loaded=plot.refresh_structure_contacts)
     else:
         plot.refresh_structure_contacts()
+    if following is not None:
+        if getattr(s, '_alphalens_superposed', None) is None:
+            s._alphalens_superposed = following
+        try:
+            pc.compare_view(session, s, True)
+        except ValueError as e:
+            session.logger.warning(f'AlphaLens: {e}')
     return s
 
 

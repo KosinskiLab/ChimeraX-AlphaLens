@@ -79,6 +79,7 @@ def main():
         plot = source._alphalens_plot
         n_a = len(source.chains[0].residues)
         plot._set_prediction_region((25, 90, n_a + 5, n_a + 60))     # Part of barnase against barstar
+        results_of = {}
         for backend in ('af2', 'af3'):
             label = backend
             d = plot._predict_interface()
@@ -132,17 +133,39 @@ def main():
             back = pc.superpose(session, result, 'chain')
             check(f'{label}: superposed on the first chain again',
                   np.allclose(result.scene_position.matrix, p0, atol=1e-2), f'RMSD {back:.2f}')
+            results_of[backend] = result
             if backend == 'af3' and rplot is not None:
                 models = [m for m in rplot._models if m['path']]
                 check(f'{label}: samples in the Model menu', len(models) >= 2, [m['label'] for m in models])
                 if len(models) >= 2:
+                    source_before = state(source)
+                    d.compare_button.click()                    # Compare on, then show another sample
+                    pump(0.3)
                     rplot._model_chosen(2)
                     pump(20, lambda: rplot.pae.structure is not result)
                     heading2 = rplot._heading.text()
                     check(f'{label}: DockQ follows the shown sample', 'DockQ vs source' in heading2
                           and rplot.pae.structure is not result, heading2[-160:])
+                    sample = rplot.pae.structure
+                    check(f'{label}: compare follows the shown sample', pc.comparing(sample)
+                          and not pc.comparing(result) and not result.display and d.shown_result() is sample)
+                    d.compare_button.click()                    # Off, from the dialog: acts on the sample
+                    pump(0.3)
+                    check(f'{label}: compare off restores the source after a sample switch',
+                          same(state(source), source_before) and not pc.comparing(sample))
+                    results_of[backend] = sample
             d.close()
             pump(0.3)
+        # Two re-predictions of one source: comparing the second restores the first, then the source
+        if len(results_of) == 2:
+            first, second = results_of['af2'], results_of['af3']
+            before = {m: state(m) for m in (source, first, second)}
+            pc.compare_view(session, first, True)
+            pc.compare_view(session, second, True)
+            check('two results: comparing the second ends the first', not pc.comparing(first)
+                  and same(state(first), before[first]) and pc.comparing(second))
+            pc.compare_view(session, second, False)
+            check('two results: the source restored exactly', all(same(state(m), before[m]) for m in before))
         # Later: the source and a saved job folder opened afresh, models shown as ChimeraX opens them
         jobs = sorted((OUT / 'af2').glob('*/job.json'))
         if jobs:
@@ -165,6 +188,37 @@ def main():
             check('reopened job: restored', all(same(state(m), before[m]) for m in before))
             heading = result._alphalens_plot._heading.text() if getattr(result, '_alphalens_plot', None) else ''
             check('reopened job: DockQ in the heading', 'DockQ vs source' in heading, heading[-160:])
+            # Hydrogens added to the source while comparing: the rest is still restored
+            before = state(source)
+            pointers = source.atoms.pointers.copy()
+            pc.compare_view(session, result, True)
+            run(session, f'addh #{source.id_string} hbond false', log=False)
+            pc.compare_view(session, result, False)
+            atoms = source.atoms
+            old = np.isin(atoms.pointers, pointers)
+            order = np.argsort(pointers)
+            index = order[np.searchsorted(pointers, atoms.pointers[old], sorter=order)]
+            check('atoms added while comparing: the rest restored',
+                  len(atoms) > len(pointers) and np.array_equal(source.residues.ribbon_colors, before[1])
+                  and np.array_equal(source.residues.ribbon_displays, before[0])
+                  and np.array_equal(atoms.colors[old], before[3][index])
+                  and np.array_equal(atoms.displays[old], before[2][index]))
+            # A job from before 1.5.0 (no source atoms recorded): the interface comes from the open source
+            import shutil
+            legacy = OUT / 'legacy-job'
+            shutil.copytree(jobs[0].parent, legacy)
+            chains = json.loads((legacy / 'residue_map.json').read_text(encoding='utf-8'))
+            for chain in chains:
+                for entry in chain['residue_map']:
+                    entry.pop('source_atoms', None)
+            (legacy / 'residue_map.json').write_text(json.dumps(chains), encoding='utf-8')
+            run(session, f'alphalens open "{legacy}" wait true')
+            old_job = session.models.list(type=AtomicStructure)[-1]
+            try:
+                value = pc.superpose(session, old_job, 'interface')
+                check('job from before 1.5.0: superposed on the source interface', value < 20, f'RMSD {value:.2f}')
+            except ValueError as e:
+                check('job from before 1.5.0: superposed on the source interface', False, e)
         code = 0 if all(r['ok'] for r in results) else 1
     except Exception:
         results.append(dict(name='exception', ok=False, detail=traceback.format_exc()))

@@ -149,18 +149,13 @@ def import_result(session, job):
         predict.write_json(job.directory / 'contact_report.json', job.contact_report)
     if job.source.get('input_mode') == 'sequence':
         return structure, None
-    # Superpose on the first selected chain only, preserving the predicted interface.
-    # Snapshot coordinates remain valid even if the source model has been closed.
-    from chimerax.geometry import align_points
-    pairs = [(r.find_atom('CA'), entry['source_ca_scene'])
-             for r, entry in zip(pae.row_residues_or_atoms(), job.chains[0]['residue_map'])
-             if entry['source_row'] in job.chains[0]['core_rows'] and entry.get('source_ca_scene') is not None]
-    pairs = [(atom, xyz) for atom, xyz in pairs if atom is not None]
-    alignment_rmsd = None
-    if len(pairs) >= 3:
-        transform, alignment_rmsd = align_points(np.array([atom.coord for atom, _ in pairs]),
-                                                 np.array([xyz for _, xyz in pairs]))
-        structure.scene_position = transform
+    # Superpose on the first selected chain only, preserving the predicted interface: on the
+    # source as it is now, else (closed) as it was at submission
+    from .predict_compare import interface_scores, superpose
+    try:
+        alignment_rmsd = superpose(session, structure, 'chain', job.chains, dict(source=job.source))
+    except ValueError:
+        alignment_rmsd = None
     # Compare the same residue pairs, excluding added flanks from the score comparison.
     a, b = contact_pairs.T
     matrix = pae.matrix('pae')
@@ -171,7 +166,6 @@ def import_result(session, job):
                       predicted_core_mean_plddt=float(np.mean(pae.row_plddt()[np.unique(contact_pairs)])),
                       contacts=job.contact_report)
     # How alike the two interfaces are: DockQ with the source as the reference
-    from .predict_compare import interface_scores
     try:
         comparison['interface'] = interface_scores(job.chains, pae.row_residues_or_atoms())
     except Exception as e:          # A comparison must not lose the prediction
@@ -278,7 +272,7 @@ class PredictionDialog(QDialog):
         self.plot, self.session = plot, session
         self.source_msa = source_alignment(plot) if plot is not None else None
         self.entries = self.lookup_future = None
-        self.job = self.output_model = self.comparison = None
+        self.job = self.output_model = self.output_plot = self.comparison = None
         self.setup_job = self.pending_prediction = None
         self.setWindowTitle('AlphaLens prediction · experimental')
         self.resize(640, 400)
@@ -499,10 +493,21 @@ class PredictionDialog(QDialog):
         '''Grow to show everything (rows were added); never shrink what the user enlarged.'''
         QTimer.singleShot(0, lambda: self.resize(self.width(), max(self.height(), self.sizeHint().height())))
 
+    def shown_result(self):
+        '''The re-prediction the result plot shows (another sample after its Model menu), else the
+        one this dialog opened.'''
+        plot = getattr(self.output_model, '_alphalens_plot', None) or self.output_plot
+        if plot is not None and not plot.closed():
+            self.output_plot = plot
+            s = plot.pae.structure
+            if s is not None and not s.deleted:
+                return s
+        return self.output_model
+
     def compare_with_source(self, on):
         '''Show the re-prediction with the same residues of its source (or restore both).'''
         from .predict_compare import compare_view
-        model = self.output_model
+        model = self.shown_result()
         try:
             if model is None or model.deleted:
                 raise ValueError('The re-predicted model has been closed.')
@@ -928,7 +933,12 @@ class PredictionDialog(QDialog):
             self.timer.stop(); self.cancel_button.setEnabled(False)
             if state == 'complete':
                 self.set_progress('Opening prediction…')
+                from .predict_compare import comparing, compare_view
+                previous = self.shown_result()
+                if previous is not None and not previous.deleted and comparing(previous):
+                    self.log_message(compare_view(self.session, previous, False))   # The button is for the new one
                 self.output_model, self.comparison = import_result(self.session, self.job)
+                self.output_plot = getattr(self.output_model, '_alphalens_plot', None)
                 self.set_progress('Complete', 100, 100)
                 from .predict_report import save_report
                 report = save_report(self.job.directory)
