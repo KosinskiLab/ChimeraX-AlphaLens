@@ -228,13 +228,15 @@ agrees (Fnat and the interface RMSD show that). With AF3, the heading follows th
 shown in the Model menu.
 
 **Compare with source** (a button in the dialog, and in the result plot's right-click menu)
-shows the re-prediction colored by chain together with the same residues of the source in
-grey, hides the rest of the source and looks at them; clicking it again restores the colors
-and display of both. The right-click menu also superposes the re-prediction on the source's
+superposes the re-prediction on the source as last chosen, shows it colored by chain together
+with the same residues of the source in grey, hides the rest of the source and looks at them;
+clicking it again restores the colors and display of both. A source is compared with one
+re-prediction at a time: comparing another (a new job, or another AF3 sample, which the
+comparison follows) first restores the one before. The right-click menu also superposes the re-prediction on the source's
 first selected chain (as it opens: the second chain's offset is the change in the interface)
 or on the backbone of the source interface (the local differences). Both use the source as it
 is if it is open, else as it was when Predict was clicked; the source's heavy atoms are kept
-in `residue_map.json` for that.
+in `residue_map.json` for that (jobs from before 1.5.0 lack them and need the source open).
 
 The dialog reports ipTM and compares mean PAE in both directions over exactly the
 selected residue pairs, excluding added flanks. It also compares mean pLDDT over the

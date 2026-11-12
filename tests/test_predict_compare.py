@@ -89,3 +89,68 @@ def test_summary_lines_name_contacts_and_distances():
     lines = pc.summary_lines(dict(pairs=pairs, without_source_contacts=empty, dockq=pairs[0]['dockq']))
     assert lines[0].startswith('Interface vs source: DockQ')
     assert 'source contacts kept' in lines[1] and 'B 3.0 Å from its source place with A superposed' in lines[1]
+
+
+def test_job_files_are_parsed_once_per_version(tmp_path):
+    (tmp_path / 'residue_map.json').write_text('[{"source_chain": "A"}]')
+    (tmp_path / 'comparison.json').write_text('{"source": {}}')
+    model = type('Model', (), dict(filename=str(tmp_path / 'fold.pdb')))()
+    first = pc.job_files(model)
+    assert first[1] == [{'source_chain': 'A'}] and pc.job_files(model) is first
+    (tmp_path / 'comparison.json').write_text('{"source": {"file": "x"}}')
+    assert pc.job_files(model)[2] == {'source': {'file': 'x'}}
+    (tmp_path / 'comparison.json').unlink()
+    assert pc.job_files(model) is None
+
+
+class Items:
+    '''A ChimeraX collection as _capture/_restore use it: pointers, filter, settable arrays.'''
+    def __init__(self, owner, index):
+        self.owner, self.index = owner, np.asarray(index, int)
+
+    @property
+    def pointers(self):
+        return self.owner.ptr[self.index]
+
+    def filter(self, k):
+        return Items(self.owner, self.index[k])
+
+    def __getattr__(self, name):
+        return self.owner.values[name][self.index]
+
+    def __setattr__(self, name, value):
+        if name in ('owner', 'index'):
+            return object.__setattr__(self, name, value)
+        self.owner.values[name][self.index] = value
+
+
+class Model:
+    deleted = False
+
+    def __init__(self, n):
+        self.ptr = np.arange(100, 100 + n, dtype=np.uint64)
+        self.values = dict(ribbon_displays=np.ones(n, bool), ribbon_colors=np.zeros((n, 4), np.uint8),
+                           displays=np.ones(n, bool), colors=np.zeros((n, 4), np.uint8))
+        self.display = True
+
+    @property
+    def residues(self):
+        return Items(self, range(len(self.ptr)))
+
+    atoms = residues
+
+
+def test_restore_puts_back_what_is_left_after_atoms_come_and_go():
+    m = Model(5)
+    m.values['colors'][:] = np.arange(5)[:, None]
+    saved = pc._capture(m)
+    m.values['colors'][:] = 255; m.values['displays'][:] = False; m.display = False
+    # Two deleted (101, 103), two added (900, 901) in between, the rest reordered
+    m.ptr = np.array([104, 900, 100, 901, 102], np.uint64)
+    for k, v in m.values.items():
+        m.values[k] = v[:5].copy()
+    assert pc._restore(m, saved)
+    assert [int(c[0]) for c in m.values['colors']] == [4, 255, 0, 255, 2]
+    assert m.values['displays'].tolist() == [True, False, True, False, True] and m.display
+    m.deleted = True
+    assert not pc._restore(m, saved)

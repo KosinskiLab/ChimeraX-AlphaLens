@@ -166,18 +166,27 @@ def interface_scores(job_chains, result_rows):
     return out
 
 
+_job_files = {}         # Job folder -> (file stamps, parsed files): a right-click needs them at once
+
+
 def job_files(structure):
-    '''(job directory, residue_map, comparison) of a local prediction result, else None.'''
+    '''(job directory, residue_map, comparison) of a local prediction result, else None. Parsed once
+    per version of the files; callers must not change what it returns.'''
     path = getattr(structure, 'filename', None)
     if not path:
         return None
     d = Path(path).parent
+    files = (d / 'residue_map.json', d / 'comparison.json')
     try:
-        chains = json.loads((d / 'residue_map.json').read_text(encoding='utf-8'))
-        comparison = json.loads((d / 'comparison.json').read_text(encoding='utf-8'))
+        stamps = tuple((s.st_mtime_ns, s.st_size) for s in (f.stat() for f in files))
+        cached = _job_files.get(d)
+        if cached is not None and cached[0] == stamps:
+            return cached[1]
+        found = (d,) + tuple(json.loads(f.read_text(encoding='utf-8')) for f in files)
     except (OSError, ValueError):
         return None
-    return d, chains, comparison
+    _job_files[d] = (stamps, found)
+    return found
 
 
 def find_source(session, comparison):
@@ -213,17 +222,19 @@ def matched_residues(source, chains, result):
     return out
 
 
-def superpose(session, result, how='chain'):
+def superpose(session, result, how='chain', chains=None, comparison=None):
     '''
     Move the re-prediction onto its source: on the first selected chain's core CA atoms ('chain',
     as it opens) or on the backbone of the source's interface residues ('interface'). Uses the
     source as it is now if it is open, else as it was at submission. Returns the RMSD (Å).
+    chains and comparison (the job's residue map and source) default to the job folder's files.
     '''
     from chimerax.geometry import align_points
-    found = job_files(result)
-    if found is None:
-        raise ValueError(f'{result} is not a re-predicted interface with a source to compare.')
-    _, chains, comparison = found
+    if chains is None or comparison is None:
+        found = job_files(result)
+        if found is None:
+            raise ValueError(f'{result} is not a re-predicted interface with a source to compare.')
+        _, chains, comparison = found
     source = find_source(session, comparison)
     matched = matched_residues(source, chains, result)
     mobile, fixed = [], []
@@ -248,6 +259,9 @@ def superpose(session, result, how='chain'):
                 if a is not None and name in target_atoms:
                     mobile.append(a.coord); fixed.append(target_atoms[name])
     if len(mobile) < 3:
+        if how != 'chain' and source is None and not any(e.get('source_atoms') for _, _, _, e in matched):
+            raise ValueError('This job was predicted before AlphaLens 1.5.0, which did not record the source '
+                             'atoms: open its source to superpose on the source interface.')
         raise ValueError('Too few matching atoms to superpose on.')
     transform, value = align_points(np.array(mobile, float), np.array(fixed, float))
     result.scene_position = transform
@@ -257,10 +271,12 @@ def superpose(session, result, how='chain'):
 
 def interface_residue_keys(matched):
     '''Indexes (in result order) of the source's interface residues: heavy atoms within 10 Å of
-    another chain, from the source atoms recorded at submission.'''
+    another chain, from the source atoms recorded at submission (before 1.5.0 none were: then from
+    the open source).'''
     xyz, res, chain = [], [], []
     for k, (src, r, ch, entry) in enumerate(matched):
-        for v in (entry.get('source_atoms') or {}).values():
+        atoms = entry.get('source_atoms') or (heavy_atoms(src) if src is not None else {})
+        for v in atoms.values():
             xyz.append(v); res.append(k); chain.append(ch['source_chain'])
     xyz, res, chain = np.asarray(xyz, np.float32).reshape(-1, 3), np.asarray(res), np.asarray(chain)
     keys = set()
@@ -275,24 +291,68 @@ def comparing(result):
     return getattr(result, '_alphalens_compare', None) is not None
 
 
+def _capture(m):
+    '''What the comparison view changes on a model, with the residues and atoms it belongs to.'''
+    r, a = m.residues, m.atoms
+    return dict(residues=r.pointers.copy(), ribbon_displays=r.ribbon_displays.copy(),
+                ribbon_colors=r.ribbon_colors.copy(), atoms=a.pointers.copy(), displays=a.displays.copy(),
+                colors=a.colors.copy(), display=m.display)
+
+
+def _restore(m, saved):
+    '''Put back what _capture saved. Residues and atoms added since keep their look; deleted ones
+    are passed over. Returns False if the model is gone.'''
+    if m.deleted:
+        return False
+    for items, key, fields in ((m.residues, 'residues', ('ribbon_displays', 'ribbon_colors')),
+                               (m.atoms, 'atoms', ('displays', 'colors'))):
+        now = items.pointers
+        if np.array_equal(now, saved[key]):
+            for f in fields:
+                setattr(items, f, saved[f])
+            continue
+        old = saved[key]
+        if len(old) == 0 or len(now) == 0:
+            continue
+        order = np.argsort(old)
+        index = order[np.searchsorted(old, now, sorter=order).clip(0, len(old) - 1)]
+        kept = np.flatnonzero(old[index] == now)
+        if len(kept):
+            subset = items.filter(kept)
+            for f in fields:
+                setattr(subset, f, saved[f][index[kept]])
+    m.display = saved['display']
+    return True
+
+
+def _end(result):
+    '''Restore a re-prediction and, if this comparison holds it, its source; a message.'''
+    saved = getattr(result, '_alphalens_compare', None)
+    if saved is None:
+        return 'Nothing to restore.'
+    result._alphalens_compare = None
+    restored = ['the re-prediction'] if _restore(result, saved['result']) else []
+    source = saved['source']
+    held = getattr(source, '_alphalens_compared', None)
+    if held is not None and held['result'] is result:
+        source._alphalens_compared = None
+        if _restore(source, held['state']):
+            restored.append('its source')
+    if not restored:
+        return 'The re-prediction and its source have been closed.'
+    return f'Restored the colors and display of {" and ".join(restored)}.'
+
+
 def compare_view(session, result, on=True):
     '''
     Show the re-prediction (colored by chain) with the same residues of its source (grey) only,
-    and look at them; on=False puts back the colors and display of both. Returns a message.
+    and look at them; on=False puts back the colors and display of both. A source is compared with
+    one re-prediction at a time: comparing another first restores the one before. Returns a message.
     '''
     from chimerax.core.commands import run
     from chimerax.alphafold.pae import _residue_and_atom_spec
-    saved = getattr(result, '_alphalens_compare', None)
     if not on:
-        if saved is None:
-            return 'Nothing to restore.'
-        for m, state in saved['state'].items():
-            if not m.deleted and len(m.residues) == len(state[0]) and len(m.atoms) == len(state[2]):
-                m.residues.ribbon_displays, m.residues.ribbon_colors = state[0], state[1]
-                m.atoms.displays, m.atoms.colors = state[2], state[3]
-                m.display = state[4]
-        result._alphalens_compare = None
-        return 'Restored the colors and display of the re-prediction and its source.'
+        return _end(result)
     found = job_files(result)
     if found is None:
         raise ValueError(f'{result} is not a re-predicted interface with a source to compare.')
@@ -301,19 +361,26 @@ def compare_view(session, result, on=True):
     if source is None:
         raise ValueError('The source model is not open: open '
                          f'{(comparison.get("source") or {}).get("file") or "it"} to compare.')
+    held = getattr(source, '_alphalens_compared', None)
+    if held is not None and held['result'] is not result:
+        _end(held['result'])                # Restores the source too
+        if getattr(source, '_alphalens_compared', None) is not None:     # Not if that was inconsistent
+            _restore(source, source._alphalens_compared['state'])
+            source._alphalens_compared = None
     matched = matched_residues(source, chains, result)
     # On the source, as last chosen (the first chain unless the interface was chosen): a job
     # folder opened later is where it was predicted, and the source may have moved since
     try:
-        superpose(session, result, getattr(result, '_alphalens_superposed', 'chain'))
+        superpose(session, result, getattr(result, '_alphalens_superposed', 'chain'), chains, comparison)
     except ValueError:
         pass
-    state = {}
-    for m in (source, result):
-        state[m] = (m.residues.ribbon_displays.copy(), m.residues.ribbon_colors.copy(),
-                    m.atoms.displays.copy(), m.atoms.colors.copy(), m.display)
-    if saved is None:
-        result._alphalens_compare = dict(state=state)
+    # Saved once each, before the view changes them: comparing again keeps the first state
+    if getattr(result, '_alphalens_compare', None) is None:
+        result._alphalens_compare = dict(result=_capture(result), source=source)
+    else:
+        result._alphalens_compare['source'] = source        # The source may have been opened again
+    if getattr(source, '_alphalens_compared', None) is None:
+        source._alphalens_compared = dict(state=_capture(source), result=result)
     source_res = [s for s, _, _, _ in matched if s is not None]
     # Source: only the re-predicted residues, grey; re-prediction: by chain
     source.residues.ribbon_displays = False
