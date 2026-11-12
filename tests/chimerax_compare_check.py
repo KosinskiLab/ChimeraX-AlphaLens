@@ -155,6 +155,10 @@ def main():
             try:
                 message = pc.compare_view(session, result, True)
                 check('reopened job: compare with source', 'Comparing' in message and pc.comparing(result), message)
+                pairs = [(s.find_atom('CA'), r.find_atom('CA')) for s, r, _, _ in pc.matched_residues(
+                    source, pc.job_files(result)[1], result)[:30] if s is not None and r is not None]
+                d = np.sqrt(np.mean([np.sum((np.asarray(a.scene_coord) - np.asarray(b.scene_coord)) ** 2) for a, b in pairs]))
+                check('reopened job: compare superposed it on the source', d < 3.0, f'CA RMSD {d:.2f} A')
             except Exception as e:
                 check('reopened job: compare with source', False, repr(e))
             pc.compare_view(session, result, False)

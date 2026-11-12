@@ -251,6 +251,7 @@ def superpose(session, result, how='chain'):
         raise ValueError('Too few matching atoms to superpose on.')
     transform, value = align_points(np.array(mobile, float), np.array(fixed, float))
     result.scene_position = transform
+    result._alphalens_superposed = how        # Compare superposes the same way again
     return float(value)
 
 
@@ -301,6 +302,12 @@ def compare_view(session, result, on=True):
         raise ValueError('The source model is not open: open '
                          f'{(comparison.get("source") or {}).get("file") or "it"} to compare.')
     matched = matched_residues(source, chains, result)
+    # On the source, as last chosen (the first chain unless the interface was chosen): a job
+    # folder opened later is where it was predicted, and the source may have moved since
+    try:
+        superpose(session, result, getattr(result, '_alphalens_superposed', 'chain'))
+    except ValueError:
+        pass
     state = {}
     for m in (source, result):
         state[m] = (m.residues.ribbon_displays.copy(), m.residues.ribbon_colors.copy(),
