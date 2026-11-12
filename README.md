@@ -37,7 +37,7 @@ P ≥ 0.5.*
 
 ## Install
 
-Version 1.4.1 says why **Predict** is off, above the buttons and on hover, and turns it off only
+Version 1.4.2 opens the prediction dialog at once on large complexes. Version 1.4.1 says why **Predict** is off, above the buttons and on hover, and turns it off only
 for real problems. Version 1.4.0 predicts discontinuous regions as AlphaPulldown does (one chain
 with the gap kept), writes predicted structures in the source numbering, reads AlphaPulldown
 notation (`P0A836:1-100+P0AGE9`), adds the Model contacts view, has a simpler prediction dialog,
@@ -59,7 +59,7 @@ on Windows or on Intel Macs. It is tested with ChimeraX 1.12.
    pip needs it.
 2. In the ChimeraX command line:
 
-       toolshed install ~/Downloads/chimerax_alphalens-1.4.1-py3-none-any.whl
+       toolshed install ~/Downloads/chimerax_alphalens-1.4.2-py3-none-any.whl
 
 3. Restart ChimeraX.
 
@@ -98,7 +98,7 @@ the CUDA toolkit (`nvcc`, cuBLAS 12) and `g++`; see the
 and opening its prediction dialog do not install engines. Existing engines are reused.
 
 For optional manual installation of both engines, download
-[setup_localfold.py](https://github.com/KosinskiLab/AlphaLens/releases/download/v1.4.1/setup_localfold.py)
+[setup_localfold.py](https://github.com/KosinskiLab/AlphaLens/releases/download/v1.4.2/setup_localfold.py)
 and run `python3 ~/Downloads/setup_localfold.py`. First-use setup uses ChimeraX's bundled
 Python. The first AF2 prediction downloads about 77 MB of model weights; AF3 downloads
 about 277 MB after you accept DeepMind's terms in the dialog.
