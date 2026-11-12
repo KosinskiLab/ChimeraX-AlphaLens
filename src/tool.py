@@ -1426,9 +1426,10 @@ class AlphaLensPlot(ToolInstance):
                      f'{self._threshold:.2f}')
         elif model_marks:
             title = f'{mode.title} (P ≥ {self._threshold:.2f})'
+        compared = self._source_comparison()
         self._heading.setText(f'<html><b>{escape(title)}</b>{src}{pool}<br>'
                               f'<span style="color:gray">{escape(str(self._pae.structure))} · '
-                              f'{n} residues</span></html>')
+                              f'{n} residues{" · " + escape(compared) if compared else ""}</span></html>')
         for key, b in self._tabs.items():
             label = self._modes[key].tab if key != 'spread' else self._modes[self._spread_measure].tab
             b.setText(label)
@@ -2102,7 +2103,49 @@ class AlphaLensPlot(ToolInstance):
         if filename and (Path(filename).parent / 'job.json').is_file():
             from .predict_ui import show_prediction_report
             menu.addAction('Prediction report…', lambda: show_prediction_report(self.session, Path(filename).parent))
+            from . import predict_compare as pc
+            found = pc.job_files(self._pae.structure)
+            if found is not None:           # A re-predicted interface: compare it with its source
+                toggle('Compare with source', pc.comparing(self._pae.structure), self._compare_with_source)
+                first = found[1][0]['source_chain']
+                menu.addAction(f'Superpose on source chain {first}', lambda: self._superpose_on_source('chain'))
+                menu.addAction('Superpose on source interface', lambda: self._superpose_on_source('interface'))
         menu.addAction('Save image', self._save_image)
+
+    def _source_comparison(self):
+        '''For a re-predicted interface: DockQ of the shown model against its source, as text.'''
+        s = self._pae.structure
+        cache = self.__dict__.setdefault('_dockq_cache', {})
+        if s not in cache:
+            text = ''
+            try:
+                from . import predict_compare as pc
+                found = pc.job_files(s)
+                if found is not None:
+                    scores = pc.interface_scores(found[1], self._pae.row_residues_or_atoms())
+                    if scores and scores.get('pairs'):
+                        text = f'DockQ vs source {scores["dockq"]:.2f} ({scores["words"]})'
+            except Exception:
+                text = ''
+            cache[s] = text
+        return cache[s]
+
+    def _compare_with_source(self, on):
+        from .predict_compare import compare_view
+        try:
+            self.session.logger.info('AlphaLens: ' + compare_view(self.session, self._pae.structure, on))
+        except ValueError as e:
+            self.session.logger.warning(f'AlphaLens: {e}')
+
+    def _superpose_on_source(self, how):
+        from .predict_compare import superpose
+        s = self._pae.structure
+        try:
+            value = superpose(self.session, s, how)
+            what = 'its first chain' if how == 'chain' else 'the source interface (backbone)'
+            self.session.logger.info(f'AlphaLens: {s} superposed on {what}, RMSD {value:.2f} Å')
+        except ValueError as e:
+            self.session.logger.warning(f'AlphaLens: {e}')
 
     def _predict_interface(self):
         from .predict_ui import show_prediction_dialog
