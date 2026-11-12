@@ -1,0 +1,466 @@
+import json
+from pathlib import Path
+import sys
+import time
+
+import pytest
+from alphalens import predict
+from alphalens.predict import PredictionJob, PredictionProgress, crop_chains, size_warning, validate_a3m, validate_chains, validate_result
+
+
+def rows():
+    return [dict(chain_id=c, chain_index=i, aa='A', number=i + 10, insertion_code='')
+            for c in 'AB' for i in range(8)]
+
+
+def test_progress_reports_engine_milestones_and_preserves_partial_lines():
+    progress = PredictionProgress()
+    assert progress.total is None
+    progress.feed('  multimer: weights.bin (1/8)\n')
+    assert progress.stage == 'Downloading model weights' and progress.total is None
+    progress.feed('search: chain search 1 of 2: queued\n')
+    assert 'queued' in progress.stage and progress.total is None
+    progress.feed('search: paired search: downloading\n')
+    assert 'downloading' in progress.stage and progress.total is None
+    progress.feed('799 residues, 512 MSA rows, 1024 extra, 4 passes -> /tmp/in\n')
+    assert progress.stage == 'Loading model and preparing GPU'
+    progress.feed('AF2 multimer: 799 residues, 512 MSA rows, 1024 extra, 4 passes\n  pass 1/')
+    assert (progress.completed, progress.total) == (0, 4)
+    progress.feed('4: mean pLDDT 59.02\n' + 'metal: long diagnostics ' * 500 + '\n')
+    assert (progress.completed, progress.total) == (1, 4)
+    progress.feed('  pass 2/4: mean pLDDT 56.99\n  pass 3/4: mean pLDDT 58.04\n')
+    assert (progress.completed, progress.total) == (3, 4)
+    progress.feed('  pass 4/4: mean pLDDT 58.02\n')
+    assert progress.stage == 'Writing prediction files' and progress.total is None
+
+
+def test_progress_ignores_unknown_and_invalid_messages():
+    progress = PredictionProgress()
+    progress.feed('pass 2/0: invalid\npass 5/4: invalid\nAF2 monomer: invalid, 0 passes\n')
+    assert progress.total is None
+    progress.feed('AF2 monomer: 108 residues, 512 MSA rows, 1024 extra, 1 passes\n')
+    assert (progress.completed, progress.total) == (0, 1)
+    progress.feed('unknown output without newline' * 1000)
+    assert len(progress._pending) <= 4096
+    assert (progress.completed, progress.total) == (0, 1)
+
+
+def test_crop_extends_contiguously_and_preserves_numbering():
+    chains = crop_chains(rows(), (2, 4, 9, 12), 2)
+    assert [len(c['sequence']) for c in chains] == [7, 7]
+    assert chains[0]['residue_map'][0]['number'] == 10
+    assert chains[1]['residue_map'][0]['source_row'] == 8
+    assert chains[0]['core_rows'] == [2, 3, 4]
+
+
+@pytest.mark.parametrize('region', [None, (0, 3, 4, 6), (0, 2, 14, 19)])
+def test_crop_rejects_ambiguous_regions(region):
+    with pytest.raises(ValueError):
+        crop_chains(rows(), region)
+
+
+def test_crop_keeps_missing_sequence_positions_as_a_gap():
+    r = rows()
+    for k in range(3, 8):                 # chain A positions 3 and 4 unresolved (and numbered)
+        r[k]['chain_index'] += 2; r[k]['number'] += 2
+    chains = crop_chains(r, (2, 4, 9, 12), 0)
+    assert [x['number'] for x in chains[0]['residue_map']] == [12, 15, 16]
+    assert chains[0]['residue_ids'] == [12, 15, 16] and 'residue_ids' not in chains[1]
+
+
+def test_crop_spans_multiple_chains_and_unions_overlapping_axes():
+    r = [dict(chain_id=c, chain_index=i, aa='A', number=i+1, insertion_code='')
+         for c in 'ABC' for i in range(4)]
+    chains = crop_chains(r, (2, 6, 5, 10), 1)
+    assert [c['source_chain'] for c in chains] == list('ABC')
+    assert [c['core_rows'] for c in chains] == [[2, 3], [4, 5, 6, 7], [8, 9, 10]]
+    assert [len(c['sequence']) for c in chains] == [3, 4, 4]
+
+
+def test_chain_labels_do_not_collide_after_26_chains():
+    from alphalens.predict import chain_ids
+    assert chain_ids(28) == 'ABCDEFGHIJKLMNOPQRSTUVWXYZab'
+    assert len(set(chain_ids(62))) == 62
+    with pytest.raises(ValueError, match='PDB'):
+        chain_ids(63)
+
+
+def test_default_seed_is_random_per_job_and_explicit_seed_is_retained(runner, monkeypatch):
+    from alphalens import predict
+    seeds = iter([1234, 2345])
+    monkeypatch.setattr(predict, 'random_seed', lambda: next(seeds))
+    assert runner(search=True).options['seed'] == 1234
+    assert runner(search=True).options['seed'] == 2345
+    assert runner(search=True, seed=0).options['seed'] == 0
+
+
+def test_sequence_validation_has_no_residue_count_cap():
+    validate_chains([dict(sequence='A'*410, residue_map=[{}]*410),
+                     dict(sequence='A'*389, residue_map=[{}]*389)])
+    validate_chains([dict(sequence='A'*512, residue_map=[{}]*512)]*2)
+    validate_chains([dict(sequence='A'*1024, residue_map=[{}]*1024)])
+    validate_chains([dict(sequence='A'*10000, residue_map=[{}]*10000)]*2)
+    # X (unknown) is folded as UNK by both engines; U, O, B, Z, J are named, with what to use instead
+    validate_chains([dict(sequence='AX', residue_map=[{}, {}])]*2)
+    with pytest.raises(ValueError, match=r'U at B:7 cannot be folded.*Replace it by C'):
+        validate_chains([dict(sequence='AA', residue_map=[{}, {}]),
+                         dict(sequence='AU', residue_map=[{}, dict(chain_id='B', number=7)])])
+    with pytest.raises(ValueError, match='Chain A is empty'):
+        validate_chains([dict(sequence='', residue_map=[])])
+
+
+def test_large_crop_is_allowed_with_nonblocking_warning():
+    r = [dict(chain_id=c, chain_index=i, aa='A', number=i+1, insertion_code='')
+         for c in 'AB' for i in range(600)]
+    small = crop_chains(r, (50, 549, 650, 1149), 6)
+    large = crop_chains(r, (50, 549, 650, 1149), 7)
+    assert sum(len(c['sequence']) for c in small) == 1024
+    assert sum(len(c['sequence']) for c in large) == 1028
+    assert not size_warning(small)
+    assert '1,028 residues including flanks' in size_warning(large)
+    assert 'You can proceed' in size_warning(large)
+
+
+def test_a3m_query_validation(tmp_path):
+    p = tmp_path/'test.a3m'
+    p.write_text('#comment\n>query\nAAaA\nA\n>hit\nVVVV\n')
+    validate_a3m(p, 'AAAA')
+    with pytest.raises(ValueError, match='query'):
+        validate_a3m(p, 'AAAC')
+
+
+@pytest.fixture
+def runner(tmp_path):
+    binary = tmp_path/'engine'
+    # Deliberately controlled engine output: test process/cache protocol, not AF2 accuracy.
+    binary.write_text(f'#!{sys.executable}\n' + '''
+import json, pathlib, sys, time
+args = dict(a[2:].split('=', 1) if '=' in a else (a[2:], True) for a in sys.argv[1:])
+if args['seed'] == '99': time.sleep(60)
+if args['seed'] == '98': sys.exit(7)
+d = pathlib.Path(args['out']).parent
+conf = dict(token_chain_ids=['A','A','B','B'], token_res_ids=[1,2,1,2], pae=[[3]*4 for _ in range(4)])
+(d/'fold_confidences.json').write_text(json.dumps(conf))
+(d/'fold_summary_confidences.json').write_text(json.dumps(dict(ptm=.8,iptm=.7,mean_plddt=90)))
+lines=[]
+for i in range(4):
+ c='A' if i<2 else 'B'; r=i%2+1
+ lines.append(f'ATOM  {i+1:5d}  CA  ALA {c}{r:4d}    {i*3.:8.3f}{0.:8.3f}{0.:8.3f}{1.:6.2f}{90.:6.2f}          C  ')
+(d/'fold.pdb').write_text('\\n'.join(lines)+'\\nEND\\n')
+if 'search' in args: (d/'fold.a3m').write_text('>query\\nAAAA\\n')
+''')
+    binary.chmod(0o755)
+    chains = [dict(sequence='AA', residue_map=[{}, {}])]*2
+    def make(name='job', **kw):
+        return PredictionJob(tmp_path/name, chains, executable=binary, cache=tmp_path/'cache', **kw)
+    return make
+
+
+def finish(job):
+    end = time.monotonic()+5
+    while job.poll() == 'running' and time.monotonic()<end:
+        time.sleep(.02)
+    assert job.state != 'running'
+    return job
+
+
+def test_real_process_and_msa_cache(runner):
+    first = finish(runner(search=True).start())
+    assert first.state == 'complete', first.error
+    assert first.result['mean_cross_chain_pae'] == 3
+    second = finish(runner('second', search=True, seed=1).start())
+    assert second.state == 'complete'
+    assert second.manifest['msa_source'] == 'cache'
+    assert '--search' not in second.manifest['args']
+    manifest = json.loads((second.directory/'job.json').read_text())
+    assert manifest['revision'] == 'unverified'
+    assert len(manifest['msa_sha256']) == 64
+    conf = second.directory/'fold_confidences.json'
+    data = json.loads(conf.read_text()); data['token_res_ids'].reverse(); conf.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match='token order'):
+        validate_result(second.directory, second.chains)
+
+
+def test_no_implicit_sequence_upload(runner):
+    with pytest.raises(ValueError, match='Choose remote'):
+        runner()
+
+
+def test_af3_terms_gate_options_and_cross_model_msa_cache(runner, monkeypatch):
+    monkeypatch.setattr(predict.sys, 'platform', 'darwin')
+    with pytest.raises(ValueError, match='terms'):
+        runner(search=True, backend='af3')
+    first = finish(runner(search=True).start())
+    af3 = runner('af3', search=True, backend='af3', accept_af3_terms=True)
+    assert af3.model == 'af3'
+    assert af3.msa_cache == first.msa_cache
+    finish(af3.start())
+    assert af3.state == 'complete', af3.error
+    assert af3.manifest['msa_source'] == 'cache'
+    assert '--steps=200' in af3.manifest['args']
+    assert '--recycles=10' in af3.manifest['args'] and '--samples=5' in af3.manifest['args']
+    assert af3.manifest['runtime_environment'] == dict(LOCALFOLD_GEMM_TENSOR='0', LOCALFOLD_ATTN_TENSOR='0',
+                                                      NSUnbufferedIO='YES')
+    assert '--update=euler' in af3.manifest['args'] and '--schedule=karras' in af3.manifest['args']
+    assert not any(a.startswith('--max-extra') for a in af3.manifest['args'])
+    assert af3.manifest['af3_terms_accepted'] is True
+    assert af3.manifest['engine'] == 'LocalFold native Metal'
+
+
+def test_cuda_engine_label_and_no_metal_settings(runner, monkeypatch):
+    monkeypatch.setattr(predict.sys, 'platform', 'linux')
+    af3 = finish(runner('af3-cuda', search=True, backend='af3', accept_af3_terms=True).start())
+    assert af3.state == 'complete', af3.error
+    assert af3.manifest['engine'] == 'LocalFold native CUDA'
+    assert 'runtime_environment' not in af3.manifest
+    af2 = finish(runner('af2-cuda', search=True, seed=2).start())
+    assert af2.state == 'complete', af2.error
+    assert af2.manifest['engine'] == 'LocalFold native CUDA'
+
+
+def test_invalid_contact_matrix_is_rejected(runner):
+    job = finish(runner(search=True).start())
+    path = job.directory/'fold_confidences.json'
+    data = json.loads(path.read_text())
+    data['contact_probs'] = [[.5]*4 for _ in range(4)]
+    path.write_text(json.dumps(data))
+    assert validate_result(job.directory, job.chains)['has_contact_probabilities']
+    data['contact_probs'][0][1] = 1.5
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match='contact-probability'):
+        validate_result(job.directory, job.chains)
+
+
+def test_cancel_reaps_process_and_releases_lock(runner):
+    job = runner(search=True, seed=99).start()
+    with pytest.raises(ValueError, match='Another local'):
+        runner('blocked', search=True).start()
+    job.cancel(); finish(job)
+    assert job.state == 'cancelled'
+    assert job.process.poll() is not None
+    assert finish(runner('next', search=True).start()).state == 'complete'
+
+
+def test_timeout_and_engine_errors(runner):
+    timed = finish(runner(search=True, seed=99, timeout=.05).start())
+    assert timed.state == 'failed' and 'limit' in timed.error
+    failed = finish(runner('failed', search=True, seed=98).start())
+    assert failed.state == 'failed' and 'status 7' in failed.error
+
+
+def test_default_has_no_timeout_but_manual_cancel_still_works(runner):
+    job = runner(search=True, seed=99).start()
+    job.started -= 3600
+    assert job.poll() == 'running'
+    assert job.cancelled_at is None
+    assert job.manifest['timeout_seconds'] is None
+    job.cancel(); finish(job)
+    assert job.state == 'cancelled'
+
+
+@pytest.mark.parametrize('timeout', [0, -1, float('inf'), float('nan')])
+def test_invalid_time_limit(runner, timeout):
+    with pytest.raises(ValueError, match='time limit'):
+        runner(search=True, timeout=timeout)
+
+
+def test_existing_output_preserved(runner):
+    job = runner(search=True); job.directory.mkdir()
+    sentinel = job.directory/'precious'; sentinel.write_text('keep')
+    with pytest.raises(FileExistsError): job.start()
+    assert sentinel.read_text() == 'keep'
+    assert job.lock is None
+
+
+def test_crop_paired_msa_preserves_rows_order_and_insertions(tmp_path):
+    from alphalens.predict import crop_a3m
+    source = tmp_path/'source.a3m'; target = tmp_path/'cropped.a3m'
+    source.write_text('>query\nACDEFGHI\n>paired\nACdDEFGhHI\n>unpaired\nACDE----\n>outside\nA-------\n')
+    # Reverse the chain order, keeping FGH then CD. Discard insertions at crop starts.
+    crop_a3m(source, target, 'ACDEFGHI', [4, 5, 6, 1, 2])
+    assert target.read_text() == '>query\nFGHCD\n>paired\nFGhHCdD\n>unpaired\n---CD\n'
+    validate_a3m(target, 'FGHCD')
+
+
+def test_crop_msa_rejects_ragged_alignment(tmp_path):
+    from alphalens.predict import crop_a3m
+    source = tmp_path/'source.a3m'; source.write_text('>query\nAAAA\n>bad\nAAA\n')
+    with pytest.raises(ValueError, match='aligned length'):
+        crop_a3m(source, tmp_path/'out', 'AAAA', [0, 2])
+
+
+def test_manifest_failure_after_spawn_reaps_child(runner, monkeypatch):
+    job = runner(search=True, seed=99)
+    def fail():
+        raise OSError('disk full')
+    monkeypatch.setattr(job, '_save', fail)
+    with pytest.raises(OSError, match='disk full'):
+        job.start()
+    assert job.state == 'failed'
+    assert job.process.poll() is not None
+    assert job.lock is None
+    assert finish(runner('after_disk_error', search=True).start()).state == 'complete'
+
+
+def test_a3m_headers_in_any_encoding_pass_through(tmp_path, monkeypatch):
+    # ChimeraX switches to the C locale (ASCII text files) once a PDB file has been opened
+    import locale
+    from alphalens.predict import crop_a3m
+    monkeypatch.setattr(locale, 'getpreferredencoding', lambda *a: 'ascii')
+    source, cropped = tmp_path/'source.a3m', tmp_path/'cropped.a3m'
+    source.write_bytes(b'>query caf\xc3\xa9\nACDE\n>hit \xe9t\xe9\nAaC-E\n')
+    validate_a3m(source, 'ACDE')
+    crop_a3m(source, cropped, 'ACDE', [0, 1, 3])
+    assert cropped.read_bytes() == b'>query caf\xc3\xa9\nACE\n>hit \xe9t\xe9\nAaCE\n'
+
+
+def test_engine_platform_follows_the_os_not_python_architecture(monkeypatch):
+    # An x86_64 Python under Rosetta reports machine x86_64 but still launches the Metal engine.
+    import platform
+    monkeypatch.setattr(platform, 'machine', lambda: 'x86_64')
+    for system, native in (('darwin', 'metal'), ('linux', 'cuda'), ('win32', None)):
+        monkeypatch.setattr(predict.sys, 'platform', system)
+        assert predict.engine_platform() == native
+
+
+def test_cuda_engine_built_for_another_gpu_generation_is_refused(tmp_path, monkeypatch):
+    # Seen on the EMBL cluster: A100-built engines on an H100 gave NaN, or a wrong AF2 monomer.
+    binary = tmp_path / 'bin' / 'localfold-af2'
+    binary.parent.mkdir()
+    binary.write_text('#!/bin/sh\n')
+    binary.chmod(0o755)
+    receipt = dict(revision=predict.ENGINE_REVISION, sha256=predict.digest(binary), native='cuda',
+                   cuda_compute_capability='8.0')
+    binary.with_suffix('.json').write_text(json.dumps(receipt))
+    monkeypatch.setattr(predict.sys, 'platform', 'linux')
+    chains = [dict(sequence='AA', residue_map=[{}, {}])] * 2
+    def make():
+        return PredictionJob(tmp_path / 'job', chains, executable=binary, cache=tmp_path / 'cache', search=True)
+    monkeypatch.setattr(predict, 'cuda_compute_capability', lambda: '9.0')
+    with pytest.raises(ValueError, match='compute capability 8.0, but this GPU has 9.0'):
+        make()
+    assert not (tmp_path / 'job').exists()
+    monkeypatch.setattr(predict, 'cuda_compute_capability', lambda: '8.0')
+    make()                                                   # the same generation
+    monkeypatch.setattr(predict, 'cuda_compute_capability', lambda: None)
+    make()                                                   # cannot tell: the engine reports its own errors
+    binary.write_text('#!/bin/sh\n# replaced by the user\n')
+    monkeypatch.setattr(predict, 'cuda_compute_capability', lambda: '9.0')
+    make()                                                   # no longer the receipt's engine: unverified
+    monkeypatch.setattr(predict.sys, 'platform', 'darwin')
+    receipt['sha256'] = predict.digest(binary)
+    binary.with_suffix('.json').write_text(json.dumps(receipt))
+    make()                                                   # Metal engines carry no GPU generation
+
+
+def gapped_rows():
+    """AlphaPulldown region P:1-5:20-27 as one chain A (numbering jumps 5 -> 20), then chain B."""
+    numbers = list(range(1, 6)) + list(range(20, 28))
+    r = [dict(chain_id='A', chain_index=i, aa='A', number=n, insertion_code='',
+              break_before=i == 5) for i, n in enumerate(numbers)]
+    return r + [dict(chain_id='B', chain_index=i, aa='A', number=i + 1, insertion_code='',
+                     break_before=False) for i in range(8)]
+
+
+def test_crop_keeps_a_box_across_a_chain_break_as_one_gapped_chain():
+    from alphalens.predict import feature_segments, segment_count, engine_numbers
+    chains = crop_chains(gapped_rows(), (3, 7, 14, 16), 0)
+    a = chains[0]
+    assert [r['number'] for r in a['residue_map']] == [4, 5, 20, 21, 22]
+    assert a['residue_ids'] == [4, 5, 20, 21, 22] == engine_numbers(a)   # AlphaPulldown/UniProt numbering
+    assert segment_count(a) == 2 and segment_count(chains[1]) == 1
+    assert feature_segments(a) == [['AA', 3], ['AAA', 19]] and feature_segments(chains[1]) is None
+    assert engine_numbers(chains[1]) == [1, 2, 3]
+
+
+def test_gap_of_unknown_size_is_placed_beyond_the_relative_position_range():
+    r = gapped_rows()
+    for k, x in enumerate(r[:13]):        # renumbered 1..13: the break no longer shows in the numbers
+        x['number'] = k + 1
+    a = crop_chains(r, (3, 7, 14, 16), 0)[0]
+    assert a['residue_ids'] == [1, 2, 35, 36, 37]
+
+
+def test_crop_flanks_stop_at_a_chain_break():
+    chains = crop_chains(gapped_rows(), (6, 8, 14, 16), 4)
+    assert [r["number"] for r in chains[0]["residue_map"]] == list(range(20, 28))
+    chains = crop_chains(gapped_rows(), (1, 2, 14, 16), 4)
+    assert [r['number'] for r in chains[0]['residue_map']] == [1, 2, 3, 4, 5]
+
+
+def _pdb(chains_sizes):
+    lines, k = [], 0
+    for c, n in chains_sizes:
+        for r in range(1, n + 1):
+            k += 1
+            lines.append(f'ATOM  {k:5d}  CA  ALA {c}{r:4d}    {k*3.:8.3f}{0.:8.3f}{0.:8.3f}{1.:6.2f}{90.:6.2f}           C')
+        lines.append('TER')
+    return '\n'.join(lines + ['END']) + '\n'
+
+
+def _labels(path):
+    return [(l[21], int(l[22:26]), l[26].strip()) for l in path.read_text().splitlines() if l.startswith('ATOM')]
+
+
+def test_results_take_the_source_chain_ids_and_numbers(tmp_path):
+    from alphalens.predict import renumber_outputs, engine_structure
+    # A re-predicted region: prediction chain A is source chain B (92-94), B is source A
+    # (an AlphaPulldown region with a gap and an insertion code).
+    chains = [dict(sequence='AAA', residue_map=[dict(chain_id='B', number=n, insertion_code='') for n in (92, 93, 94)]),
+              dict(sequence='AAAA', residue_map=[dict(chain_id='A', number=n, insertion_code=i)
+                                                 for n, i in ((5, ''), (20, ''), (20, 'A'), (21, ''))])]
+    (tmp_path / 'fold.pdb').write_text(_pdb([('A', 3), ('B', 4)]))
+    (tmp_path / 'fold_sample1.pdb').write_text(_pdb([('A', 3), ('B', 4)]))
+    record = renumber_outputs(tmp_path, chains)
+    assert record['scheme'] == 'source' and record['chain_ids'] == {'A': 'B', 'B': 'A'}
+    expected = [('B', 92, ''), ('B', 93, ''), ('B', 94, ''), ('A', 5, ''), ('A', 20, ''), ('A', 20, 'A'), ('A', 21, '')]
+    for name in ('fold.pdb', 'fold_sample1.pdb'):
+        assert _labels(tmp_path / name) == expected
+        assert _labels(tmp_path / 'engine_output' / name)[0] == ('A', 1, '')
+    assert engine_structure(tmp_path) == tmp_path / 'engine_output' / 'fold.pdb'
+    renumber_outputs(tmp_path, chains)              # idempotent: always from the engine's files
+    assert _labels(tmp_path / 'fold.pdb') == expected
+
+
+def test_results_keep_prediction_numbering_without_a_usable_source(tmp_path):
+    from alphalens.predict import renumber_outputs
+    plain = [dict(sequence='AA', residue_map=[dict(chain_id=c, number=n, insertion_code='') for n in (1, 2)])
+             for c in 'AB']
+    (tmp_path / 'fold.pdb').write_text(_pdb([('A', 2), ('B', 2)]))
+    assert renumber_outputs(tmp_path, plain)['scheme'] == 'prediction'
+    assert not (tmp_path / 'engine_output').exists()
+    # Multi-character mmCIF chain IDs cannot go into a PDB file: IDs stay, numbers still change
+    long_ids = [dict(sequence='AA', residue_map=[dict(chain_id=c, number=n, insertion_code='') for n in (50, 51)])
+                for c in ('AA', 'BB')]
+    record = renumber_outputs(tmp_path, long_ids)
+    assert record['scheme'] == 'source' and 'chain IDs kept' in record['note']
+    assert _labels(tmp_path / 'fold.pdb') == [('A', 50, ''), ('A', 51, ''), ('B', 50, ''), ('B', 51, '')]
+
+
+def test_gapped_chains_reach_the_engine_and_come_back_in_source_numbering(tmp_path):
+    from alphalens.predict import renumber_outputs
+    chain = dict(sequence='AAAA', residue_ids=[4, 5, 20, 21],
+                 residue_map=[dict(chain_id='C', number=n, insertion_code='') for n in (4, 5, 20, 21)])
+    lines = [f'ATOM  {k+1:5d}  CA  ALA A{n:4d}    {k*3.:8.3f}{0.:8.3f}{0.:8.3f}{1.:6.2f}{90.:6.2f}           C'
+             for k, n in enumerate((4, 5, 20, 21))]
+    (tmp_path / 'fold.pdb').write_text('\n'.join(lines) + '\nEND\n')
+    record = renumber_outputs(tmp_path, [chain])
+    assert record['scheme'] == 'source' and record['chain_ids'] == {'A': 'C'}
+    assert _labels(tmp_path / 'fold.pdb') == [('C', 4, ''), ('C', 5, ''), ('C', 20, ''), ('C', 21, '')]
+
+
+def test_crop_leaves_out_ligand_rows_and_explains_a_one_chain_box():
+    r = rows()
+    lig = [None] * 3                    # An AF3 ligand between the chains, atom by atom
+    r = r[:8] + lig + r[8:]
+    chains = crop_chains(r, (2, 12, 2, 12), 0)       # A box from chain A over the ligand into chain B
+    assert [c['source_chain'] for c in chains] == ['A', 'B']
+    assert [x['source_row'] for x in chains[1]['residue_map']] == [11, 12]
+    with pytest.raises(ValueError, match=r'covers chain A only.*such as A × B'):
+        crop_chains(r, (1, 4, 2, 6), 0)
+    with pytest.raises(ValueError, match='no protein residues'):
+        crop_chains(r, (8, 10, 8, 10), 0)
+    with pytest.raises(ValueError, match='one protein chain'):
+        crop_chains(rows()[:8], (1, 2, 4, 6), 0)
+    with pytest.raises(ValueError, match='drag the box again'):
+        crop_chains(rows(), (2, 4, 9, 99), 0)

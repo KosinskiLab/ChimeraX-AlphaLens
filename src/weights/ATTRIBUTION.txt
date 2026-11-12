@@ -1,0 +1,16 @@
+AlphaFold model_1_multimer_v3 distogram-head parameters
+Copyright DeepMind Technologies Limited. Licensed under CC BY 4.0.
+https://github.com/google-deepmind/alphafold
+https://creativecommons.org/licenses/by/4.0/
+
+Source: params_model_1_multimer_v3.npz from the official AlphaFold 2.3.0
+parameter distribution (2022-12-06 release). Two tensors are reproduced:
+alphafold/alphafold_iteration/distogram_head/half_logits//weights (128 x 64)
+alphafold/alphafold_iteration/distogram_head/half_logits//bias (64)
+
+Only the container changed: these unmodified float32 tensors are concatenated,
+little-endian, weights followed by bias. No quantisation or fitting was applied.
+SHA256: f809845f39567c829a1bf829cb44eb91c2a69e3a7f879a16a70e506c3a8258ab
+
+Used with LocalFold's matching model_1_multimer_v3 backbone. These weights are
+licensed separately from AlphaLens's MIT-licensed code. No endorsement implied.
