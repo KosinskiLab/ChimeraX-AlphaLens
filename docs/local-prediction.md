@@ -1,6 +1,6 @@
 # Experimental local protein and interface prediction
 
-AlphaLens 1.4.2 can predict protein complexes from sequences or UniProt IDs, or re-predict
+AlphaLens 1.5.0 can predict protein complexes from sequences or UniProt IDs, or re-predict
 selected regions spanning multiple protein chains, with AlphaFold 2 or AlphaFold 3 on
 Apple Silicon, using [LocalFold's native Metal implementation](https://github.com/KosinskiLab/localfold/tree/837a15ca7c72c35c75739740bc7ed71ee9d5e09b/metal),
 or on Linux with an NVIDIA GPU, using its [native CUDA implementation](https://github.com/KosinskiLab/localfold/tree/837a15ca7c72c35c75739740bc7ed71ee9d5e09b/cuda)
@@ -12,7 +12,7 @@ have no native LocalFold engine and are not supported.
 
 ## Setup
 
-Install the AlphaLens 1.4.2 wheel. The local prediction feature remains experimental.
+Install the AlphaLens 1.5.0 wheel. The local prediction feature remains experimental.
 On a Mac, the engine requires Apple Silicon, macOS 13 or newer and Xcode Command Line Tools.
 On Linux, see [Linux with an NVIDIA GPU (CUDA)](#linux-with-an-nvidia-gpu-cuda) below.
 No separate Python ML environment is needed. With a missing default engine, the button
@@ -203,6 +203,41 @@ A result opens automatically, superposed on the first selected chain's Cα atoms
 job submission. The whole predicted complex moves together, preserving the predicted
 interface. Source coordinates are not supplied as a template or restraints.
 
+### Is it the same interface?
+
+The report, the dialog and the result plot's heading give **DockQ against the source**:
+the source model is the reference, over the re-predicted residues (with flanks), for each pair
+of chains, as DockQ (Basu & Wallner 2016) defines it: Fnat, the fraction of the source's
+residue contacts (heavy atoms within 5 Å) that the re-prediction keeps; the interface RMSD,
+over the backbone of the source's interface residues (within 10 Å of the other chain); and the
+ligand RMSD, how far the smaller chain is from its source place with the larger one
+superposed. For example:
+
+```text
+Interface vs source: DockQ 0.92 · high: same interface
+  A–B: 44 of 46 source contacts kept (Fnat 0.96), 3 new; interface RMSD 0.7 Å; B 1.3 Å from its source place with A superposed
+```
+
+CAPRI classes: 0.80 and above high (the same interface), 0.49 medium (similar), 0.23
+acceptable (partly the same), below that a different interface. The source is a prediction
+too, so this says how alike the two interfaces are, not which is right. The scores match the
+official DockQ 2.1.3 on the pairs we checked (two AF2 models of SucC–SucD, AF2 against AF3,
+two gapped re-predictions: the same DockQ, Fnat, iRMSD and LRMSD). The ligand RMSD includes
+the whole smaller chain, so long disordered tails can make it large while the interface
+agrees (Fnat and the interface RMSD show that). With AF3, the heading follows the sample
+shown in the Model menu.
+
+**Compare with source** (a button in the dialog, and in the result plot's right-click menu)
+superposes the re-prediction on the source as last chosen, shows it colored by chain together
+with the same residues of the source in grey, hides the rest of the source and looks at them;
+clicking it again restores the colors and display of both. A source is compared with one
+re-prediction at a time: comparing another (a new job, or another AF3 sample, which the
+comparison follows) first restores the one before. The right-click menu also superposes the re-prediction on the source's
+first selected chain (as it opens: the second chain's offset is the change in the interface)
+or on the backbone of the source interface (the local differences). Both use the source as it
+is if it is open, else as it was when Predict was clicked; the source's heavy atoms are kept
+in `residue_map.json` for that (jobs from before 1.5.0 lack them and need the source open).
+
 The dialog reports ipTM and compares mean PAE in both directions over exactly the
 selected residue pairs, excluding added flanks. It also compares mean pLDDT over the
 same selected residues. The contact report gives source/new counts with P ≥ 0.5,
@@ -217,7 +252,7 @@ remain unavailable. Flanks are excluded. All outputs are retained in timestamped
   `fold_summary_confidences.json`; `engine_output/` keeps the engine's own structure files;
 - `input.json`, `residue_map.json`, and the supplied/cropped/searched A3M;
 - `job.json`: model/settings, engine and MSA hashes, source, timing and status;
-- `comparison.json` for region jobs, and `prediction.log`;
+- `comparison.json` for region jobs (with the DockQ comparison under `interface`), and `prediction.log`;
 - `contact_report.json` and `region_contacts.csv` for complexes. The CSV contains the
   union of pairs with source/new P ≥ 0.5 or source/new model distance below 8 Å, with
   original chain/residue labels, both probabilities and cutoffs, and both distances.

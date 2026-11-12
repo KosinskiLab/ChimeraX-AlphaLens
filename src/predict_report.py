@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 from .predict_contacts import summary as contact_summary
+from .predict_compare import summary_lines as interface_lines
 
 
 def report_text(directory):
@@ -26,6 +27,14 @@ def report_text(directory):
         if source.get('core_mean_plddt') is not None:
             lines.append(f'Same residues: pLDDT {source["core_mean_plddt"]:.1f} → '
                          f'{comparison["predicted_core_mean_plddt"]:.1f}')
+        interface = comparison.get('interface') or {}
+        if interface.get('error'):
+            lines.append(interface['error'])
+        else:
+            lines.extend(interface_lines(interface))
+        if comparison.get('aligned_chain_ca_rmsd') is not None:
+            lines.append(f'Superposed on source chain {comparison.get("aligned_source_chain")} '
+                         f'(CA RMSD {comparison["aligned_chain_ca_rmsd"]:.2f} Å over its selected residues)')
     contacts = directory / 'contact_report.json'
     if contacts.exists():
         lines.extend(['', contact_summary(json.loads(contacts.read_text()))])
