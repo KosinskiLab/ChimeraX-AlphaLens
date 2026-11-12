@@ -77,10 +77,14 @@ def snapshot(plot, flanks, preview=False):
             raise ValueError('Select a region containing inter-chain residue pairs.')
         return chains, None
     rra = pae.row_residues_or_atoms()
+    from .predict_compare import heavy_atoms
     for c in chains:
         for entry in c['residue_map']:
-            ca = rra[entry['source_row']].find_atom('CA')
+            residue = rra[entry['source_row']]
+            ca = residue.find_atom('CA')
             entry['source_ca_scene'] = [float(v) for v in ca.scene_coord] if ca is not None else None
+            # The source's heavy atoms, for DockQ and superposing later, also if it is closed
+            entry['source_atoms'] = heavy_atoms(residue)
     output_pairs = predict_contacts.region_pairs(chains, plot._prediction_region)
     if not len(output_pairs):
         raise ValueError('Select a region containing inter-chain residue pairs.')
@@ -166,7 +170,18 @@ def import_result(session, job):
                       predicted_core_mean_pae=float((matrix[a, b].mean() + matrix[b, a].mean()) / 2),
                       predicted_core_mean_plddt=float(np.mean(pae.row_plddt()[np.unique(contact_pairs)])),
                       contacts=job.contact_report)
+    # How alike the two interfaces are: DockQ with the source as the reference
+    from .predict_compare import interface_scores
+    try:
+        comparison['interface'] = interface_scores(job.chains, pae.row_residues_or_atoms())
+    except Exception as e:          # A comparison must not lose the prediction
+        comparison['interface'] = dict(error=f'Could not compare the interfaces: {e}')
     predict.write_json(job.directory / 'comparison.json', comparison)
+    plot = getattr(structure, '_alphalens_plot', None)
+    if plot is not None and not plot.closed():
+        # The plot was drawn before the comparison existed: its heading gets the DockQ now
+        plot.__dict__.get('_dockq_cache', {}).pop(structure, None)
+        plot._redraw(keep_zoom=True)
     return structure, comparison
 
 
@@ -445,7 +460,12 @@ class PredictionDialog(QDialog):
         self.report_button.setToolTip('The scores and comparison of the last prediction, once it has finished')
         self.report_directory = None
         self.report_button.clicked.connect(lambda: show_prediction_report(self.session, self.report_directory))
-        buttons.addWidget(self.report_button); buttons.addStretch(1)
+        self.compare_button = QPushButton('Compare with source')
+        self.compare_button.setCheckable(True); self.compare_button.setEnabled(False)
+        self.compare_button.setToolTip('After a re-predicted interface: show it by chain with the same residues of '
+                                       'the source in grey, and look at them; click again to restore')
+        self.compare_button.toggled.connect(self.compare_with_source)
+        buttons.addWidget(self.report_button); buttons.addWidget(self.compare_button); buttons.addStretch(1)
         buttons.addWidget(self.cancel_button); buttons.addWidget(self.start_button)
         self.start_button.clicked.connect(self.start)
         self.cancel_button.clicked.connect(self.cancel)
@@ -478,6 +498,20 @@ class PredictionDialog(QDialog):
     def fit_height(self):
         '''Grow to show everything (rows were added); never shrink what the user enlarged.'''
         QTimer.singleShot(0, lambda: self.resize(self.width(), max(self.height(), self.sizeHint().height())))
+
+    def compare_with_source(self, on):
+        '''Show the re-prediction with the same residues of its source (or restore both).'''
+        from .predict_compare import compare_view
+        model = self.output_model
+        try:
+            if model is None or model.deleted:
+                raise ValueError('The re-predicted model has been closed.')
+            self.log_message(compare_view(self.session, model, on))
+        except ValueError as e:
+            self.show_error(str(e))
+            self.compare_button.blockSignals(True)
+            self.compare_button.setChecked(False)
+            self.compare_button.blockSignals(False)
 
     def browse_a3m(self):
         from Qt.QtWidgets import QFileDialog
@@ -900,6 +934,10 @@ class PredictionDialog(QDialog):
                 report = save_report(self.job.directory)
                 self.report_directory = self.job.directory
                 self.report_button.setEnabled(True)
+                self.compare_button.blockSignals(True)
+                self.compare_button.setChecked(False)
+                self.compare_button.blockSignals(False)
+                self.compare_button.setEnabled(self.comparison is not None)
                 self.log_message(report, show_start=True)
                 # Opening the result plot can cover this dialog; keep its comparison visible.
                 self.raise_()
