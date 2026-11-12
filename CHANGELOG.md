@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.5.0
+
+* Is the re-predicted interface the same as the source's? The report, the dialog and the result
+  plot's heading give **DockQ against the source** for each pair of chains, over the
+  re-predicted residues: the source's contacts kept (Fnat) and new, the interface RMSD and how
+  far the smaller chain moved, with the CAPRI class ("DockQ 0.92 · high: same interface"). It
+  matches the official DockQ 2.1.3 exactly on the checked pairs. For AF3 results the heading
+  follows the sample shown. Saved in `comparison.json`, so reopened job folders show it.
+* **Compare with source** (dialog button, and the result plot's right-click menu): the
+  re-prediction by chain with the same residues of the source in grey, the rest of the source
+  hidden, both in view; again to restore their colors and display.
+* The result plot's right-click menu superposes the re-prediction on the source's first selected
+  chain (as it opens) or on the backbone of the source interface, and logs the RMSD. The source's
+  heavy atoms are recorded at Predict, so this works after the source is closed.
+* The report says how well the first chain superposed (CA RMSD).
+* Add `tests/chimerax_compare_check.py` (AF2 and AF3 re-predictions, the comparison view and its
+  restore, both superpositions, a reopened job) and unit tests of the DockQ scoring.
+
 ## 1.4.2
 
 * The re-predict dialog opens at once: 0.06 s instead of 0.44 s for a 677-residue prediction,
