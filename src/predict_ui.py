@@ -40,26 +40,42 @@ def peptide_bonded(a, b):
     return float(np.linalg.norm(c.coord - n.coord)) <= 2.5
 
 
-def snapshot(plot, flanks):
-    """Read the live source once, before starting a subprocess."""
+def source_rows(pae):
+    """The plot rows as crop_chains takes them: protein residues, None for anything else."""
     from chimerax.atomic import Residue
+    # Each chain's residues once: chain.residues makes a new collection on every access, and
+    # asking it once a residue made opening the dialog take 0.2 s a time for 700 residues.
+    position, residues = {}, {}
+    for chain in pae.structure.chains:
+        listed = residues[chain] = list(chain.residues)
+        position.update((r, i) for i, r in enumerate(listed) if r is not None)
+    rows = []
+    for r in pae.row_residues_or_atoms():
+        if not isinstance(r, Residue) or r.polymer_type != Residue.PT_AMINO or r not in position:
+            rows.append(None)
+        else:
+            i = position[r]
+            previous = residues[r.chain][i - 1] if i else None
+            rows.append(dict(chain_id=r.chain_id, number=int(r.number), insertion_code=r.insertion_code,
+                             aa=r.one_letter_code, chain_index=i,
+                             break_before=previous is not None and not peptide_bonded(previous, r)))
+    return rows
+
+
+def snapshot(plot, flanks, preview=False):
+    """
+    Read the live source once, before starting a subprocess. With preview, only the chains
+    (for what the dialog shows): the source's coordinates and scores are taken on Predict.
+    """
     import numpy as np
     pae = plot.pae
     if pae.structure.deleted or plot.closed():
         raise ValueError('The source plot or structure has been closed.')
-    indices = {r: i for chain in pae.structure.chains for i, r in enumerate(chain.residues)
-               if r is not None}
-    rows = []
-    for r in pae.row_residues_or_atoms():
-        if not isinstance(r, Residue) or r.polymer_type != Residue.PT_AMINO or r not in indices:
-            rows.append(None)
-        else:
-            i = indices[r]
-            previous = r.chain.residues[i - 1] if i else None
-            rows.append(dict(chain_id=r.chain_id, number=int(r.number), insertion_code=r.insertion_code,
-                             aa=r.one_letter_code, chain_index=i,
-                             break_before=previous is not None and not peptide_bonded(previous, r)))
-    chains = predict.crop_chains(rows, plot._prediction_region, flanks)
+    chains = predict.crop_chains(source_rows(pae), plot._prediction_region, flanks)
+    if preview:
+        if not len(predict_contacts.region_pairs(chains, plot._prediction_region)):
+            raise ValueError('Select a region containing inter-chain residue pairs.')
+        return chains, None
     rra = pae.row_residues_or_atoms()
     for c in chains:
         for entry in c['residue_map']:
@@ -68,8 +84,8 @@ def snapshot(plot, flanks):
     output_pairs = predict_contacts.region_pairs(chains, plot._prediction_region)
     if not len(output_pairs):
         raise ValueError('Select a region containing inter-chain residue pairs.')
-    source_rows = np.array([r['source_row'] for c in chains for r in c['residue_map']])
-    source_pairs = source_rows[output_pairs]
+    rows_used = np.array([r['source_row'] for c in chains for r in c['residue_map']])
+    source_pairs = rows_used[output_pairs]
     a, b = source_pairs.T
     matrix = pae.matrix('pae')
     plddt = pae.row_plddt()
@@ -456,8 +472,7 @@ class PredictionDialog(QDialog):
         self.randomize_seed.toggled.connect(self.refresh)
         self.timer = QTimer(self); self.timer.setInterval(100); self.timer.timeout.connect(self.poll)
         QApplication.instance().aboutToQuit.connect(self.shutdown)
-        self.msa_controls()
-        self.refresh()
+        self.msa_controls()                 # Refreshes once
         self.fit_height()
 
     def fit_height(self):
@@ -626,9 +641,24 @@ class PredictionDialog(QDialog):
         self.lookup_future = None
         self.refresh()
 
-    def prediction_input(self):
+    def prediction_input(self, preview=False):
         if self.plot is not None:
-            return snapshot(self.plot, self.flanks.value())
+            if not preview:
+                return snapshot(self.plot, self.flanks.value())
+            # The dialog's preview follows every keystroke: crop again only when the box,
+            # the flanks or the model changed (source_changed clears it too)
+            s = self.plot.pae.structure
+            key = (id(s), s.num_residues, self.plot._prediction_region, self.flanks.value())
+            cached = getattr(self, '_preview_cache', None)
+            if cached is None or cached[0] != key:
+                try:
+                    cached = (key, snapshot(self.plot, self.flanks.value(), preview=True), None)
+                except Exception as e:
+                    cached = (key, None, e)
+                self._preview_cache = cached
+            if cached[2] is not None:
+                raise cached[2]
+            return cached[1]
         if self.entries is None:
             if getattr(self, '_lookup_error', None):
                 raise ValueError(f'The input could not be read: {self._lookup_error}')
@@ -640,6 +670,7 @@ class PredictionDialog(QDialog):
 
     def source_changed(self):
         '''The plot's box, model or window changed: show what Predict would use now.'''
+        self._preview_cache = None
         if not self.is_busy():
             self.refresh()      # A running job keeps its own input; refreshed when it ends
 
@@ -675,7 +706,7 @@ class PredictionDialog(QDialog):
             problem = 'Reading the input (UniProt lookup)…'
         else:
             try:
-                chains, _ = self.prediction_input()
+                chains, _ = self.prediction_input(preview=True)
             except Exception as e:
                 problem = str(e)
         if chains:
