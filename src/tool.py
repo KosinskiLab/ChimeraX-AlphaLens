@@ -32,6 +32,7 @@ PLDDT_BINS = tuple(zip((-1e9, 50, 70, 90), PLDDT_COLORS))[::-1]
 MAX_DISPLAY = 900          # Matrices larger than this are pooled for the overview image
 MAX_DETAIL = 1200          # Max pixels per side when redrawing a zoomed region
 MAX_PIXELS_PER_RESIDUE = 40
+MIN_PLOT_PX = 200          # Smallest matrix view, also when docked in a crowded column
 MAX_DOTS = 40000
 SLIDER_MIN = 0.05          # Lowest contact threshold offered by the slider
 UNDEFINED_GRAY = (222, 222, 222)   # Spread view: pairs whose distance is mostly in the last bin
@@ -193,6 +194,12 @@ class AlphaLensView(PAEView):
     def sizeHint(self):
         from Qt.QtCore import QSize
         return QSize(560, 620)
+
+    def minimumSizeHint(self):
+        # The controls around the matrix have fixed heights: without a minimum here, a dock
+        # column crowded by a second docked plot squeezed the matrix to a few pixels.
+        from Qt.QtCore import QSize
+        return QSize(MIN_PLOT_PX, MIN_PLOT_PX)
 
     # -- Image ------------------------------------------------------------------
     def set_image(self, rgb, scale, n, track, keep_zoom=False):
@@ -863,6 +870,38 @@ class AlphaLensPlot(ToolInstance):
         self._redraw()
         self._set_info('')
         tw.manage(placement=None)
+
+        # Docking: share the dock column with the other docked plots (see docking.py).
+        self._dock_timer = dt = QTimer()
+        dt.setSingleShot(True)
+        dt.setInterval(50)          # After Qt has laid out the newly docked window
+        dt.timeout.connect(self._fit_docked)
+        dw = getattr(tw, '_dock_widget', None)
+        if dw is not None:
+            dw.topLevelChanged.connect(self._dock_changed)
+            dw.dockLocationChanged.connect(self._dock_changed)
+
+    def _dock_changed(self, *args):
+        t = getattr(self, '_dock_timer', None)
+        if t is not None:
+            t.start()
+
+    def _fit_docked(self):
+        tw = self.tool_window
+        dw = getattr(tw, '_dock_widget', None) if tw is not None else None
+        if dw is None:
+            return
+        from .docking import fit_docked_plot, redock_if_lost
+        mw = self.session.ui.main_window
+        tries = getattr(self, '_redock_tries', 0)
+        if tries < 2 and redock_if_lost(mw, dw):
+            self._redock_tries = tries + 1
+            self._dock_timer.start()        # Share the column once Qt has laid it out
+            return
+        self._redock_tries = 0
+        plot_docks = [getattr(t.tool_window, '_dock_widget', None)
+                      for t in self.session.tools.list() if isinstance(t, AlphaLensPlot)]
+        fit_docked_plot(mw, dw, plot_docks)
 
     # ---------------------------------------------------------------------------
     # Data / structure
@@ -2325,6 +2364,8 @@ class AlphaLensPlot(ToolInstance):
             self._slider_timer.timeout.disconnect()
             self._progress_timer.stop()
             self._progress_timer.timeout.disconnect()
+            self._dock_timer.stop()
+            self._dock_timer.timeout.disconnect()
         except Exception:
             pass
         v.dot_click_cb = None
