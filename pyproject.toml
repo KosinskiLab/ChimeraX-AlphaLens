@@ -4,7 +4,7 @@ build-backend = "chimerax.bundle_builder.cx_pep517"
 
 [project]
 name = "ChimeraX-AlphaLens"
-version = "1.5.0"
+version = "1.5.1"
 license = { text = "MIT" }
 authors = [{ name = "Dmitry Molodenskiy" }]
 description = "AlphaFold PAE, contact-probability, model-contact, distogram-spread and seed-agreement plot (formerly DistoPAE)"

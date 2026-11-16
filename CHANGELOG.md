@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.5.1
+
+* Plots docked into the main window stay readable. Docking a second plot under the first used
+  to squeeze the first one's matrix to about 50 px, because its controls kept their height.
+  The matrix now never gets smaller than 200 px. When a plot is docked, the plots in that
+  column share its height equally (up to the size they ask for), and the other tools there
+  (Log, Models) keep at least 160 px or their own minimum.
+* A plot docked again after floating (two plots floated and docked again) could come back
+  loose over the graphics instead of in the dock column; it is now docked properly.
+* Add `tests/chimerax_dock_check.py` (two plots docked one after the other, then floated and
+  docked again at once) and unit tests of how a dock column is shared.
+
 ## 1.5.0
 
 * Is the re-predicted interface the same as the source's? The report, the dialog and the result
