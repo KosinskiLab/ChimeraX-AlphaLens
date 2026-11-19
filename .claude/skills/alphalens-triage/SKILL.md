@@ -33,7 +33,7 @@ A greyed-out tab's tooltip names what is missing. The data behind each view:
 Check the folder directly: `ls <fold>/seed-*_distogram`; for a pickle,
 `xz -dc result_model_1*.pkl.xz | grep -a -c distogram` (0 means none). AF3 writes distograms only
 with `--save_distogram`; AlphaPulldown drops them from AF2 pickles unless told to keep them
-(README, "Getting a distogram").
+(docs/reference.md, "Getting a distogram").
 
 Lab predictions, as of 2026-11-07:
 - benchmark_26: only `predictions/full_unfiltered_v3/<organism>/{af2,af3}/` kept distograms; the

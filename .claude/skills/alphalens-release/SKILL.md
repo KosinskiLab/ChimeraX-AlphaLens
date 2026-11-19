@@ -80,6 +80,7 @@ Each step runs on the user's request; ask when the request does not cover it.
 - **GitHub release**: `gh release create vX.Y.Z dist/<wheel> -R KosinskiLab/AlphaLens --title "ChimeraX-AlphaLens X.Y.Z"`
   with the changelog section as notes (tags are `vX.Y.Z`).
 - **Lab share**: copy the wheel to `/g/kosinski/dima/software/` and `README.md` and `CHANGELOG.md`
-  to `/g/kosinski/dima/software/chimerax-alphalens/`, `cmp` each copy, then check on the cluster
+  to `/g/kosinski/dima/software/chimerax-alphalens/` (and `docs/*.md` plus `docs/images/` to its
+  `docs/`, which the README links to), `cmp` each copy, then check on the cluster
   (`ssh embl ls -la ...`) that they are readable as the earlier wheels are (`-rwxr-xr-x`).
   Collaborators install from there.
