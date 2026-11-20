@@ -1,13 +1,14 @@
 ---
 name: alphalens-release
-description: AlphaLens releases and test builds. Use when bumping the version, building or installing a wheel, running the test suites (pytest, ChimeraX smoke test, window check), or putting a new wheel on the lab share or GitHub.
+description: AlphaLens releases and test builds. Use when bumping the version, building or installing a wheel, running the test suites (pytest, ChimeraX smoke test, window check), or putting a new wheel on the lab share, GitHub or the ChimeraX Toolshed.
 ---
 
 # Release AlphaLens
 
 A release is a wheel that leaves this checkout: installed for a user, copied to the lab share,
-or attached to a GitHub release. Collaborators tell builds apart only by version, so every such
-wheel gets a version of its own; two different wheels under one version are the failure to avoid.
+attached to a GitHub release or uploaded to the ChimeraX Toolshed. Collaborators tell builds
+apart only by version, so every such wheel gets a version of its own; two different wheels under
+one version are the failure to avoid.
 
 Run ChimeraX with `PYTHONDONTWRITEBYTECODE=1` throughout: `.pyc` files written into the app bundle
 break its macOS signature. `CX=/Applications/ChimeraX-1.12.app/Contents/MacOS/ChimeraX` below.
@@ -17,6 +18,8 @@ break its macOS signature. `CX=/Applications/ChimeraX-1.12.app/Contents/MacOS/Ch
 - `pyproject.toml` `version`: minor for new views or commands, patch for fixes.
 - `CHANGELOG.md`: a `## X.Y.Z` section on top, written for users.
 - `README.md`: the install line `chimerax_alphalens-X.Y.Z-py3-none-any.whl`.
+- `pyproject.toml` `description` and `[project.readme]` text: the Toolshed page shows them. Bring
+  them in line when a view, a command, or what local prediction downloads or sends changes.
 
 ## 2. Test the checkout
 
@@ -84,3 +87,7 @@ Each step runs on the user's request; ask when the request does not cover it.
   `docs/`, which the README links to), `cmp` each copy, then check on the cluster
   (`ssh embl ls -la ...`) that they are readable as the earlier wheels are (`-rwxr-xr-x`).
   Collaborators install from there.
+- **ChimeraX Toolshed**: the user uploads the wheel at https://cxtoolshed.rbvi.ucsf.edu/submit_app/
+  (Sign in with Google, their account); give them that URL and the wheel's path. Once AlphaLens is
+  listed there, ChimeraX offers each uploaded version to its users as an update, so every release
+  goes there too.
