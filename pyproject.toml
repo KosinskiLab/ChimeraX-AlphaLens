@@ -4,20 +4,37 @@ build-backend = "chimerax.bundle_builder.cx_pep517"
 
 [project]
 name = "ChimeraX-AlphaLens"
-version = "1.5.1"
+version = "1.5.2"
 license = { text = "MIT" }
-authors = [{ name = "Dmitry Molodenskiy" }]
-description = "AlphaFold PAE, contact-probability, model-contact, distogram-spread and seed-agreement plot (formerly DistoPAE)"
-dependencies = ["ChimeraX-Core~=1.6", "ChimeraX-AlphaFold~=1.0"]
+authors = [{ name = "Dima Molodenskiy" }, { name = "Kosinski Group, EMBL Hamburg" }]
+description = "Interactive PAE, contact-probability, model-contact, spread and agreement plots for AlphaFold2 and AlphaFold3 predictions, with experimental local prediction (formerly DistoPAE)"
+dependencies = ["ChimeraX-Core~=1.10", "ChimeraX-AlphaFold~=1.0"]
 dynamic = ["classifiers", "requires-python"]
 
 [project.readme]
-content-type = "text"
-text = """Interactive plot for AlphaFold2 / AlphaFold3 predictions (formerly DistoPAE). Shows the
-predicted aligned error (PAE) matrix with a per-residue pLDDT track and, from the distogram or AF3
-contact_probs, the predicted contact probability P(d < 8 A), the distances in the model with its
-contacts colored by that probability, the spread of each predicted distance distribution and the agreement between
-seeds or models. Predicted contacts can be drawn on the structure and exported to CSV."""
+content-type = "text/markdown"
+text = """AlphaLens shows an AlphaFold2 or AlphaFold3 prediction as an interactive plot beside the
+structure. Besides the PAE matrix with a pLDDT track, it shows:
+
+- the predicted contact probability, P(d < 8 Å), from the distogram or AF3 contact_probs;
+- the model's contacts against the predicted ones (green: both, vermillion: predicted only,
+  purple: in the model only);
+- the spread of each predicted distance (needs the distogram);
+- how many AF3 seeds or AF2 models agree on each contact.
+
+Predicted contacts can be drawn on the structure and exported to CSV, and the plot is saved in
+ChimeraX sessions. AlphaLens opens output folders from AlphaFold2, AlphaPulldown, AlphaFold3 and
+ColabFold. It was called DistoPAE up to version 0.4; the `distopae` command still works.
+
+Local prediction (experimental, `alphalens predict`) runs AlphaFold2 or AlphaFold3 through
+LocalFold on Apple Silicon Macs and on Linux with an NVIDIA GPU, only when you start it. The first
+prediction downloads and compiles the LocalFold engine from GitHub and downloads the model
+parameters. UniProt IDs are looked up at UniProt, and the optional remote alignment search sends
+your sequences to the ColabFold MSA server. AlphaFold3 parameters are under Google DeepMind's
+terms of use, which you accept before the first AF3 prediction.
+
+Documentation: https://github.com/KosinskiLab/AlphaLens
+"""
 
 [project.urls]
 Home = "https://github.com/KosinskiLab/AlphaLens"
@@ -26,7 +43,7 @@ Home = "https://github.com/KosinskiLab/AlphaLens"
 min-session-version = 1
 max-session-version = 1
 categories = ["Structure Prediction"]
-classifiers = ["Development Status :: 3 - Alpha"]
+classifiers = ["Development Status :: 4 - Beta"]
 
 [tool.chimerax.package-data]
 "src/" = ["weights/*.f32", "weights/*.txt"]
