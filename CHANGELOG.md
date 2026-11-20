@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.5.2
+
+* No change to the plot or to prediction. The bundle's description, which the ChimeraX Toolshed
+  shows, is up to date: it covers Model contacts and local prediction, including what local
+  prediction downloads and what it sends to UniProt and ColabFold. The development status is
+  Beta, and the authors are Dima Molodenskiy and the Kosinski Group, EMBL Hamburg.
+* Needs ChimeraX 1.10 or newer (it said 1.6). ChimeraX 1.6 and 1.7 lack functions AlphaLens
+  uses to show a clicked contact, select along the pLDDT track and compare with the source;
+  1.8 and 1.9 have them but are untested.
+
 ## 1.5.1
 
 * Plots docked into the main window stay readable. Docking a second plot under the first used

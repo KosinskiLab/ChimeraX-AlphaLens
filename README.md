@@ -20,13 +20,13 @@ inter-chain pairs with P ≥ 0.5.*
 
 ## Install
 
-Requires ChimeraX 1.6 or newer (tested with 1.10 and 1.12) on macOS, Linux or Windows.
+Requires ChimeraX 1.10 or newer (tested with 1.10 and 1.12) on macOS, Linux or Windows.
 
 1. Download `chimerax_alphalens-<version>-py3-none-any.whl` from the
    [Releases](https://github.com/KosinskiLab/AlphaLens/releases) page. Keep the file name.
 2. In the ChimeraX command line:
 
-       toolshed install ~/Downloads/chimerax_alphalens-1.5.1-py3-none-any.whl
+       toolshed install ~/Downloads/chimerax_alphalens-1.5.2-py3-none-any.whl
 
 3. Restart ChimeraX.
 
