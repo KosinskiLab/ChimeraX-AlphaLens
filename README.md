@@ -20,20 +20,23 @@ inter-chain pairs with P ≥ 0.5.*
 
 ## Install
 
-Requires ChimeraX 1.10 or newer (tested with 1.10 and 1.12) on macOS, Linux or Windows.
+Requires ChimeraX 1.10 or newer, on macOS, Linux or Windows.
 
-1. Download `chimerax_alphalens-<version>-py3-none-any.whl` from the
-   [Releases](https://github.com/KosinskiLab/AlphaLens/releases) page. Keep the file name.
-2. In the ChimeraX command line:
+AlphaLens is on the [ChimeraX Toolshed](https://cxtoolshed.rbvi.ucsf.edu/apps/chimeraxalphalens).
+In the ChimeraX command line, run
 
-       toolshed install ~/Downloads/chimerax_alphalens-1.5.2-py3-none-any.whl
+    toolshed install AlphaLens
 
-3. Restart ChimeraX.
+or choose **Tools → More Tools…**, find AlphaLens and click **Install**. Then restart ChimeraX.
+`toolshed list` shows the installed version; `toolshed install AlphaLens version latest` updates
+to the newest release.
 
-`toolshed list` shows the installed version. To update, install the newer wheel in the same way.
-To remove AlphaLens, run `toolshed uninstall AlphaLens`. AlphaLens was called DistoPAE up to
-version 0.4; if you still have it, run `toolshed uninstall DistoPAE`. The `distopae` command
-still works.
+To install a wheel from the [Releases](https://github.com/KosinskiLab/ChimeraX-AlphaLens/releases)
+page instead, keep its file name and give its path:
+
+    toolshed install ~/Downloads/chimerax_alphalens-1.6.0-py3-none-any.whl
+
+To remove AlphaLens, run `toolshed uninstall AlphaLens`.
 
 Local prediction needs no separate install: the first time you predict, the button reads
 **Install & Predict** and sets up the engine. It needs Apple Silicon with macOS 13 or newer and
@@ -47,7 +50,10 @@ the Xcode Command Line Tools, or Linux x86_64 with an NVIDIA GPU and the CUDA to
     alphalens #1                                    # a structure that is already open
     alphalens predict                               # local prediction
 
-You can also use **Tools → Structure Prediction → AlphaLens** or **AlphaLens Prediction**.
+Or use the menus: **Tools → Structure Prediction → AlphaLens** opens a window for an open
+prediction (another window each time, while there are predictions without one), or asks for a
+prediction folder; **AlphaLens Prediction** opens the prediction dialog. **Help** in each window,
+or in its right-click menu, opens this manual in ChimeraX.
 
 AlphaLens looks for the PAE file and the distogram next to the structure. It reads output folders
 from AlphaFold2, AlphaPulldown, AlphaFold3 and ColabFold. Most pipelines do not keep the
@@ -71,13 +77,18 @@ need missing data are greyed out, and their tooltip says why. To keep distograms
 ## Using the plot
 
 * **Hover** over the matrix to see a residue pair's values. **← / →** switch views.
-* **Zoom** with the scroll wheel or a pinch. **Pan** with Shift-drag. **Fit** or Esc resets the view.
+* **Zoom** with the scroll wheel or a pinch, at the pointer. **Pan** with Shift-drag. **Fit** or
+  Esc resets the view. The top right corner of the plot reminds you how. Zoomed in, the pLDDT
+  track stays at the bottom of the plot, with residue numbers.
 * The **contact probability slider** sets the threshold for the dots, the 3D contacts, the
   agreement view and the CSV export.
 * **Show Contacts** draws the predicted contacts on the structure.
 * **Click a dot** to show that contact in 3D. Its values appear in the log.
 * **Drag a box** to keep only the contacts inside it, for example between two chains.
-* **Model** switches between the AF2 models or AF3 samples of the prediction.
+* **Model** shows another AF2 model or AF3 sample of the prediction, another open prediction,
+  or a prediction folder you choose, in the same window. For another model of the prediction,
+  the contact lines, the clicked contact, the box and the hidden residues move to it, and
+  **Color pLDDT** or **Color PAE Domains** colors it from its own data.
 * The **hide** slider next to the pLDDT track hides low-pLDDT parts. To hide a region, drag along
   the pLDDT track, then right-click and choose **Hide selected**.
 * **Color pLDDT** and **Color PAE Domains** color the structure.
@@ -105,9 +116,17 @@ source, including DockQ.
   supported layouts, limitations
 * [Local prediction guide](docs/local-prediction.md)
 * [Changelog](CHANGELOG.md)
-* [Development](docs/development.md): installing from source and running the tests
+* [Development](docs/development.md): installing from source, the tests, and notes on local
+  prediction
+
+## Credits
+
+Local prediction runs [LocalFold](https://github.com/sokrypton/localfold) by Sergey Ovchinnikov.
+The AlphaFold 2 parameters are by Google DeepMind under CC BY 4.0, and the AlphaFold 3 parameters
+are under Google DeepMind's terms of use. The remote alignment search uses the ColabFold MMseqs2
+server. See the [prediction guide](docs/local-prediction.md#credits).
 
 ## License
 
 MIT; see [LICENSE](LICENSE). Bug reports and questions go to the
-[issue tracker](https://github.com/KosinskiLab/AlphaLens/issues).
+[issue tracker](https://github.com/KosinskiLab/ChimeraX-AlphaLens/issues).

@@ -3,9 +3,10 @@
     ALPHALENS_WINDOW_DIRS="/path/to/af3_prediction;/path/to/af2_prediction" \\
         ChimeraX --exit --cmd "open tests/chimerax_window_check.py"
 
-Run it with a window: Qt's offscreen platform crashes ChimeraX. Each prediction should have a
-distogram (AF3 seed-*_distogram/ or AF2 result pickles with a 'distogram' key) so that every view
-is exercised; with two or more seeds or models the agreement view is checked too.
+Run it with a window: Qt's offscreen platform crashes ChimeraX. With a distogram (AF3
+seed-*_distogram/ or AF2 result pickles with a 'distogram' key) every view is exercised; an AF3
+prediction without one must have Spread greyed out and the other views working. With two or more
+seeds or models the agreement view is checked too (AF3 seeds need no distogram for it).
 
 Environment:
   ALPHALENS_WINDOW_DIRS     prediction folders (or model files), separated by ';' (required)
@@ -92,15 +93,23 @@ def check_prediction(c, pkg, label, path):
     s = pae.structure
     plot = s._alphalens_plot
     c.check(f'{label} plot opened', plot is not None and not plot.closed(), f'{s}, {time.time() - t0:.1f} s')
-    if not c.wait_for(lambda: pae.has_distogram, f'{label} distogram read in the background'):
+    # Its data read in the background: the distogram, if the prediction kept one
+    if not c.wait_for(lambda: plot._load_progress is None and (pae.has_distogram or pae._distogram_file is None),
+                      f'{label} data read in the background'):
         return
     c.pump(0.5)
+    if not pae.has_distogram:
+        tab = plot._tabs['spread']
+        c.check(f'{label} no distogram: Spread greyed out, its tooltip says how to get one',
+                not tab.isEnabled() and '--save_distogram' in tab.toolTip(), tab.toolTip()[:140])
 
     tabs = {k: b.text() for k, b in plot._tabs.items()}
     c.check(f'{label} tab labels', tabs['contact'] == 'Contact probability'
             and tabs['model'] == 'Model contacts', str(tabs))
     widths = set()
     for key in ('pae', 'contact', 'model', 'spread'):
+        if key == 'spread' and not pae.has_distogram:
+            continue
         plot._tabs[key].click()
         c.pump(0.4)
         heading = plot._heading.text().split('</b>')[0].replace('<html><b>', '')
@@ -160,27 +169,32 @@ def check_prediction(c, pkg, label, path):
                              np.unravel_index(np.argmax(np.triu(P, 1)), P.shape)))
     plot._report(j, i)
     info = plot._info.text()
-    c.check(f'{label} hover', all(t in info for t in ('PAE', 'P(d<', 'σ', 'E[d]', 'model ')), info[:160])
+    wanted = ('PAE', 'P(d<', 'σ', 'E[d]', 'model ') if pae.has_distogram else ('PAE', 'P(d<', 'model ')
+    c.check(f'{label} hover', all(t in info for t in wanted), info[:160])
     plot.set_threshold(0.5)
     plot._contacts_button.click()
     c.pump(0.5)
+    interface = len(pairs) > 0                      # Some predictions have no pair at P >= 0.5
+    if not interface:
+        c.log(f'INFO  {label}: no inter-chain pair at P ≥ 0.5; lines, dots and their colors not checked')
     group = s.pseudobond_group(contacts.GROUP_NAME, create_type=None)
     n = group.num_pseudobonds if group else 0
     colors = group.pseudobonds.colors[:, :3].astype(int) if n else np.zeros((0, 3), int)
     palette = np.array(contacts.CONTACT_COLORS)
     in_palette = bool((np.abs(colors[:, None, :] - palette[None]).max(-1) == 0).any(1).all())
     c.check(f'{label} Show Contacts', n == min(len(pairs), contacts.MAX_LINES) and in_palette
-            and len(colors) > 0 and not (np.abs(colors - palette[0]).max(-1) == 0).any(),
+            and (len(colors) > 0 or not interface) and not (np.abs(colors - palette[0]).max(-1) == 0).any(),
             f'{n} lines in the contact colors, none orange at P ≥ 0.5; {len(pairs)} pairs')
-    dot_rgb = {(q.red(), q.green(), q.blue()) for q, _ in plot._view.dots}
-    c.check(f'{label} contact dots in the fixed P colors', bool(dot_rgb)
-            and dot_rgb <= set(contacts.CONTACT_COLORS[1:]), str(sorted(dot_rgb)))
-    plot._dots_box.setChecked(False)
-    c.pump(0.2)
-    hidden = not plot._dots_on and not plot._view.dots and not plot._view.dots_visible
-    plot._dots_box.setChecked(True)
-    c.pump(0.2)
-    c.check(f'{label} "dots on plot" box', hidden and plot._dots_on and bool(plot._view.dots))
+    if interface:
+        dot_rgb = {(q.red(), q.green(), q.blue()) for q, _ in plot._view.dots}
+        c.check(f'{label} contact dots in the fixed P colors', bool(dot_rgb)
+                and dot_rgb <= set(contacts.CONTACT_COLORS[1:]), str(sorted(dot_rgb)))
+        plot._dots_box.setChecked(False)
+        c.pump(0.2)
+        hidden = not plot._dots_on and not plot._view.dots and not plot._view.dots_visible
+        plot._dots_box.setChecked(True)
+        c.pump(0.2)
+        c.check(f'{label} "dots on plot" box', hidden and plot._dots_on and bool(plot._view.dots))
     plot._pick_contact(i, j)
     c.pump(0.3)
     picked = s.pseudobond_group(contacts.PICK_GROUP_NAME, create_type=None)
@@ -223,6 +237,7 @@ def check_prediction(c, pkg, label, path):
     if target is not None:
         menu.setCurrentIndex(target)
         menu.activated.emit(target)
+        c.wait_for(lambda: not getattr(plot, 'switch_pending', False), f'{label} other model\'s files read')
         c.pump(0.5)
         c.wait_for(lambda: plot.pae.has_distogram or plot.pae.has_contact, f'{label} other model read')
         c.pump(0.5)

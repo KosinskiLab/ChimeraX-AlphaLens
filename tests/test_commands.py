@@ -84,6 +84,11 @@ class Plot:
     def agreement_loaded(self, **kw):
         self.loaded += 1
 
+    same_prediction = True              # Whether the window still shows the reading prediction
+
+    def shows_prediction_of(self, pae):
+        return pae is self.pae or self.same_prediction
+
 
 @pytest.fixture
 def session(monkeypatch):
@@ -319,6 +324,27 @@ def test_agreement_completion_after_source_model_closed(session, tmp_path, succe
     assert old._agreement_pending is None
 
 
+@pytest.mark.parametrize('success', [True, False])
+def test_agreement_of_another_prediction_stays_out_of_the_window(session, tmp_path, success):
+    # The Model menu showed another prediction (same size) while the first one's seeds loaded
+    structure, _ = prediction(tmp_path)
+    old = PAE('', structure, np.zeros((2, 2)))
+    shown = PAE('', types.SimpleNamespace(deleted=False), np.zeros((2, 2)))
+    plot = Plot(shown)
+    plot.same_prediction = False
+    failures = []
+    plot.agreement_failed = failures.append
+    old._agreement_pending = []
+    agr = agreement.Agreement(['seed 1', 'seed 2'], 'seed', np.ones((2, 2, 2)), 8.)
+    if success:
+        cmd._agreement_loaded(session, old, plot, 2, agr, [], None, 0.)
+        assert old.agreement is agr
+    else:
+        with pytest.raises(UserError, match='read failed'):
+            cmd._agreement_loaded(session, old, plot, 2, None, [], 'read failed', 0.)
+    assert shown.agreement is None and plot.loaded == 0 and failures == []
+
+
 @pytest.mark.parametrize('min_prob', [None, 0.8])
 def test_command_export_passes_active_region(session, tmp_path, monkeypatch, min_prob):
     structure, _ = prediction(tmp_path)
@@ -332,3 +358,23 @@ def test_command_export_passes_active_region(session, tmp_path, monkeypatch, min
     monkeypatch.setattr(cmd, 'save_contacts_csv', lambda *a, **kw: exports.append((a[3], kw)))
     cmd.alphalens(session, structure, save_contacts=str(tmp_path / 'contacts.csv'), min_prob=min_prob)
     assert exports == [(plot.threshold if min_prob is None else min_prob, {'region': (0, 0, 1, 1)})]
+
+
+def test_distogram_shared_only_while_its_file_is_unchanged(tmp_path):
+    import os
+    from types import SimpleNamespace
+    from alphalens import data
+    path = tmp_path / 'seed-1_distogram' / 'prediction.npz'
+    path.parent.mkdir()
+    np.savez(path, distogram=np.ones((4, 4, 64), np.float16))
+    metrics = {'path': str(path), 'file_signature': data.file_signature(str(path)), 'cutoff': 8.0,
+               'contact': np.zeros((4, 4), np.float32)}
+    read = SimpleNamespace(has_distogram=True, _rows=None, _full_size=4, metrics=metrics)
+    sample = SimpleNamespace(alphafold_pae=read)
+    session = SimpleNamespace(models=SimpleNamespace(list=lambda: [sample]))
+    pae = SimpleNamespace(_rows=None, _full_size=4)
+    assert cmd._read_distogram(session, pae, str(path), 8.0) == (metrics, sample)
+    assert cmd._read_distogram(session, pae, str(path), 6.0) == (None, None)       # Another cutoff
+    assert cmd._read_distogram(session, SimpleNamespace(_rows=[0, 1, 2], _full_size=4), str(path), 8.0) == (None, None)
+    os.utime(path, ns=(1, 1))                                                      # The file changed
+    assert cmd._read_distogram(session, pae, str(path), 8.0) == (None, None)
