@@ -132,6 +132,11 @@ def pool_vector(v, f):
     return np.nanmean(v.reshape(k, f), axis=1)
 
 
+def plddt_hide_text(value):
+    '''The label of the pLDDT slider, which hides the parts of the model below its value.'''
+    return f'hide <{value}' if value else 'hide'
+
+
 def plddt_track_rgb(p, h):
     k = len(p)
     p = np.nan_to_num(p, nan=0.0)
@@ -175,16 +180,27 @@ class AlphaLensView(PAEView):
         self.dot_click_cb = None
         self.track_hidden = []      # [(start, end)] rows hidden in the 3D model, faded on the track
         self.plddt_line = 0         # Value of the pLDDT slider, drawn across the track
+        # Zoomed in, the pLDDT track stays in view as a footer, numbered (see footer_rect())
+        self.track_image = None     # QImage of the track at full resolution, one column per row
+        self.row_numbers = None     # Residue number of each matrix row, for the footer's ticks
+        self.footer_note = ''       # Drawn at the right of the footer (the hide slider's value)
+        self.moved_cb = None        # Called at once whenever the matrix moves on screen (zoom, pan, resize)
+        self.footer_reserve = 0     # Pixels kept free on the footer's right (the hide slider)
         self._over_dot = False
         self.zoomed = False
         self._pan_last = None
+        self.hint_visible = True    # The zoom / pan hint in the corner; off while saving an image
+        self._hovering = False
         from Qt.QtCore import Qt, QTimer
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         from Qt.QtGui import QPainter
         self.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         self.setBackgroundBrush(self.palette().window())
         from Qt.QtWidgets import QGraphicsView
-        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        # zoom_by() keeps the point under the pointer itself. Qt's AnchorUnderMouse uses the last
+        # position Qt saw in a mouse move, and PAEView's mouse handlers never pass moves on to
+        # QGraphicsView, so zooming after a pan jumped to a stale point (the matrix's corner).
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self._timer = t = QTimer(self)
         t.setSingleShot(True)
@@ -217,13 +233,15 @@ class AlphaLensView(PAEView):
         h = track[1] if track else n
         m = 0.07 * n                        # Margin for chain labels
         w = n + (2 if track else 1.3) * m   # With room on the right for the pLDDT slider
+        h += (2 if track else 1.3) * m      # and below the track for its value in a narrow window
         if keep_zoom and self.zoomed:
             center = self.mapToScene(self.viewport().rect().center())
-            scene.setSceneRect(-m, -m, w, h + 1.3 * m)
+            scene.setSceneRect(-m, -m, w, h)
             self.centerOn(center)
         else:
-            scene.setSceneRect(-m, -m, w, h + 1.3 * m)
+            scene.setSceneRect(-m, -m, w, h)
             self.reset_zoom()
+        self._moved()
         self._timer.start()
         self.viewport().update()
 
@@ -239,9 +257,21 @@ class AlphaLensView(PAEView):
         self.zoomed = False
         from Qt.QtCore import Qt
         self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self._moved()
         self._timer.start()
 
-    def zoom_by(self, factor):
+    def _moved(self):
+        '''The matrix moved on screen: widgets placed over it follow in the same frame, so that none
+        is drawn for a moment where it was (the pLDDT slider's knob showed on the diagonal).'''
+        if self.moved_cb:
+            self.moved_cb()
+
+    def zoom_by(self, factor, anchor=None):
+        '''
+        Zoom by factor, keeping the matrix point at anchor (viewport pixels; the pointer for the
+        scroll wheel and pinch, else the middle of the view) where it is on the screen.
+        '''
+        from Qt.QtCore import QPointF
         cur = self.transform().m11()
         fit = self._fit_scale()
         target = min(max(cur * factor, fit), MAX_PIXELS_PER_RESIDUE)
@@ -249,34 +279,69 @@ class AlphaLensView(PAEView):
             if self.zoomed:
                 self.reset_zoom()
             return
+        if anchor is None:
+            anchor = QPointF(self.viewport().rect().center())
+        anchor = QPointF(anchor)
+        fixed = self.scene_point(anchor)
         self.scale(target / cur, target / cur)
+        moved = self.viewport_point(fixed) - anchor
+        hs, vs = self.horizontalScrollBar(), self.verticalScrollBar()
+        hs.setValue(hs.value() + round(moved.x()))
+        vs.setValue(vs.value() + round(moved.y()))
         self.zoomed = True
+        self._moved()
         self._timer.start()
+        self.viewport().update()
+
+    def scene_point(self, p):
+        '''Scene (matrix) coordinates of viewport point p, without rounding p to whole pixels.'''
+        return self.viewportTransform().inverted()[0].map(p)
+
+    def viewport_point(self, p):
+        return self.viewportTransform().map(p)
 
     def wheelEvent(self, event):
         # Any scroll (mouse wheel, smooth-scrolling mouse, trackpad) zooms at the cursor.
         delta = event.angleDelta().y() or event.pixelDelta().y()
         if delta:
-            self.zoom_by(1.0015 ** max(-480, min(480, delta)))
+            self.zoom_by(1.0015 ** max(-480, min(480, delta)), anchor=event.position())
         event.accept()
 
     def viewportEvent(self, event):
         from Qt.QtCore import QEvent, Qt
         if event.type() == QEvent.Type.NativeGesture:
             if event.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
-                self.zoom_by(1.0 + event.value())
+                self.zoom_by(1.0 + event.value(), anchor=event.position())
                 return True
         return PAEView.viewportEvent(self, event)
+
+    def enterEvent(self, event):
+        PAEView.enterEvent(self, event)
+        self._hovering = True
+        self.viewport().update()
+
+    def hint_text(self):
+        '''How to zoom, and once zoomed in how to pan: drawn in the corner of the view.'''
+        if not self.hint_visible or self.n == 0:
+            return None
+        if self.zoomed:
+            return 'Shift-drag to pan  ·  Esc or Fit: whole matrix'
+        if self._hovering:
+            return 'Scroll or pinch to zoom'
+        return None
 
     def resizeEvent(self, event):
         from Qt.QtWidgets import QGraphicsView
         QGraphicsView.resizeEvent(self, event)
         if not self.zoomed:
             self.reset_zoom()
+        self._moved()
         self._timer.start()
 
     def scrollContentsBy(self, dx, dy):
         PAEView.scrollContentsBy(self, dx, dy)
+        self.viewport().update()    # Repaint all: the hint stays put while the matrix moves
+        self._moved()
         self._timer.start()
 
     def mousePressEvent(self, event):
@@ -337,6 +402,8 @@ class AlphaLensView(PAEView):
 
     def leaveEvent(self, event):
         PAEView.leaveEvent(self, event)
+        self._hovering = False
+        self.viewport().update()
         if self.leave_cb:
             self.leave_cb()
 
@@ -350,7 +417,7 @@ class AlphaLensView(PAEView):
         s = self.transform().m11()
         d2 = ((self.dot_xy[:, 0] - x) ** 2 + (self.dot_xy[:, 1] - y) ** 2) * s * s
         k = int(np.argmin(d2))
-        r = self._dot_width_px() / 2 + 3
+        r = self._dot_width_px() / 2 + 5     # A little beyond the dot: they are small zoomed out
         if d2[k] > r * r:
             return None
         i, j = self.dot_pairs[k]
@@ -362,7 +429,7 @@ class AlphaLensView(PAEView):
         if k in (Qt.Key.Key_Left, Qt.Key.Key_Right) and self._key_callback:
             self._key_callback(-1 if k == Qt.Key.Key_Left else 1)
         elif k in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
-            self.zoom_by(1.5)
+            self.zoom_by(1.5)               # About the middle of the view
         elif k == Qt.Key.Key_Minus:
             self.zoom_by(1 / 1.5)
         elif k in (Qt.Key.Key_0, Qt.Key.Key_Escape):
@@ -380,6 +447,57 @@ class AlphaLensView(PAEView):
         self._drag_box.setZValue(3)
 
     # -- Overlay ------------------------------------------------------------------
+    FOOTER_BARS = 34                # Footer: the track's bars, and above them the residue numbers
+    FOOTER_TICKS = 15
+
+    def natural_track_rect(self):
+        '''The pLDDT track where the scene has it, in viewport coordinates.'''
+        from Qt.QtCore import QPointF, QRectF
+        if not self.track:
+            return None
+        return QRectF(QPointF(self.mapFromScene(QPointF(0, self.track[0]))),
+                      QPointF(self.mapFromScene(QPointF(self.n, self.track[1]))))
+
+    def footer_rect(self):
+        '''
+        Zoomed in, while the track is below the view, it is drawn as a footer at the bottom of the
+        view, under the visible columns. None when the track is in view (or not zoomed).
+        '''
+        from Qt.QtCore import QRectF
+        r = self.natural_track_rect()
+        if r is None or not self.zoomed or self.track_image is None:
+            return None
+        vr = self.viewport().rect()
+        if r.bottom() <= vr.height():
+            return None
+        h = self.FOOTER_BARS + self.FOOTER_TICKS
+        return QRectF(0, vr.height() - h, vr.width(), h)
+
+    def footer_bars(self, footer):
+        from Qt.QtCore import QRectF
+        return QRectF(footer.left(), footer.bottom() - self.FOOTER_BARS, footer.width(), self.FOOTER_BARS)
+
+    def _scene_position(self, event):
+        '''Scene point under the pointer; on the footer, the track's row under it.'''
+        pos = event.position()
+        footer = self.footer_rect()
+        p = self.mapToScene(pos.toPoint())
+        if footer is not None and footer.contains(pos):
+            bars = self.footer_bars(footer)
+            f = min(1.0, max(0.0, (pos.y() - bars.top()) / bars.height()))
+            return p.x(), self.track[0] + f * (self.track[1] - self.track[0])
+        return p.x(), p.y()
+
+    def tick_rows(self, x0, x1):
+        '''Rows in [x0, x1) to number at the current zoom: round residue numbers, 45 px apart or more.'''
+        if self.row_numbers is None:
+            return []
+        s = self.transform().m11()
+        step = next((k for k in (1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000) if k * s >= 45), 10000)
+        nums = self.row_numbers[x0:x1]
+        rows = np.flatnonzero((nums % step == 0) & (nums >= 0)) + x0
+        return rows.tolist()
+
     def drawForeground(self, painter, rect):
         if self.n == 0:
             return
@@ -393,8 +511,136 @@ class AlphaLensView(PAEView):
             painter.resetTransform()
             vp = lambda x, y: QPointF(self.mapFromScene(QPointF(x, y)))
             self._draw_overlay(painter, vp, self.n, self.track[1] if self.track else self.n)
+            footer = self.footer_rect()
+            if footer is not None:
+                painter.save()              # The footer clips; the hint must not be
+                self._draw_footer(painter, footer)
+                painter.restore()
+            elif self.zoomed and self.track:
+                r = self.natural_track_rect()
+                self._draw_ticks(painter, r.left(), r.right(), r.bottom() + 1, below=True)
+            self._draw_hint(painter)
         finally:
             painter.restore()
+
+    def _draw_hint(self, painter):
+        '''hint_text() in the top right corner of the view, on a panel in the window's color.'''
+        text = self.hint_text()
+        if not text:
+            return
+        from Qt.QtGui import QColor, QFont, QFontMetricsF, QPainter
+        from Qt.QtCore import QRectF, Qt
+        font = QFont(self.font())
+        font.setPointSizeF(max(8.0, font.pointSizeF() - 1))
+        fm = QFontMetricsF(font)
+        w, h = fm.horizontalAdvance(text) + 14, fm.height() + 6
+        vr = self.viewport().rect()
+        box = QRectF(vr.right() - w - 6, vr.top() + 6, w, h)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        bg = QColor(self.palette().window().color())
+        bg.setAlpha(230)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(bg)
+        painter.drawRoundedRect(box, 4, 4)
+        painter.setFont(font)
+        painter.setPen(self._label_color())
+        painter.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
+
+    def _draw_footer(self, painter, footer):
+        '''The track at the bottom of the view, under the visible columns, numbered.'''
+        from Qt.QtGui import QColor, QPen
+        from Qt.QtCore import QRectF, QPointF, Qt
+        bg = QColor(self.palette().window().color())
+        bg.setAlpha(240)
+        painter.fillRect(footer, bg)
+        bars = self.footer_bars(footer)
+        if self.footer_note:
+            from Qt.QtGui import QFont
+            font = QFont(painter.font())
+            font.setBold(False)
+            font.setPointSizeF(max(7.0, QFont(self.font()).pointSizeF() - 2))
+            painter.setFont(font)
+            painter.setPen(self._label_color())
+            fm = painter.fontMetrics()
+            painter.drawText(QPointF(footer.right() - fm.horizontalAdvance(self.footer_note) - 4,
+                                     bars.top() - 4 - fm.descent()), self.footer_note)
+        painter.setClipRect(QRectF(footer.left(), footer.top(), footer.width() - self.footer_reserve,
+                                   footer.height()))
+        vis = self.mapToScene(self.viewport().rect()).boundingRect()
+        x0, x1 = max(0, int(vis.left())), min(self.n, int(np.ceil(vis.right())) + 1)
+        if x1 <= x0:
+            return
+        left = self.mapFromScene(QPointF(x0, 0)).x()
+        right = self.mapFromScene(QPointF(x1, 0)).x()
+        target = QRectF(left, bars.top(), right - left, bars.height())
+        img = self.track_image
+        painter.drawImage(target, img, QRectF(x0, 0, x1 - x0, img.height()))
+        col = lambda x: self.mapFromScene(QPointF(x, 0)).x()
+        frac_y = lambda frac: bars.bottom() - frac * bars.height()
+        guide = QPen(QColor(150, 150, 150))
+        guide.setStyle(Qt.PenStyle.DotLine)
+        painter.setPen(guide)
+        for frac in (0.7, 0.9):
+            painter.drawLine(QPointF(left, frac_y(frac)), QPointF(right, frac_y(frac)))
+        for start, end in self.track_hidden:
+            if end > x0 and start < x1:
+                painter.fillRect(QRectF(QPointF(col(max(start, x0)), bars.top()),
+                                        QPointF(col(min(end, x1)), bars.bottom())), QColor(255, 255, 255, 190))
+        if self.plddt_line > 0:
+            line = QPen(QColor(20, 20, 20))
+            line.setWidthF(1.5)
+            painter.setPen(line)
+            y = frac_y(self.plddt_line / 100)
+            painter.drawLine(QPointF(left, y), QPointF(right, y))
+        if self.show_dividers:
+            pen = QPen(QColor(40, 40, 40))
+            pen.setWidthF(1.2)
+            painter.setPen(pen)
+            for _, start, _ in self.chains[1:]:
+                if x0 < start < x1:
+                    painter.drawLine(QPointF(col(start), bars.top()), QPointF(col(start), bars.bottom()))
+        frame = QPen(QColor(90, 90, 90))
+        frame.setWidthF(1.0)
+        painter.setPen(frame)
+        painter.drawRect(target)
+        note = 0
+        if self.footer_note:
+            note = painter.fontMetrics().horizontalAdvance(self.footer_note) + 14
+        self._draw_ticks(painter, left, min(right, footer.right() - max(note, self.footer_reserve)),
+                         bars.top() - 1, below=False)
+
+    def _draw_ticks(self, painter, left, right, y, below):
+        '''Residue numbers of the visible columns, under (below) or over the line y.'''
+        from Qt.QtGui import QFont, QPen, QColor
+        from Qt.QtCore import QPointF
+        vis = self.mapToScene(self.viewport().rect()).boundingRect()
+        x0, x1 = max(0, int(vis.left())), min(self.n, int(np.ceil(vis.right())) + 1)
+        rows = self.tick_rows(x0, x1)
+        if not rows:
+            return
+        font = QFont(painter.font())
+        font.setBold(False)
+        font.setPointSizeF(max(7.0, QFont(self.font()).pointSizeF() - 2))
+        painter.setFont(font)
+        fm = painter.fontMetrics()
+        pen = QPen(self._label_color())
+        painter.setPen(pen)
+        last = -1e9
+        for i in rows:
+            x = self.mapFromScene(QPointF(i + 0.5, 0)).x()
+            if x < left or x > right:
+                continue
+            text = str(int(self.row_numbers[i]))
+            w = fm.horizontalAdvance(text)
+            if x - w / 2 < max(last + 6, 2) or x + w / 2 > right:
+                continue                    # Would touch the number before, or be cut at an edge
+            last = x + w / 2
+            if below:
+                painter.drawLine(QPointF(x, y), QPointF(x, y + 3))
+                painter.drawText(QPointF(x - w / 2, y + 3 + fm.ascent()), text)
+            else:
+                painter.drawLine(QPointF(x, y), QPointF(x, y - 3))
+                painter.drawText(QPointF(x - w / 2, y - 4 - fm.descent()), text)
 
     def _draw_picked(self, painter):
         from Qt.QtGui import QPen, QColor, QPainter
@@ -665,6 +911,7 @@ class AlphaLensPlot(ToolInstance):
         self._show_plddt = True
         self._color_blocks = None
         self._block_rgb = None
+        self._coloring = None               # The plot's last coloring of the structure, for another model
         self._detail_items = []
         self._render = None                 # Current render state (values, colormap, ...)
         self._data_status = 'No distogram found for this prediction'
@@ -673,8 +920,13 @@ class AlphaLensPlot(ToolInstance):
         self._hider = RowHider.for_pae(pae)
         self._selected_hidden = np.zeros(len(self._plddt), bool)    # Rows hidden by "Hide selected"
         self._models = []
+        self._model_reals = []              # Real paths of the shown prediction's model files
+        self._model_realpaths = set()
+        self._pending_switch = None         # (token, label, path) while a chosen model's files are read
 
         ToolInstance.__init__(self, session, 'AlphaLens')
+        from . import helpdocs
+        self.help = helpdocs.help_url(helpdocs.PLOT)     # "Help" in the context menu too
 
         from chimerax.ui import MainToolWindow
         tw = MainToolWindow(self)
@@ -815,6 +1067,7 @@ class AlphaLensPlot(ToolInstance):
         ps.valueChanged.connect(self._plddt_slider_moved)
         self._plddt_value = QLabel('hide', gv.viewport())
         self._plddt_value.setToolTip('Hide the parts of the model with pLDDT below the slider value')
+        gv.moved_cb = self._place_plddt_slider      # In the same frame as the matrix moves
         self._plddt_timer = pdt = QTimer(parent)
         pdt.setSingleShot(True)
         pdt.setInterval(100)
@@ -860,6 +1113,10 @@ class AlphaLensPlot(ToolInstance):
         self._export_button = eb = QPushButton('Export CSV', bw)
         eb.clicked.connect(self._export_csv)
         bl.addWidget(eb)
+        self._help_button = hb = QPushButton('Help', bw)
+        hb.setToolTip('The AlphaLens manual: every view and control')
+        hb.clicked.connect(self.show_help)
+        bl.addWidget(hb)
         layout.addWidget(bw)
 
         self._attach_structure()
@@ -870,6 +1127,18 @@ class AlphaLensPlot(ToolInstance):
         self._redraw()
         self._set_info('')
         tw.manage(placement=None)
+
+        # The Model menu lists the other open predictions: keep it current as models come and go
+        from Qt.QtCore import QTimer
+        self._menu_timer = mt = QTimer()
+        mt.setSingleShot(True)
+        mt.setInterval(0)
+        mt.timeout.connect(self._refill_model_menu)
+        from chimerax.core.models import ADD_MODELS, REMOVE_MODELS
+        t = session.triggers
+        self._open_models_handlers = [t.add_handler(ADD_MODELS, self._open_models_changed),
+                                      t.add_handler(REMOVE_MODELS, self._open_models_changed)]
+        self._refresh_other_menus()         # They mark the predictions shown in a window
 
         # Docking: share the dock column with the other docked plots (see docking.py).
         self._dock_timer = dt = QTimer()
@@ -942,10 +1211,21 @@ class AlphaLensPlot(ToolInstance):
                 self._block_rgb = None
                 self._redraw(keep_zoom=True)
 
-    def set_pae(self, pae):
-        '''Show another model (same prediction) in this window.'''
-        same_size = pae.matrix_size == self._pae.matrix_size
+    def set_pae(self, pae, same_prediction=True):
+        '''
+        Show another model of the shown prediction in this window, or with same_prediction False
+        another prediction (no agreement, box, selection or zoom carried over). The previous
+        model gets back what the window hid and loses its clicked contact (the caller removes
+        its lines); the new one gets them, and for the same prediction the plot's last coloring
+        of the structure, computed from the new model's own data.
+        '''
+        same_size = same_prediction and pae.matrix_size == self._pae.matrix_size
+        self._pending_switch = None         # A model shown now supersedes one still being read
         self._end_progress()                # A read for the previous model is no longer shown
+        if not same_prediction:
+            # An agreement read for the previous prediction no longer belongs in this window
+            self._agreement_status = self._agreement_error = self._agreement_progress = None
+            self._sync_progress()
         self._distogram_file = getattr(pae, '_distogram_file', None)
         self._detach_structure()
         self._restore_hidden()
@@ -954,27 +1234,49 @@ class AlphaLensPlot(ToolInstance):
         if same_size and pae.agreement is None:
             pae.agreement = self._pae.agreement     # Seeds / models are shared by all models
         self._pae = pae
-        self._set_prediction_region(None)
         self._attach_structure()
         self._pair_cache = None
-        if not same_size:
+        if same_size:
+            self._notify_prediction_dialogs()       # The same box, on the model now shown
+        else:
             self._picked = None
+            self._struct_region = None
+            self._view._clear_drag_box()
+            self._set_prediction_region(None)
         self._plddt = pae.row_plddt()
         self._hider = RowHider.for_pae(pae)
         if not same_size:
             self._selected_hidden = np.zeros(len(self._plddt), bool)
         self._apply_hidden()
-        self._color_blocks = None
+        if same_prediction and (same_size or self._coloring is None or self._coloring[0] != 'box'):
+            self._apply_coloring()
+        else:
+            self._coloring = None                   # Another prediction keeps its own colors
+        if self._color_blocks is not None:          # "Color plot from structure": this model's colors
+            self._color_blocks = self._structure_color_blocks()
         self._block_rgb = None
         self._data_status = ('contact probabilities loaded' if pae.has_distogram or pae.has_contact
                              else 'No distogram found for this prediction')
-        if not same_size:
-            self._struct_region = None
+        load, progress = getattr(pae, '_distogram_load', None), getattr(pae, '_distogram_progress', None)
+        if load is not None and load.pending and progress is not None:
+            # Shown before and its distogram is still being read: show how far it has come
+            self._data_status = f'Loading distogram {self._distogram_file} ...'
+            self._load_progress = progress
+            self._sync_progress()
         self._set_chains()
-        self._populate_models()
+        if same_prediction:
+            self._fill_model_menu()                 # Its models and runs are the same
+        else:
+            self._populate_models()
         self._update_controls()
         self._update_dots()
         self._redraw(keep_zoom=same_size)
+        self._refresh_other_menus()
+
+    def model_data_loaded(self, pae):
+        '''The distogram of a model shown with set_pae has been read: draw its contacts.'''
+        if not self.closed() and pae is self._pae:
+            self.refresh_structure_contacts()
 
     def set_data_status(self, status):
         self._data_status = status
@@ -987,10 +1289,8 @@ class AlphaLensPlot(ToolInstance):
         self._redraw(keep_zoom=True)
 
     def _populate_models(self):
+        '''Read the shown prediction's models and the runs for agreement; fill the Model menu.'''
         from . import data
-        mc = self._model_combo
-        mc.blockSignals(True)
-        mc.clear()
         s = self._pae.structure
         path = getattr(s, 'filename', None)
         try:
@@ -1002,43 +1302,145 @@ class AlphaLensPlot(ToolInstance):
         except Exception:
             self._agreement_runs = []
         import os
-        cur = os.path.realpath(path) if path else None
-        current = -1
+        self._model_reals = [os.path.realpath(m['path']) if m['path'] else None for m in self._models]
+        self._model_realpaths = {r for r in self._model_reals if r}
+        self._fill_model_menu()
+
+    def model_paths(self):
+        '''Real paths of the shown prediction's model files (AF2 models, AF3 samples).'''
+        return self._model_realpaths
+
+    def shows_prediction_of(self, pae):
+        '''True if pae is the shown model's, or another model's or sample's of its prediction.'''
+        if pae is self._pae:
+            return True
+        path = getattr(pae, 'model_path', None)
+        return path is not None and path in self.model_paths()
+
+    def _fill_model_menu(self):
+        '''
+        The Model menu: the models of the shown prediction (AF2 models, AF3 samples), then the
+        other open predictions, then a prediction folder to open. Each is shown in this window.
+        '''
+        import os
         from Qt.QtCore import Qt
+        from .cmd import predicted_structures
+        mc = self._model_combo
+        mc.blockSignals(True)
+        mc.clear()
+        entries = []                        # Per menu row: (kind, value), None for a separator
+        s = self._pae.structure
+        path = getattr(s, 'filename', None)
+        shown = os.path.realpath(path) if path else None
+        # A model chosen while its files are read is selected meanwhile
+        chosen = os.path.realpath(self._pending_switch[2]) if self._pending_switch is not None else None
+        current = selected = -1
         for i, m in enumerate(self._models):
-            label = m['label'] + ('' if m['path'] else '   (not available locally)')
-            mc.addItem(label)
+            mc.addItem(m['label'] + ('' if m['path'] else '   (not available locally)'))
+            entries.append(('model', i))
             if m['path'] is None:
-                item = mc.model().item(i)
+                item = mc.model().item(mc.count() - 1)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
-            elif current < 0 and cur and os.path.realpath(m['path']) == cur:
-                current = i
+                continue
+            real = self._model_reals[i]
+            if current < 0 and real == shown:
+                current = mc.count() - 1
+            if selected < 0 and real == chosen:
+                selected = mc.count() - 1
         if current < 0:
             mc.addItem(str(s))
+            entries.append(('shown', s))
             current = mc.count() - 1
-        mc.setCurrentIndex(current)
-        n_avail = sum(1 for m in self._models if m['path'])
-        mc.setEnabled(n_avail > 1)
-        mc.setToolTip('Show another model of this prediction in this window'
-                      if n_avail > 1 else 'No other models of this prediction found locally')
+        own = self.model_paths()
+        others = [o for o in predicted_structures(self.session) if o is not s
+                  and not (getattr(o, 'filename', None) and os.path.realpath(o.filename) in own)]
+        if others:
+            mc.insertSeparator(mc.count())
+            entries.append(None)
+            for o in others:
+                p = getattr(o, '_alphalens_plot', None)
+                elsewhere = p is not None and p is not self and not p.closed()
+                mc.addItem(f'#{o.id_string} {o.name}' + ('   (in another AlphaLens window)' if elsewhere else ''))
+                entries.append(('structure', o))
+                f = getattr(o, 'filename', None)
+                if selected < 0 and chosen and f and os.path.realpath(f) == chosen:
+                    selected = mc.count() - 1
+        mc.insertSeparator(mc.count())
+        entries.append(None)
+        mc.addItem('Open a prediction folder…')
+        entries.append(('open', None))
+        self._menu_entries = entries
+        mc.setCurrentIndex(selected if selected >= 0 else current)
+        mc.setToolTip('Show another model of this prediction, another open prediction, or a '
+                      'prediction folder in this window')
         mc.blockSignals(False)
 
+    def _open_models_changed(self, *args):
+        if not self.closed():
+            self._menu_timer.start()        # Once, after a command that opens or closes several
+
+    def _refresh_other_menus(self):
+        '''The other windows' Model menus say which predictions have a window of their own.'''
+        for t in self.session.tools.list():
+            if isinstance(t, AlphaLensPlot) and t is not self and not t.closed():
+                t._open_models_changed()
+
+    def _refill_model_menu(self):
+        if not self.closed() and not self._pae.structure.deleted:
+            self._fill_model_menu()
+
+    def refill_model_menu(self):
+        self._refill_model_menu()
+
+    # A model chosen in the menu is shown once its files have been read (cmd._read_then_show)
+    def switch_started(self, label, path):
+        '''Its files are being read: say so, and show it as chosen. Returns a token for switch_finished().'''
+        token = object()
+        self._pending_switch = (token, label, path)
+        self._sync_progress()
+        return token
+
+    def switch_finished(self, token):
+        '''True if this read is still the latest choice (nothing chosen after it).'''
+        if self._pending_switch is None or self._pending_switch[0] is not token:
+            return False
+        self._pending_switch = None
+        self._sync_progress()
+        return True
+
+    @property
+    def switch_pending(self):
+        '''A chosen model's files are still being read.'''
+        return self._pending_switch is not None
+
     def _model_chosen(self, index):
-        if index >= len(self._models):
+        entries = getattr(self, '_menu_entries', [])
+        entry = entries[index] if 0 <= index < len(entries) else None
+        if entry is None or entry[0] == 'shown':
             return
-        path = self._models[index]['path']
-        if not path:
-            return
-        import os
-        cur = getattr(self._pae.structure, 'filename', None)
-        if cur and os.path.realpath(cur) == os.path.realpath(path):
-            return
-        from .cmd import switch_model
+        kind, value = entry
+        from . import cmd
         try:
-            switch_model(self.session, self, path)
+            if kind == 'model':
+                path = self._models[value]['path']
+                import os
+                cur = getattr(self._pae.structure, 'filename', None)
+                if path and not (cur and os.path.realpath(cur) == os.path.realpath(path)):
+                    cmd.switch_model(self.session, self, path, wait=False)
+                elif self._pending_switch is not None:      # Back to the shown model: drop the read
+                    self.switch_finished(self._pending_switch[0])
+            elif kind == 'structure':
+                cmd.show_structure(self.session, self, value, wait=False)
+            elif kind == 'open':
+                cmd.choose_prediction_folder(self.session, plot=self)
         except Exception as e:
-            self.session.logger.error(f'AlphaLens: could not switch model: {e}')
-            self._populate_models()
+            self.session.logger.error(f'AlphaLens: could not show {"that model" if kind == "model" else "it"}: {e}')
+        if not self.closed():
+            self._fill_model_menu()         # Back on the shown entry if nothing changed here
+
+    def show_help(self):
+        from . import helpdocs
+        helpdocs.show_help(self.session, helpdocs.PLOT)
 
     # ---------------------------------------------------------------------------
     # Modes
@@ -1158,8 +1560,10 @@ class AlphaLensPlot(ToolInstance):
                     f'P ≥ the slider threshold')
         if enabled:
             runs = self._agreement_runs
+            source = (' from the contact probabilities AlphaFold3 writes for every sample (no '
+                      'distogram needed)' if all(r['source'] == 'contact_probs' for r in runs) else '')
             return (f'Number of {runs[0]["kind"]}s (of {len(runs)}) in which each residue pair '
-                    f'has P ≥ the slider threshold; read when first shown')
+                    f'has P ≥ the slider threshold{source}; read when first shown')
         runs = self._agreement_runs
         if self._agreement_error:
             why = self._agreement_error
@@ -1262,7 +1666,7 @@ class AlphaLensPlot(ToolInstance):
 
     def _sync_progress(self):
         '''Show the progress row while something is being read, else hide it.'''
-        if self._load_progress is None and self._agreement_progress is None:
+        if self._load_progress is None and self._agreement_progress is None and self._pending_switch is None:
             self._progress_timer.stop()
             self._progress_row.hide()
         else:
@@ -1271,6 +1675,10 @@ class AlphaLensPlot(ToolInstance):
             self._progress_timer.start()
 
     def _show_progress(self):
+        if self._pending_switch is not None:
+            self._progress_bar.setRange(0, 0)       # Busy: the files' sizes say little about the time
+            self._progress_label.setText(f'Reading {self._pending_switch[1]} ...')
+            return
         p = self._load_progress or self._agreement_progress
         if p is None:
             return
@@ -1290,7 +1698,9 @@ class AlphaLensPlot(ToolInstance):
     def _update_controls(self):
         avail = self.available_modes()
         reasons = {'contact': 'Needs a distogram or confidence JSON contact_probs',
-                   'spread': 'Needs a distogram'}
+                   'spread': 'Needs the distogram, the predicted distance distribution: AlphaFold3 saves '
+                             'it only with --save_distogram, AlphaPulldown keeps it in AF2 result pickles '
+                             'with --noremove_keys_from_pickles (Help: "Getting a distogram")'}
         c = f'{self._contact_cutoff():g}'
         about = {
             'pae': 'Predicted aligned error',
@@ -1430,6 +1840,7 @@ class AlphaLensPlot(ToolInstance):
             rgb = np.concatenate([rgb, sep, trk[:, :rgb.shape[1]]], axis=0)
             track = ((k + gap) * f, (k + gap + th) * f)
             self._render['track_px'] = th
+        self._set_track_image()
         self._track_offset = track[0] if track else None
         self._clear_detail()
         v = self._view
@@ -1481,6 +1892,19 @@ class AlphaLensPlot(ToolInstance):
         if not self._info.toolTip():         # Not hovering: the hint follows the view
             self._set_info('')
 
+    def _set_track_image(self):
+        '''The track at full resolution, for the footer the view draws while zoomed in.'''
+        v = self._view
+        if not self._show_plddt:
+            v.track_image = None
+            return
+        if getattr(self, '_track_image_of', None) is not self._plddt:
+            from Qt.QtGui import QImage
+            rgb = np.ascontiguousarray(plddt_track_rgb(self._plddt, AlphaLensView.FOOTER_BARS))
+            h, w = rgb.shape[:2]
+            v.track_image = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
+            self._track_image_of = self._plddt
+
     def _refresh_colorbar(self):
         if getattr(self, '_colorbar_args', None) is not None:
             self._draw_colorbar(*self._colorbar_args)
@@ -1491,7 +1915,11 @@ class AlphaLensPlot(ToolInstance):
         self._update_detail()
 
     def _place_plddt_slider(self):
-        '''Put the slider right of the track, so that its handle follows the track's scale.'''
+        '''
+        Put the slider right of the track, so that its handle follows the track's scale, and its
+        value beside it: right of the slider if there is room, else under it, below the track.
+        While the view shows the track as a footer, both go to the footer's right end.
+        '''
         v, slider, value = self._view, self._plddt_slider, self._plddt_value
         if v.track is None:
             slider.hide()
@@ -1499,22 +1927,40 @@ class AlphaLensPlot(ToolInstance):
             return
         from Qt.QtCore import QPointF
         from Qt.QtWidgets import QStyle
-        top_right = v.mapFromScene(QPointF(v.n, v.track[0]))
-        bottom = v.mapFromScene(QPointF(v.n, v.track[1])).y()
+        vp = v.viewport()
         handle = slider.style().pixelMetric(QStyle.PixelMetric.PM_SliderLength, None, slider)
         width = slider.sizeHint().width()
-        x = min(top_right.x() + 4, v.viewport().width() - width)
+        footer = v.footer_rect()
+        v.footer_reserve = width + 6 if footer is not None else 0
+        v.footer_note = value.text() if footer is not None and self._plddt_slider.value() else ''
+        if footer is not None:
+            bars = v.footer_bars(footer)
+            slider.setGeometry(int(footer.right() - width - 2), int(bars.top() - handle // 2),
+                               width, int(bars.height() + handle))
+            slider.setVisible(True)
+            value.setVisible(False)             # The footer draws it
+            return
+        top_right = v.mapFromScene(QPointF(v.n, v.track[0]))
+        bottom = v.mapFromScene(QPointF(v.n, v.track[1])).y()
+        x = min(top_right.x() + 4, vp.width() - width)
         y = top_right.y() - handle // 2
         slider.setGeometry(x, y, width, bottom - top_right.y() + handle)
+        # Its value where it covers nothing of the plot: right of the slider, level with the
+        # track, or where there is no room (a narrow window, zoomed in) under it, below the
+        # track, in the margin set_image() leaves there
         value.adjustSize()
-        value.move(x + (width - value.width()) // 2, y - value.height())
-        shown = bottom > 0 and top_right.y() < v.viewport().height()
+        lw, lh = value.width(), value.height()
+        if x + width + 2 + lw <= vp.width():
+            value.move(x + width + 2, (top_right.y() + bottom - lh) // 2)
+        else:
+            value.move(max(0, x + width - lw), min(bottom + handle // 2, vp.height() - lh))
+        shown = bottom > 0 and top_right.y() < vp.height()
         slider.setVisible(shown)
         value.setVisible(shown)
 
     def _plddt_slider_moved(self, value):
         self._view.plddt_line = value
-        self._plddt_value.setText(f'hide <{value}' if value else 'hide')
+        self._plddt_value.setText(plddt_hide_text(value))
         self._place_plddt_slider()
         self._view.viewport().update()
         self._plddt_timer.start()           # Debounce while dragging
@@ -1674,20 +2120,22 @@ class AlphaLensPlot(ToolInstance):
         v.viewport().update()
 
     def refresh_picked_contact(self):
-        '''Re-draw the picked contact on the (new) structure after a model switch.'''
+        '''Draw the picked contact on the (new) structure after a model switch, and log its values there.'''
         if self._picked is not None and self._pae.has_contact:
             from . import contacts
-            contacts.show_picked_contact(self._pae, *self._picked, log=False)
+            contacts.show_picked_contact(self._pae, *self._picked)
 
     # -- Structure contacts -------------------------------------------------------------
     def show_structure_contacts(self, show=True, min_prob=None):
         from . import contacts
-        self._struct_contacts = bool(show) and self._pae.has_contact
+        # What the user asked for. It stays while another model's contact probabilities are
+        # being read, so that its lines are drawn once they are there.
+        self._struct_contacts = bool(show)
         if min_prob is not None and abs(min_prob - self._threshold) > 1e-9:
             self.set_threshold(min_prob)    # Redraws the 3D contacts if they are shown
             if self._struct_contacts:
                 return
-        if self._struct_contacts:
+        if self._struct_contacts and self._pae.has_contact:
             contacts.show_contacts(self._pae, min_p=self._threshold, region=self._struct_region,
                                    candidates=(self._candidates() if self._struct_region is None
                                                and self._threshold >= SLIDER_MIN else None))
@@ -1848,6 +2296,9 @@ class AlphaLensPlot(ToolInstance):
 
     def _set_chains(self):
         from .contacts import row_chain_ids
+        from chimerax.atomic import Residue
+        self._view.row_numbers = np.array([(ra.number if isinstance(ra, Residue) else ra.residue.number)
+                                           if ra is not None else -1 for ra in self._pae.row_residues_or_atoms()])
         chains = []
         for i, cid in enumerate(row_chain_ids(self._pae)):
             if chains and chains[-1][0] == cid:
@@ -1865,6 +2316,11 @@ class AlphaLensPlot(ToolInstance):
     # Color plot by structure colors
     #
     def _color_from_structure(self):
+        self._color_blocks = self._structure_color_blocks()
+        self._redraw(keep_zoom=True)
+
+    def _structure_color_blocks(self):
+        '''((color, rows), ...): the plot rows grouped by the shown model's colors.'''
         rra = self._pae.row_residues_or_atoms()
         from chimerax.atomic import Residue
         blocks = {}
@@ -1873,8 +2329,7 @@ class AlphaLensPlot(ToolInstance):
                 continue
             c = tuple(ra.ribbon_color if isinstance(ra, Residue) else ra.color)
             blocks.setdefault(c, []).append(i)
-        self._color_blocks = tuple(blocks.items())
-        self._redraw(keep_zoom=True)
+        return tuple(blocks.items())
 
     def _clear_color_blocks(self):
         self._color_blocks = None
@@ -2007,10 +2462,12 @@ class AlphaLensPlot(ToolInstance):
             pass                     # The track only selects, below: it must not recolor the model
         elif self._drag_colors_structure:
             if off_diagonal:
-                self._color_rows(r1, r2, 'lime', 'gray')
-                self._color_rows(r3, r4, 'magenta')
+                rows = ((r1, r2, 'lime', 'gray'), (r3, r4, 'magenta', None))
             else:
-                self._color_rows(min(r1, r3), max(r2, r4), 'lime', 'gray')
+                rows = ((min(r1, r3), max(r2, r4), 'lime', 'gray'),)
+            for row1, row2, color, other in rows:
+                self._color_rows(row1, row2, color, other)
+            self._coloring = ('box', rows)
         else:
             ranges = [(r1, r2), (r3, r4)] if off_diagonal else [(min(r1, r3), max(r2, r4))]
             self._select_rows(ranges)
@@ -2069,10 +2526,33 @@ class AlphaLensPlot(ToolInstance):
     # Buttons / menu
     #
     def _color_domains(self):
+        self._coloring = ('domains', None)
         self._pae.color_domains(log_command=True)
 
     def _color_plddt(self):
+        self._coloring = ('plddt', None)
         self._pae.color_plddt(log_command=True)
+
+    def _apply_coloring(self):
+        '''
+        Color the shown model as the plot last colored the structure: by its own pLDDT or PAE
+        domains, or the residues of the dragged box. Used when another model of the prediction
+        is shown, so that the switch changes the model, not the picture.
+        '''
+        if self._coloring is None:
+            return
+        kind, rows = self._coloring
+        try:
+            if kind == 'plddt':
+                self._pae.color_plddt(log_command=True)
+            elif kind == 'domains':
+                self._pae.color_domains(log_command=True)
+            else:
+                for row1, row2, color, other in rows:
+                    self._color_rows(row1, row2, color, other)
+        except Exception as e:
+            self.session.logger.warning(f'AlphaLens: could not color {self._pae.structure} as '
+                                        f'the model before: {e}')
 
     def _fill_context_menu(self, menu, x, y):
         from Qt.QtGui import QAction
@@ -2215,7 +2695,12 @@ class AlphaLensPlot(ToolInstance):
             self.save_image(path)
 
     def save_image(self, path):
-        self.tool_window.ui_area.grab().save(path)
+        v = self._view
+        v.hint_visible = False              # The zoom / pan hint is for the screen only
+        try:
+            self.tool_window.ui_area.grab().save(path)
+        finally:
+            v.hint_visible = True
 
     def _export_csv(self):
         import os
@@ -2317,7 +2802,7 @@ class AlphaLensPlot(ToolInstance):
         self._plddt_slider.blockSignals(True)
         self._plddt_slider.setValue(int(st.get('plddt_slider', 0)))
         self._plddt_slider.blockSignals(False)
-        self._plddt_value.setText(str(self._plddt_slider.value()))
+        self._plddt_value.setText(plddt_hide_text(self._plddt_slider.value()))
         self._apply_hidden()
         if st.get('color_blocks'):
             self._color_from_structure()
@@ -2354,8 +2839,16 @@ class AlphaLensPlot(ToolInstance):
     def delete(self):
         self._detach_structure()
         self._restore_hidden()              # Without the plot, nothing could show them again
+        for h in getattr(self, '_open_models_handlers', []):
+            try:
+                self.session.triggers.remove_handler(h)
+            except Exception:
+                pass
+        self._open_models_handlers = []
         v = self._view
         try:                       # Nothing may fire into a half-deleted tool
+            self._menu_timer.stop()
+            self._menu_timer.timeout.disconnect()
             self._plddt_timer.stop()
             self._plddt_timer.timeout.disconnect()
             v._timer.stop()
@@ -2369,8 +2862,9 @@ class AlphaLensPlot(ToolInstance):
         except Exception:
             pass
         v.dot_click_cb = None
-        v._view_changed_cb = v._key_callback = None
+        v._view_changed_cb = v._key_callback = v.moved_cb = None
         v.dots = []
         self._render = self._block_rgb = None
         ToolInstance.delete(self)
+        self._refresh_other_menus()         # After closing, so they see this window gone
         self._notify_prediction_dialogs()   # They now say that the source plot is closed

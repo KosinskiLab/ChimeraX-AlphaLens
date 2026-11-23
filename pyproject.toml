@@ -4,10 +4,10 @@ build-backend = "chimerax.bundle_builder.cx_pep517"
 
 [project]
 name = "ChimeraX-AlphaLens"
-version = "1.5.2"
+version = "1.6.0"
 license = { text = "MIT" }
 authors = [{ name = "Dima Molodenskiy" }, { name = "Kosinski Group, EMBL Hamburg" }]
-description = "Interactive PAE, contact-probability, model-contact, spread and agreement plots for AlphaFold2 and AlphaFold3 predictions, with experimental local prediction (formerly DistoPAE)"
+description = "Interactive PAE, contact-probability, model-contact, spread and agreement plots for AlphaFold2 and AlphaFold3 predictions, with experimental local prediction"
 dependencies = ["ChimeraX-Core~=1.10", "ChimeraX-AlphaFold~=1.0"]
 dynamic = ["classifiers", "requires-python"]
 
@@ -24,20 +24,20 @@ structure. Besides the PAE matrix with a pLDDT track, it shows:
 
 Predicted contacts can be drawn on the structure and exported to CSV, and the plot is saved in
 ChimeraX sessions. AlphaLens opens output folders from AlphaFold2, AlphaPulldown, AlphaFold3 and
-ColabFold. It was called DistoPAE up to version 0.4; the `distopae` command still works.
+ColabFold.
 
 Local prediction (experimental, `alphalens predict`) runs AlphaFold2 or AlphaFold3 through
-LocalFold on Apple Silicon Macs and on Linux with an NVIDIA GPU, only when you start it. The first
-prediction downloads and compiles the LocalFold engine from GitHub and downloads the model
-parameters. UniProt IDs are looked up at UniProt, and the optional remote alignment search sends
+LocalFold by Sergey Ovchinnikov on Apple Silicon Macs and on Linux with an NVIDIA GPU, only when
+you start it. The first prediction downloads and compiles the LocalFold engine from GitHub and
+downloads the model parameters. UniProt IDs are looked up at UniProt, and the optional remote alignment search sends
 your sequences to the ColabFold MSA server. AlphaFold3 parameters are under Google DeepMind's
 terms of use, which you accept before the first AF3 prediction.
 
-Documentation: https://github.com/KosinskiLab/AlphaLens
+Documentation: https://github.com/KosinskiLab/ChimeraX-AlphaLens
 """
 
 [project.urls]
-Home = "https://github.com/KosinskiLab/AlphaLens"
+Home = "https://github.com/KosinskiLab/ChimeraX-AlphaLens"
 
 [tool.chimerax]
 min-session-version = 1
@@ -47,6 +47,10 @@ classifiers = ["Development Status :: 4 - Beta"]
 
 [tool.chimerax.package-data]
 "src/" = ["weights/*.f32", "weights/*.txt"]
+"src/docs/user/tools/" = ["*.html"]            # Help pages, made by scripts/build_help.py
+
+[tool.chimerax.extra-files]
+"src/docs/user/tools/alphalens_images" = ["docs/images/*.png"]     # Copied in when building
 
 [tool.chimerax.tool."AlphaLens"]
 category = "Structure Prediction"
@@ -67,11 +71,3 @@ description = "Open the local prediction dialog for sequences or UniProt IDs"
 [tool.chimerax.command."alphalens open"]
 category = "Structure Prediction"
 description = "Open an AlphaFold2 or AlphaFold3 prediction directory and show the AlphaLens plot"
-
-[tool.chimerax.command.distopae]
-category = "Structure Prediction"
-description = "Former name of the alphalens command"
-
-[tool.chimerax.command."distopae open"]
-category = "Structure Prediction"
-description = "Former name of the alphalens open command"

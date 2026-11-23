@@ -135,7 +135,7 @@ def cuda_source(tmp_path, monkeypatch):
     (toolkit / 'lib64' / 'libcublas.so.12').write_text('')
     source = tmp_path / 'source'
     source.mkdir()
-    (source / 'LICENSE').write_text('beerware')
+    (source / 'LICENSE').write_text('license text')
     log = tmp_path / 'localfold-cuda-build.log'
     monkeypatch.setattr(setup, 'CUDA_BUILD_FILES', (str(tmp_path / 'marker'), str(log)))
     monkeypatch.setattr(setup, 'check_prerequisites', lambda: 'cuda')

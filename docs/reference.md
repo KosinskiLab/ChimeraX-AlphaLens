@@ -49,14 +49,34 @@ bar above the plot shows how far it has come; the Spread tab turns on when it fi
 * **Views:** the tabs, or the ← / → keys in the plot. Hovering shows the values for a residue pair;
   otherwise the line under the slider gives a hint for the shown view. Switching views keeps the
   window's size.
-* **Zoom:** scroll wheel, trackpad pinch, or + / −. **Pan:** Shift-drag or middle-drag. **Fit**
-  (or 0 / Esc) resets the view. Matrices larger than 900 residues are pooled for display
-  (contacts max-pooled, so no contact disappears; PAE and spread mean-pooled). When you zoom in,
-  the visible region is redrawn at full resolution, and hovering always reports the exact
-  per-residue values.
+* **Zoom:** scroll wheel or trackpad pinch (at the pointer), or + / − (at the middle of the view).
+  **Pan:** Shift-drag or middle-drag. **Fit** (or 0 / Esc) resets the view. The top right corner
+  of the plot says how to zoom, and once zoomed in how to pan; saved images leave it out.
+  Zoomed in, the pLDDT track stays in view at the bottom of the plot, under the visible columns,
+  with their residue numbers and the hide slider; hovering and dragging along it work as on the
+  track, which takes its place again when you pan down to it. Matrices larger than 900 residues
+  are pooled for display (contacts max-pooled, so no contact disappears; PAE and spread
+  mean-pooled). When you zoom in, the visible region is redrawn at full resolution, and hovering
+  always reports the exact per-residue values.
 * **Model:** the dropdown lists the AF2 ranked models or AF3 samples of the same prediction that
   are present locally. The chosen model opens in the same window, superposed on the previous one,
-  which is hidden; the view and zoom are kept.
+  which is hidden; the view, zoom, threshold and dragged box are kept. Its files are read in the
+  background, so the window stays usable meanwhile ("Reading ..." above the plot), and a model
+  shown before comes back at once. The samples of an AF3 seed share that seed's distogram, which
+  is read once. What the window drew on the
+  structure moves to the new model: the contact lines, the clicked contact (its values for this
+  model go to the log), the hidden residues and the box's colors; Color pLDDT and Color PAE
+  Domains color it from its own pLDDT and PAE. Every matrix, the counts of the Model contacts view
+  and the CSV export are the new model's. Below them are the other open predictions (any open
+  structure with a PAE file next to it): choosing one shows it in this window and leaves the
+  previous structure as it is in 3D; a prediction that has a window of its own brings that window
+  forward instead. **Open a prediction folder…** opens a folder's top model in this window.
+* **Tools → Structure Prediction → AlphaLens:** a new window for the first open prediction without
+  one (displayed models first), so choosing it again gives a window per prediction. When every
+  open prediction has a window, it brings them forward; with none open, it asks for a prediction
+  folder.
+* **Help:** the Help button, or Help in the right-click menu, opens this manual in ChimeraX's help
+  viewer. The prediction dialog has both too.
 * **Contact dots:** in every view but Model contacts, inter-chain pairs above the slider threshold
   (pairs at least 24 matrix positions apart for a single chain) are drawn as dots that stay
   visible at any zoom. Zoomed in, where a dot would cover a whole matrix cell, it becomes a ring,
@@ -131,8 +151,9 @@ reaches the slider threshold:
   result pickles must have kept the distogram (see [Getting a distogram](#getting-a-distogram)).
 
 The seeds' or models' files must be present, not only the top model's: for AF3, the
-`seed-*_sample-*` folders (or `seed-*_distogram`). `scripts/fetch_pred.sh` copies them. If they are
-missing, the tab stays grey and its tooltip says how many seeds have files.
+`seed-*_sample-*` folders (or `seed-*_distogram`). [`fetch_pred.sh`](../scripts/fetch_pred.sh)
+copies them. If they are missing, the tab stays grey and its tooltip says how many seeds have
+files.
 
 <p align="center"><img src="images/agreement.png" width="640"
   alt="Agreement view in which the inter-chain contacts appear in only one of five models"></p>
@@ -141,8 +162,7 @@ missing, the tab stays grey and its tooltip says how many seeds have files.
 AlphaFold2 models. The hovered pair, in the line under the slider, has P 0.94 in one model and at
 most 0.15 in the other four.*
 
-The runs are read the first time the view is shown, in the background; five AF3 seeds of a
-1,200-residue complex take a few seconds. Hovering shows the count and P in each run, for example
+The runs are read in the background the first time the view is shown. Hovering shows the count and P in each run, for example
 `2 of 5 seeds (P 0.91 0.12 0.88 0.05 0.07)`. Moving the slider recounts.
 
 With more than one chain, the log gets a table per chain pair: the mean of the 10 highest
@@ -174,8 +194,7 @@ the paths of the PAE file and the distogram, never the matrices, so it stays sma
 the plot is rebuilt from those files with the same view, contact threshold, dragged box, clicked
 contact, pLDDT slider and hidden residues. If the distogram has moved, the plot opens without
 Spread; if the PAE file is gone too, the structure and its contact lines still open, without the
-plot. Opening such a session needs AlphaLens 0.9 or newer. The plot's zoom and window position are
-not saved.
+plot. The plot's zoom and window position are not saved.
 
 ## Commands
 
@@ -221,7 +240,8 @@ contacts reached in any seed, with P per seed:
 ## Predictions on a remote machine
 
 Opening predictions over a network mount is slow, because every file lookup and the large result
-pickles go over the network. It is faster to copy only the files the plot reads:
+pickles go over the network. It is faster to copy only the files the plot reads, with
+[`fetch_pred.sh`](../scripts/fetch_pred.sh) from the AlphaLens repository:
 
     scripts/fetch_pred.sh user@cluster:/path/to/prediction_dir ~/predictions
 
@@ -232,6 +252,6 @@ large; without them the AF2 plot shows PAE only.
 ## Limitations
 
 * `contact_probs` (AlphaFold3 and local predictions) are fixed at 8 Å; another `cutoff` needs the distogram.
-* The agreement view keeps N × N values per seed or model in memory (2 bytes each) and refuses
-  more than 4 GB: five seeds work up to about 20,000 residues, twenty up to about 10,000.
+* The agreement view keeps every seed's or model's contact probabilities in memory: five seeds
+  work up to about 20,000 residues, twenty up to about 10,000.
 * ColabFold layouts are untested, and have no model switching or agreement view.

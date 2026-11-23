@@ -7,7 +7,6 @@ Commands:
                 [contacts true|false] [minProb 0.5] [saveContacts file.csv]
   alphalens <dir-or-structure-file> [rank N] ...      same as "alphalens open"
 
-The bundle was called DistoPAE up to version 0.4; "distopae" and "distopae open" still work.
 "mode model" (the Model contacts view up to 0.5) is the same as "mode distance".
 """
 
@@ -348,6 +347,8 @@ def _agreement_loaded(session, pae, plot, n_runs, agr, msgs, err, seconds):
         if not plot_open:
             return
         current = plot.pae
+        if not plot.shows_prediction_of(pae):
+            return                          # The window shows another prediction now
         if current is pae or current.structure.deleted or current.matrix_size != pae.matrix_size:
             plot.agreement_failed('The model used to load agreement was closed')
             return
@@ -355,7 +356,7 @@ def _agreement_loaded(session, pae, plot, n_runs, agr, msgs, err, seconds):
         pending = [(show, None) for show, _ in pending]
     for m in msgs:
         session.logger.warning(f'AlphaLens {s}: agreement: skipped {m}')
-    plot_open = plot is not None and not plot.closed()
+    plot_open = plot is not None and not plot.closed() and plot.shows_prediction_of(pae)
     if agr is None:
         reason = err or f'fewer than two of the {n_runs} seeds or models have contact probabilities'
         session.logger.warning(f'AlphaLens {s}: no agreement view: {reason}')
@@ -408,28 +409,39 @@ def log_agreement(session, pae, threshold, seconds=None):
 
 # -----------------------------------------------------------------------------
 #
-def prepare_prediction(session, structure, pae_file=None, distogram=None, cutoff=8.0):
+def prepare_prediction(session, structure, pae_file=None, distogram=None, cutoff=8.0, preread=None):
     '''
     Read PAE (and confidence JSON contact_probs) for a structure, attach an AlphaLensPAE object as
     structure.alphafold_pae. Returns (pae, distogram_path or None, contact_probs, pae_path).
+    preread: (files, (pae matrix, contact_probs) or None) from read_prediction_files(), read in a
+    thread so that the window stays usable meanwhile.
     '''
     from chimerax.core.errors import UserError
     from . import data
     from .pae import AlphaLensPAE
 
     spath = getattr(structure, 'filename', None)
-    files = data.find_prediction_files(spath) if spath else data.PredictionFiles(None)
+    read = None
+    if preread is not None:
+        files, read = preread
+    else:
+        files = data.find_prediction_files(spath) if spath else data.PredictionFiles(None)
 
-    pae_path = pae_file or files.pae_path
+    chimerax_pae = getattr(structure, 'alphafold_pae', None)     # e.g. from "alphafold fetch"
+    pae_path = pae_file or files.pae_path or getattr(chimerax_pae, '_pae_path', None)
     if pae_path is None:
         raise UserError(f'Could not find a PAE file for {structure} '
                         f'(looked next to {spath}); give one with "paeFile <path>"')
     try:
-        matrix, contact_probs = data.read_pae(pae_path)
+        if read is not None and pae_path == files.pae_path:
+            matrix, contact_probs = read
+        else:
+            matrix, contact_probs = data.read_pae(pae_path)
     except Exception as e:
         raise UserError(f'Could not read PAE from {pae_path}: {e}')
 
     pae = AlphaLensPAE(pae_path, structure, matrix)
+    pae.model_path = os.path.realpath(spath) if spath else None    # Tells its prediction's models apart
     if not pae.reduce_matrix_to_residues_in_structure():
         raise UserError(f'Structure {structure} has {pae.num_residue_rows} residues and '
                         f'{pae.num_atom_rows} non-polymer atoms, which does not match the '
@@ -475,15 +487,48 @@ def prepare_prediction(session, structure, pae_file=None, distogram=None, cutoff
 def start_distogram(session, structure, pae, plot, dpath, cutoff, mode=None, wait=False,
                     contact_probs=None, pae_path=None, on_loaded=None):
     '''Load a distogram (in a thread in the GUI) and attach the derived matrices.'''
-    def done(metrics, error, seconds):
+    def done(metrics, error, seconds, shared_with=None):
         _distogram_loaded(session, structure, pae, plot, metrics, error, seconds, mode,
-                          contact_probs, pae_path, on_loaded)
+                          contact_probs, pae_path, on_loaded, shared_with)
+    shared, other = _read_distogram(session, pae, dpath, cutoff)
+    if shared is not None:
+        done(shared, None, None, other)
+        return
     from .data import LoadProgress
     progress = LoadProgress()
+    pae._distogram_progress = progress      # Shown again if the window comes back to this model
     if plot is not None:
         plot.distogram_loading(dpath, progress)
     pae._distogram_load = load = _BackgroundLoad(lambda: _load_metrics(dpath, cutoff, progress), done)
     load.start(session, wait, 'alphalens-distogram')
+
+
+def _read_distogram(session, pae, dpath, cutoff):
+    '''
+    The matrices another open model has computed from the same distogram file, and that model:
+    the samples of an AlphaFold3 seed share one, so choosing another sample needs no second read.
+    Only if the file is unchanged since, and neither model left residues out, so that the
+    matrices match row for row. (None, None) otherwise.
+    '''
+    from .data import file_signature
+    models = getattr(session, 'models', None)
+    if models is None or getattr(pae, '_rows', None) is not None:
+        return None, None
+    try:
+        real, signature = os.path.realpath(dpath), file_signature(dpath)
+    except OSError:
+        return None, None
+    for s in models.list():
+        other = getattr(s, 'alphafold_pae', None)
+        if other is None or other is pae or not getattr(other, 'has_distogram', False) \
+                or getattr(other, '_rows', 0) is not None:
+            continue
+        mt = other.metrics
+        if (getattr(other, '_full_size', None) == pae._full_size and mt.get('path')
+                and mt.get('file_signature') == signature and abs(mt.get('cutoff', 8.0) - cutoff) < 1e-6
+                and os.path.realpath(mt['path']) == real):
+            return mt, s
+    return None, None
 
 
 def _load_metrics(path, cutoff, progress=None):
@@ -497,7 +542,7 @@ def _load_metrics(path, cutoff, progress=None):
 
 
 def _distogram_loaded(session, structure, pae, plot, metrics, error, seconds, mode,
-                      contact_probs=None, pae_path=None, on_loaded=None):
+                      contact_probs=None, pae_path=None, on_loaded=None, shared_with=None):
     if structure.deleted or getattr(structure, 'alphafold_pae', None) is not pae:
         return              # Closed or superseded while loading
     plot_open = plot is not None and not plot.closed() and plot.pae is pae
@@ -526,8 +571,8 @@ def _distogram_loaded(session, structure, pae, plot, metrics, error, seconds, mo
         if on_loaded:
             on_loaded()          # Validate requested operations; never silently skip an export
         return
-    session.logger.info(f'AlphaLens {structure}: distogram loaded in {seconds:.1f} s. '
-                        + _interface_summary(pae))
+    how = f'loaded in {seconds:.1f} s' if shared_with is None else f'as read for {shared_with}'
+    session.logger.info(f'AlphaLens {structure}: distogram {how}. ' + _interface_summary(pae))
     if plot_open:
         plot.distogram_loaded()
         if mode is not None:
@@ -580,13 +625,13 @@ def _resolve_structure(session, structure):
 
 # -----------------------------------------------------------------------------
 #
-def _open_structure(session, spath, log=True, log_info=True):
+def _open_structure(session, spath, log=True, log_info=True, files=None):
     '''
     Open a predicted model file and give it a short recognisable name. log_info False leaves
     out ChimeraX's report on the model (chain table, ModelCIF scores as residue attributes):
     for another model of a prediction already reported. ChimeraX 1.12 makes that report in
     time quadratic in the chain length: 1.5 s of the 1.6 s it takes to open a 2,800-residue
-    AF3 model.
+    AF3 model. files: data.find_prediction_files(spath), if already known.
     '''
     from chimerax.core.errors import UserError
     from chimerax.core.commands import run, quote_path_if_necessary
@@ -598,7 +643,8 @@ def _open_structure(session, spath, log=True, log_info=True):
     if not structs:
         raise UserError(f'No atomic structure opened from {spath}')
     s = structs[0]
-    files = data.find_prediction_files(spath)
+    if files is None:
+        files = data.find_prediction_files(spath)
     pred_dir = os.path.dirname(spath)
     stem = os.path.splitext(os.path.basename(spath))[0]
     if files.kind == 'af3':
@@ -630,48 +676,161 @@ def alphalens_open(session, path, rank=0, **kw):
     return alphalens(session, s, **kw)
 
 
-def switch_model(session, plot, spath):
-    '''Show another model of the same prediction in an existing plot window.'''
-    from chimerax.atomic import AtomicStructure
-    from chimerax.core.commands import run
+def read_prediction_files(spath, structure=True):
+    '''
+    What showing a model needs from disk, read in a thread so that the window stays usable while
+    large files, or files on a network mount, come in: the prediction's files, the PAE (with AF3
+    contact probabilities), and with structure the model file itself, so that opening it next
+    finds it cached. Returns (files, (pae matrix, contact_probs) or None).
+    '''
+    from . import data
+    files = data.find_prediction_files(spath)
+    if structure:
+        try:
+            with open(spath, 'rb') as f:
+                while f.read(16 << 20):
+                    pass
+        except OSError:
+            pass
+    return files, (data.read_pae(files.pae_path) if files.pae_path else None)
+
+
+def _pae_ready(s, cutoff):
+    '''s has its AlphaLens data attached already, for this contact cutoff.'''
     from .pae import AlphaLensPAE
-    from . import predict_compare as pc
+    pae = getattr(s, 'alphafold_pae', None)
+    return isinstance(pae, AlphaLensPAE) and (pae.metrics is None or pae.metrics.get('cutoff') == cutoff)
+
+
+def _open_model(session, real_path):
+    from chimerax.atomic import AtomicStructure
+    return next((m for m in session.models.list(type=AtomicStructure) if not m.deleted
+                 and getattr(m, 'filename', None) and os.path.realpath(m.filename) == real_path), None)
+
+
+def _read_then_show(session, plot, label, path, work, show, wait):
+    '''
+    Run work() (file reads) in a thread, then show(result) here: unless wait, the window stays
+    usable and shows the read as progress. A later choice in the window supersedes this one.
+    '''
+    token = plot.switch_started(label, path)
+
+    def read():
+        try:
+            return work(), None
+        except Exception as e:
+            return None, f'{type(e).__name__}: {e}'
+
+    def done(result, error):
+        if plot.closed() or not plot.switch_finished(token):
+            return                          # Closed, or another model was chosen meanwhile
+        try:
+            if error is not None:
+                raise RuntimeError(error)
+            show(result)
+        except Exception as e:
+            if wait:
+                raise
+            session.logger.error(f'AlphaLens: could not show {label}: {e}')
+        finally:
+            if not plot.closed():
+                plot.refill_model_menu()
+    _BackgroundLoad(read, done).start(session, wait, 'alphalens-model')
+
+
+def switch_model(session, plot, spath, wait=True):
+    '''
+    Show another model of the same prediction in an existing plot window. The files of a model
+    not shown before are read first, in a thread unless wait is true.
+    '''
+    real = os.path.realpath(spath)
+    s = _open_model(session, real)
+    if s is not None and _pae_ready(s, plot.cutoff):
+        _show_in_plot(session, plot, s, same_prediction=True)
+        return s
+
+    def show(preread):
+        from chimerax.core.commands import run
+        old = plot.pae.structure
+        s = _open_model(session, real)
+        if s is None:
+            s = _open_structure(session, spath, log_info=False, files=preread[0])   # Already reported
+            if not old.deleted:
+                try:        # Same sequence, so CA atoms pair up one to one
+                    run(session, f'align #{s.id_string}@CA toAtoms #{old.id_string}@CA '
+                                 f'move structures', log=False)
+                except Exception:
+                    pass
+        _show_in_plot(session, plot, s, same_prediction=True, preread=preread)
+    _read_then_show(session, plot, os.path.basename(os.path.dirname(spath)) if os.path.basename(spath) == 'model.cif'
+                    else os.path.basename(spath), spath, lambda: read_prediction_files(spath), show, wait)
+    return _open_model(session, real) if wait else None
+
+
+def show_structure(session, plot, s, wait=True):
+    '''
+    Show another open prediction in an existing plot window (its Model menu). If that structure
+    has a window of its own, that window is brought forward instead. Its files are read first,
+    in a thread unless wait is true.
+    '''
+    other = getattr(s, '_alphalens_plot', None)
+    if other is not None and other is not plot and not other.closed():
+        other.display(True)
+        return other
+    if s is plot.pae.structure:
+        return plot
+    spath = getattr(s, 'filename', None)
+    if _pae_ready(s, plot.cutoff) or not spath:
+        _show_in_plot(session, plot, s, same_prediction=False)
+        return plot
+
+    def show(preread):
+        if not s.deleted:
+            _show_in_plot(session, plot, s, same_prediction=False, preread=preread)
+    _read_then_show(session, plot, str(s), spath, lambda: read_prediction_files(spath, structure=False),
+                    show, wait)
+    return plot
+
+
+def _show_in_plot(session, plot, s, same_prediction, preread=None):
+    '''
+    Show structure s in plot. Another model of the same prediction replaces the shown one in 3D
+    too (hidden, as the window is about one model); another prediction leaves it as it is.
+    preread: what read_prediction_files() read for s.
+    '''
+    from . import contacts, predict_compare as pc
+    pae = getattr(s, 'alphafold_pae', None)
+    dpath = contact_probs = pae_path = None
+    if not _pae_ready(s, plot.cutoff):
+        pae, dpath, contact_probs, pae_path = prepare_prediction(session, s, cutoff=plot.cutoff,
+                                                                 preread=preread)
+        shared, other = _read_distogram(session, pae, dpath, plot.cutoff) if dpath else (None, None)
+        if shared is not None:              # Before the window draws it: drawn once, complete
+            pae.set_distogram_metrics(shared, shared['contact'].shape[0])
+            session.logger.info(f'AlphaLens {s}: distogram as read for {other}. ' + _interface_summary(pae))
+            dpath = None
     old = plot.pae.structure
     # A comparison with the source follows the shown sample: end it here, start it again below
     following = None
     if not old.deleted and pc.comparing(old):
-        following = getattr(old, '_alphalens_superposed', 'chain')
+        following = getattr(old, '_alphalens_superposed', 'chain') if same_prediction else None
         pc.compare_view(session, old, False)
-    real = os.path.realpath(spath)
-    s = next((m for m in session.models.list(type=AtomicStructure)
-              if getattr(m, 'filename', None) and os.path.realpath(m.filename) == real), None)
-    if s is None:
-        s = _open_structure(session, spath, log_info=False)    # The prediction is already reported
-        if not old.deleted:
-            try:        # Same sequence, so CA atoms pair up one to one
-                run(session, f'align #{s.id_string}@CA toAtoms #{old.id_string}@CA '
-                             f'move structures', log=False)
-            except Exception:
-                pass
-    pae = getattr(s, 'alphafold_pae', None)
-    dpath = contact_probs = pae_path = None
-    if not isinstance(pae, AlphaLensPAE) or (pae.metrics is not None
-                                         and pae.metrics.get('cutoff') != plot.cutoff):
-        pae, dpath, contact_probs, pae_path = prepare_prediction(session, s, cutoff=plot.cutoff)
     other = getattr(s, '_alphalens_plot', None)
     if other is not None and other is not plot and not other.closed():
         other.delete()
     if not old.deleted:
-        old.display = False
+        contacts.hide_contacts(old)         # Lines this window drew on it (set_pae: the clicked one)
+        if same_prediction:
+            old.display = False
         old._alphalens_plot = None
     s.display = True
     s._alphalens_plot = plot
-    plot.set_pae(pae)
+    plot.set_pae(pae, same_prediction=same_prediction)
     if pae.has_contact and dpath is None and pae.metrics.get('contact_only'):
         plot.set_data_status('contact probabilities from confidence JSON; no distogram')
     if dpath:
         start_distogram(session, s, pae, plot, dpath, plot.cutoff, None, False,
-                        contact_probs, pae_path, on_loaded=plot.refresh_structure_contacts)
+                        contact_probs, pae_path, on_loaded=lambda: plot.model_data_loaded(pae))
     else:
         plot.refresh_structure_contacts()
     if following is not None:
@@ -681,46 +840,101 @@ def switch_model(session, plot, spath):
             pc.compare_view(session, s, True)
         except ValueError as e:
             session.logger.warning(f'AlphaLens: {e}')
-    return s
+
+
+def has_prediction_data(s):
+    '''
+    True for an open structure AlphaLens can show: PAE data attached to it, or a PAE file found
+    next to its model file (remembered per file, as the menus ask whenever models change).
+    '''
+    if s.deleted:
+        return False
+    if getattr(s, 'alphafold_pae', None) is not None:
+        return True
+    path = getattr(s, 'filename', None)
+    if not path:
+        return False
+    known = getattr(s, '_alphalens_pae_found', None)
+    if known is not None and known[0] == path:
+        return known[1]
+    from . import data
+    try:
+        found = data.find_prediction_files(path).pae_path is not None
+    except Exception:
+        found = False
+    s._alphalens_pae_found = (path, found)
+    return found
+
+
+def predicted_structures(session):
+    '''The open structures AlphaLens can show, in model number order.'''
+    from chimerax.atomic import AtomicStructure
+    return [s for s in session.models.list(type=AtomicStructure) if has_prediction_data(s)]
+
+
+def choose_prediction_folder(session, plot=None):
+    '''
+    Ask for a prediction folder and open its top model: in plot's window if one is given, else in
+    a window of its own. Returns the plot window, or None if no folder was chosen.
+    '''
+    from Qt.QtWidgets import QFileDialog
+    parent = plot.tool_window.ui_area if plot is not None and not plot.closed() else session.ui.main_window
+    path = QFileDialog.getExistingDirectory(parent, 'Open an AlphaFold prediction folder')
+    if not path:
+        return None
+    if plot is None or plot.closed():
+        pae = alphalens_open(session, path)
+        return getattr(pae.structure, '_alphalens_plot', None)
+    from chimerax.core.errors import UserError
+    from . import data
+    try:
+        spath = data.structure_path_for_directory(path, 0)
+    except ValueError as e:
+        raise UserError(str(e))
+    return show_structure(session, plot, _open_structure(session, spath), wait=False)
 
 
 # -----------------------------------------------------------------------------
 #
 def start_tool_from_menu(session):
-    from chimerax.atomic import AtomicStructure
-    ss = session.models.list(type=AtomicStructure)
-    if len(ss) != 1:
-        session.logger.warning('AlphaLens: open a prediction with "alphalens open <directory>" '
-                               'or run "alphalens #N" for an open predicted structure')
-        return None
-    try:
-        alphalens(session, ss[0])
-    except Exception as e:
-        session.logger.warning(f'AlphaLens: {e}')
-        return None
-    return getattr(ss[0], '_alphalens_plot', None)
+    '''
+    Tools → Structure Prediction → AlphaLens: a new window for the first open prediction that has
+    none (shown predictions first); if they all have one, bring those forward; with no
+    prediction open, ask for a prediction folder.
+    '''
+    from chimerax.core.commands import run
+    from chimerax.core.errors import UserError
+    from .tool import AlphaLensPlot
+    plots = [t for t in session.tools.list() if isinstance(t, AlphaLensPlot) and not t.closed()]
+    shown_paths = set().union(*(p.model_paths() for p in plots)) if plots else set()
+    candidates = sorted(predicted_structures(session), key=lambda s: not s.display)    # Stable
+    for s in candidates:
+        p = getattr(s, '_alphalens_plot', None)
+        if p is not None and not p.closed():
+            continue
+        f = getattr(s, 'filename', None)
+        if f and os.path.realpath(f) in shown_paths:
+            continue                        # Another model of a prediction a window shows
+        try:
+            run(session, f'alphalens #{s.id_string}')
+        except UserError as e:
+            session.logger.warning(f'AlphaLens: {e}')
+            continue
+        return getattr(s, '_alphalens_plot', None)
+    if plots:
+        for p in plots:
+            p.display(True)
+        session.logger.info('AlphaLens: each open prediction has a window. To look at another one, '
+                            'choose "Open a prediction folder…" in a window\'s Model menu.')
+        return plots[0]
+    if session.models.list():
+        session.logger.info('AlphaLens: no open structure has a PAE file next to it; choose a '
+                            'prediction folder')
+    return choose_prediction_folder(session)
 
 
 # -----------------------------------------------------------------------------
 #
-_old_name_noted = False
-
-
-def _old_name(func, new):
-    '''func under the former command name "distopae", with a note in the log the first time.'''
-    import functools
-
-    @functools.wraps(func)
-    def run(session, *args, **kw):
-        global _old_name_noted
-        if not _old_name_noted:
-            _old_name_noted = True
-            session.logger.info(f'DistoPAE is now called AlphaLens: the command is "{new}"; '
-                                f'"distopae" still works for now')
-        return func(session, *args, **kw)
-    return run
-
-
 def alphalens_predict(session):
     from chimerax.core.errors import UserError
     if not session.ui.is_gui:
@@ -734,6 +948,7 @@ def register_commands(logger):
                                         SaveFileNameArg, FloatArg, BoolArg, IntArg, EnumOf,
                                         ColormapArg, ColormapRangeArg, Or)
     from chimerax.atomic import AtomicStructureArg
+    from . import helpdocs
     common = [('distogram', OpenFileNameArg),
               ('mode', EnumOf(MODE_NAMES)),
               ('cutoff', FloatArg),
@@ -750,17 +965,17 @@ def register_commands(logger):
         return CmdDesc(optional=[('structure', Or(AtomicStructureArg, OpenFileNameArg))],
                        keyword=[('pae_file', OpenFileNameArg), ('rank', IntArg)] + common,
                        synopsis='Show the AlphaLens plot (PAE, contact probability, model '
-                                'contacts, spread, agreement) for a predicted structure')
+                                'contacts, spread, agreement) for a predicted structure',
+                       url=helpdocs.help_url(helpdocs.REFERENCE, 'commands'))
 
     def odesc():
         return CmdDesc(required=[('path', FileNameArg)],
                        keyword=[('rank', IntArg)] + common,
-                       synopsis='Open an AlphaFold2/AlphaFold3 prediction and show the AlphaLens plot')
+                       synopsis='Open an AlphaFold2/AlphaFold3 prediction and show the AlphaLens plot',
+                       url=helpdocs.help_url(helpdocs.REFERENCE, 'commands'))
 
     register('alphalens', desc(), alphalens, logger=logger)
     register('alphalens open', odesc(), alphalens_open, logger=logger)
-    register('alphalens predict', CmdDesc(synopsis='Predict a protein or interface from sequences or UniProt IDs'),
+    register('alphalens predict', CmdDesc(synopsis='Predict a protein or interface from sequences or UniProt IDs',
+                                          url=helpdocs.help_url(helpdocs.PREDICTION)),
              alphalens_predict, logger=logger)
-    # Former name (DistoPAE up to 0.4), so that existing scripts and notes keep working
-    register('distopae', desc(), _old_name(alphalens, 'alphalens'), logger=logger)
-    register('distopae open', odesc(), _old_name(alphalens_open, 'alphalens open'), logger=logger)

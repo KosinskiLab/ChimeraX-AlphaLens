@@ -20,6 +20,10 @@ break its macOS signature. `CX=/Applications/ChimeraX-1.12.app/Contents/MacOS/Ch
 - `README.md`: the install line `chimerax_alphalens-X.Y.Z-py3-none-any.whl`.
 - `pyproject.toml` `description` and `[project.readme]` text: the Toolshed page shows them. Bring
   them in line when a view, a command, or what local prediction downloads or sends changes.
+- Help pages: after any change to `README.md`, `docs/reference.md` or `docs/local-prediction.md`,
+  run `scripts/build_help.py` with a Python that has `markdown` (ChimeraX's:
+  `/Applications/ChimeraX-1.12.app/Contents/bin/python3.11 -I scripts/build_help.py`) and commit
+  `src/docs/user/tools/*.html` with them. `tests/test_help_pages.py` fails on a stale page.
 
 ## 2. Test the checkout
 
@@ -35,7 +39,16 @@ All three must pass before building:
        $CX --exit --cmd "open tests/chimerax_window_check.py"
    ```
 
-   Use predictions with distograms, so every view runs; the script header lists the options.
+   Use predictions with distograms, so every view runs, plus one AF3 prediction with two or more
+   seeds and no distogram, so that Agreement from `contact_probs` and a greyed-out Spread are
+   checked too (local copies: `~/preds/agreement_test/Q15650+*`); the script header lists the options.
+   When menus, Help or zoom changed, also run `tests/chimerax_gui_check.py` with two predictions
+   (`ALPHALENS_GUI_DIRS="<prediction>;<another>"`; the AF2 and AF3 folders of one complex are
+   the hard case); with `ALPHALENS_SOURCE=installed` it also opens the installed help pages.
+   When model switching or what the window draws on the structure changed (contact lines,
+   clicked contact, dragged box, hiding, coloring), also run `tests/chimerax_model_switch_check.py`
+   with an AF2 prediction whose pickles kept the distogram and an AF3 one with samples
+   (`ALPHALENS_SWITCH_DIRS="<af2>;<af3>"`; about 3 min on local copies of the lab pair below).
    Lab pair with distograms in both backends (about 5 min over the SMB mount, mostly the AF2
    agreement): `/g/transform/kosinski/dima/IntAct_BioGRID_STRING/benchmark_26/predictions/full_unfiltered_v3/human/{af3,af2}/pos_pairs/predictions/Q15014+Q9NV56`.
    A large case (5,167 residues, 3 GB distogram, about 10 min to load over SMB):
@@ -65,10 +78,10 @@ AlphaPulldown changes how it handles regions, update it there first.
 
 1. `cd` into the checkout first (the build needs it), then `$CX --nogui --exit --cmd "devel build . exit true"`.
 2. `dist/chimerax_alphalens-X.Y.Z-py3-none-any.whl`: unzip it and `cmp` every `src/*.py` with
-   `chimerax/alphalens/*.py`; `METADATA` says `Version: X.Y.Z`.
+   `chimerax/alphalens/*.py`; `METADATA` says `Version: X.Y.Z`; it holds
+   `chimerax/alphalens/docs/user/tools/*.html` and `alphalens_images/*.png`.
 3. Install it: `$CX --nogui --exit --cmd "toolshed install $PWD/dist/<wheel> reinstall true; toolshed list"`.
-   The list shows `AlphaLens (X.Y.Z)` and no `DistoPAE`: the bundle's old name registers the
-   `distopae` command too, so remove it with `toolshed uninstall DistoPAE`.
+   The list shows `AlphaLens (X.Y.Z)`.
 4. Rerun the window check against the installed wheel: `ALPHALENS_SOURCE=installed`.
 
 ## 4. Publish
@@ -79,8 +92,8 @@ entry point and requires the checkout.
 
 Each step runs on the user's request; ask when the request does not cover it.
 
-- **Repository**: commit on a branch, push, open a pull request to `KosinskiLab/AlphaLens`.
-- **GitHub release**: `gh release create vX.Y.Z dist/<wheel> -R KosinskiLab/AlphaLens --title "ChimeraX-AlphaLens X.Y.Z"`
+- **Repository**: commit on a branch, push, open a pull request to `KosinskiLab/ChimeraX-AlphaLens`.
+- **GitHub release**: `gh release create vX.Y.Z dist/<wheel> -R KosinskiLab/ChimeraX-AlphaLens --title "ChimeraX-AlphaLens X.Y.Z"`
   with the changelog section as notes (tags are `vX.Y.Z`).
 - **Lab share**: copy the wheel to `/g/kosinski/dima/software/` and `README.md` and `CHANGELOG.md`
   to `/g/kosinski/dima/software/chimerax-alphalens/` (and `docs/*.md` plus `docs/images/` to its

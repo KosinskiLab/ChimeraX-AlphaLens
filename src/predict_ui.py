@@ -283,6 +283,9 @@ class PredictionDialog(QDialog):
         intro = QLabel(PLATFORM_TEXT.get(native_platform(), PLATFORM_TEXT[None])
                        + '. Model weights download on the first run and are cached locally.')
         intro.setWordWrap(True); intro.setStyleSheet('color: gray;'); layout.addWidget(intro)
+        credit = QLabel('Predictions run with <a href="https://github.com/sokrypton/localfold">LocalFold</a> '
+                        'by Sergey Ovchinnikov.')
+        credit.setOpenExternalLinks(True); credit.setStyleSheet('color: gray;'); layout.addWidget(credit)
 
         # ---- What to predict
         self.input_widgets = []
@@ -459,8 +462,12 @@ class PredictionDialog(QDialog):
         self.compare_button.setToolTip('After a re-predicted interface: show it by chain with the same residues of '
                                        'the source in grey, and look at them; click again to restore')
         self.compare_button.toggled.connect(self.compare_with_source)
+        self.help_button = QPushButton('Help'); self.help_button.setAutoDefault(False)
+        self.help_button.setToolTip('The guide to local prediction')
+        self.help_button.clicked.connect(self.show_help)
         buttons.addWidget(self.report_button); buttons.addWidget(self.compare_button); buttons.addStretch(1)
         buttons.addWidget(self.cancel_button); buttons.addWidget(self.start_button)
+        buttons.addWidget(self.help_button)
         self.start_button.clicked.connect(self.start)
         self.cancel_button.clicked.connect(self.cancel)
         self.flanks.valueChanged.connect(self.refresh)
@@ -984,6 +991,20 @@ class PredictionDialog(QDialog):
                     pass
                 self.job.process.wait()
             self.job.poll()
+
+    def show_help(self):
+        from . import helpdocs
+        helpdocs.show_help(self.session, helpdocs.PREDICTION)
+
+    def context_menu(self):
+        '''The menu on a right-click (Ctrl-click on a Mac), with Help as on ChimeraX's tools.'''
+        from Qt.QtWidgets import QMenu
+        menu = QMenu(self)
+        menu.addAction('Help').triggered.connect(lambda *args: self.show_help())
+        return menu
+
+    def contextMenuEvent(self, event):
+        self.context_menu().exec(event.globalPos())
 
     def closeEvent(self, event):
         if self.is_busy():
