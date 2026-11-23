@@ -2,7 +2,7 @@
 
 ## Install from source
 
-    git clone https://github.com/KosinskiLab/AlphaLens.git
+    git clone https://github.com/KosinskiLab/ChimeraX-AlphaLens.git
 
 Then, in the ChimeraX command line, change to the checkout first:
 
@@ -39,7 +39,15 @@ It opens each prediction as a user would and checks every view, the Model contac
 contacts on the structure, the clicked contact, pLDDT colors, CSV export, agreement and model
 switching. It tests this checkout without installing it (`ALPHALENS_SOURCE=installed` tests the
 installed bundle) and exits with status 1 if any check fails; the script header lists the options.
-The release procedure for maintainers is `.claude/skills/alphalens-release/SKILL.md`.
+`tests/chimerax_gui_check.py` checks the menus, Help, zoom and the pLDDT slider's label, and
+`tests/chimerax_model_switch_check.py` checks that choosing another model in the Model menu
+updates everything that belongs to a model; their headers say what they need. The release
+procedure for maintainers is `.claude/skills/alphalens-release/SKILL.md`.
 
 The images in the README and the reference are rendered from the installed bundle by
 `docs/render_readme_images.py`; its header says which predictions it needs and how to run it.
+
+## Local prediction
+
+How the LocalFold engine is pinned, built and checked, the dialog in detail, the job folder, the
+measurements so far and the prediction checks: [Local prediction: notes for developers](local-prediction-notes.md).

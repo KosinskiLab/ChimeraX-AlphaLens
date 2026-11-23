@@ -1,7 +1,7 @@
 '''
 Save and restore a session with an AlphaLens plot, in a real window (Qt offscreen crashes ChimeraX).
 
-    ALPHALENS_SESSION_MODEL=<AF3 model.cif with a distogram> ALPHALENS_SESSION_OUT=<empty dir> \\
+    ALPHALENS_SESSION_MODEL=<AF3 model.cif with a distogram> ALPHALENS_SESSION_OUT=<new or empty dir> \\
         ChimeraX --cmd "open tests/chimerax_session_check.py"
 
 Uses the installed bundle. Exit status 0 when all checks pass; the log is <out>/session_check.log.
@@ -18,6 +18,7 @@ from chimerax.core.commands import run
 from chimerax.core.logger import Log
 
 MODEL, OUT = os.environ['ALPHALENS_SESSION_MODEL'], os.environ['ALPHALENS_SESSION_OUT']
+os.makedirs(OUT, exist_ok=True)
 LIMIT = 900
 failures = []
 logged = []

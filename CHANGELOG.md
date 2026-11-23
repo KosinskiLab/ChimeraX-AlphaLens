@@ -1,5 +1,53 @@
 # Changelog
 
+## 1.6.0
+
+Easier to find your way around, after feedback from Tom Goddard (ChimeraX):
+
+* **Help.** The plot window and the prediction dialog have a Help button (lower right) and Help in
+  their right-click menu (Ctrl-click on a Mac); the prediction dialog had no context menu
+  before. The manual is now installed with AlphaLens and opens in ChimeraX's help viewer:
+  this README, the reference and the local prediction guide as linked pages. `help alphalens`
+  and `usage alphalens` link to the command reference.
+* **The Model menu** lists, below the models or samples of the shown prediction, the other open
+  predictions (any open structure with a PAE file next to it) and **Open a prediction
+  folder…**; choosing one shows it in the same window. It was greyed out whenever the
+  prediction had only one model.
+* **Tools → Structure Prediction → AlphaLens** opens a window for the first open prediction that
+  has none, so choosing it again gives each prediction its own window; with every prediction
+  shown it brings their windows forward, and with none open it asks for a prediction folder.
+  Before, with two structures open, it only logged how to use the command.
+* **Zoom keeps the point under the pointer in place** (scroll wheel, pinch), and + / − zoom about
+  the middle of the view. Zooming after a pan used to jump to the matrix's top left corner. The
+  top right corner of the plot now says how to zoom, and once zoomed in how to pan (Shift-drag);
+  saved images leave it out. Contact dots are a little easier to click.
+* **Choosing another model in the Model menu** carries over what the window drew on the
+  structure: the contact lines, the clicked contact (its values for the new model go to the log),
+  the hidden residues, the dragged box (still there for Re-predict selected interface) and its
+  colors; Color pLDDT and Color PAE Domains color the new model from its own pLDDT and PAE. Before,
+  the box was dropped, and the model left behind kept its contact lines: hidden with it, they came
+  back when it was chosen again, even with Show Contacts off. Choosing models in quick succession
+  could turn Show Contacts off; going back to a model still being read shows its progress again.
+* The pLDDT slider's value ("hide <70") is shown beside the slider, or below the pLDDT track when
+  there is no room, instead of over the bottom right corner of the matrix. While zooming, the slider
+  and its value move with the matrix in the same frame; they used to flash where they had been,
+  often on the diagonal.
+* **Zoomed in, the pLDDT track stays in view** at the bottom of the plot, under the visible
+  columns, with residue numbers and the hide slider; before, it scrolled away and you had to pan
+  down to it.
+* **Choosing another model no longer freezes the window**: its files are read in the background
+  ("Reading ..." above the plot), and a choice made meanwhile replaces it. On a network mount the
+  window froze for seconds. The samples of an AF3 seed share its distogram instead of reading
+  and computing it again for each sample, and an AF2 result pickle is read only as far as its
+  distogram (less than half of the file). Whether a pickle holds a distogram is checked once.
+* The greyed-out Spread tab says how to get a distogram, and the Agreement tab says when it uses
+  the contact probabilities that AlphaFold3 writes for every sample (no distogram needed).
+* Credits: the prediction dialog, the README and the Toolshed description name LocalFold by
+  Sergey Ovchinnikov, which local prediction runs.
+* The local prediction guide is shorter and written for users; engine details, measurements and
+  the prediction checks are in notes for developers.
+* The repository is now `KosinskiLab/ChimeraX-AlphaLens`; links are updated.
+
 ## 1.5.2
 
 * No change to the plot or to prediction. The bundle's description, which the ChimeraX Toolshed
@@ -362,10 +410,6 @@
 
 ## 0.5.0
 
-* **Renamed from DistoPAE to AlphaLens**, as the plot now does more than show the distogram and
-  PAE: bundle ChimeraX-AlphaLens, command `alphalens`, tool Tools > Structure Prediction >
-  AlphaLens, repository KosinskiLab/AlphaLens. `distopae` and `distopae open` still
-  work. Remove the old bundle with `toolshed uninstall DistoPAE`.
 * Predicted contacts are blue instead of red (blue reads as confident; red is kept for clashes):
   the dots on the plot and the lines on the structure, darker and thicker for higher P, with the
   scale next to the color bar. Weak contact lines are semi-transparent. The clicked contact is a

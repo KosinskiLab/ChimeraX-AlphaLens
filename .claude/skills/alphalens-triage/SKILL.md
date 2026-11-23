@@ -12,12 +12,10 @@ Reply with the cause, what the user can do now, and whether anything needs fixin
 
 Ask for, or run, `toolshed list` in their ChimeraX:
 
-- `AlphaLens (X.Y.Z)`: compare with the newest wheel on the lab share
-  (`/g/kosinski/dima/software/chimerax_alphalens-*.whl`) and with `CHANGELOG.md`.
-- `DistoPAE` (the name up to 0.4.0), alone or next to AlphaLens: both register `distopae`, so the
-  command may reach the old code. `toolshed uninstall DistoPAE`, then install the current wheel.
-- `alphalens <folder>` without `open` works from 0.5.0 on; older bundles need `alphalens open` /
-  `distopae open`.
+- `AlphaLens (X.Y.Z)`: compare with the newest release (ChimeraX Toolshed, GitHub Releases, or the
+  lab share `/g/kosinski/dima/software/chimerax_alphalens-*.whl`) and with `CHANGELOG.md`.
+  `toolshed install AlphaLens version latest` updates a Toolshed install.
+- `alphalens <folder>` without `open` works from 0.5.0 on; older bundles need `alphalens open`.
 
 ## 2. Does the prediction contain the data the view needs
 
