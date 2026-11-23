@@ -273,3 +273,75 @@ def test_other_layouts_are_not_taken_for_a_local_prediction(tmp_path):
         (empty / f'{stem}_confidences.json').write_text('{}')
     with pytest.raises(ValueError, match='Could not find'):       # Two candidates: not guessed
         data.structure_path_for_directory(str(empty))
+
+
+def _result_pickle(path, order=('distogram', 'aligned_confidence_probs'), bare=False, n=6):
+    '''An AlphaFold-like result pickle: the distogram, then an array as large as it.'''
+    rng = np.random.default_rng(0)
+    logits = rng.standard_normal((n, n, 64)).astype(np.float32)
+    edges = np.linspace(2.3125, 21.6875, 63).astype(np.float32)
+    entries = {'distogram': logits if bare else {'bin_edges': edges, 'logits': logits},
+               'aligned_confidence_probs': rng.random((n, n, 64), dtype=np.float32),
+               'masked_msa': {'logits': rng.standard_normal((4, n, 22)).astype(np.float32)},
+               'ptm': 0.5}
+    result = {k: entries[k] for k in order}
+    result.update({k: v for k, v in entries.items() if k not in result})
+    import pickle
+    with gzip.open(path, 'wb') as f:
+        pickle.dump(result, f, protocol=4)
+    return logits, edges
+
+
+def test_result_pickle_is_read_only_as_far_as_the_distogram(tmp_path):
+    import pickle
+    path = tmp_path / 'result_model_1.pkl.gz'
+    logits, edges = _result_pickle(path)
+    raw = gzip.decompress(path.read_bytes())
+    stream = pickle.dumps(pickle.loads(raw), protocol=4)
+    cut = stream.index(b'aligned_confidence_probs') + 40
+    truncated = tmp_path / 'truncated.pkl.gz'
+    truncated.write_bytes(gzip.compress(raw[:cut]))         # Only the distogram and what precedes it
+    for p in (path, truncated):
+        values, got_edges, are_logits = data.read_distogram(str(p))
+        assert np.array_equal(values, logits) and np.array_equal(got_edges, edges) and are_logits
+
+
+@pytest.mark.parametrize('order', [('ptm', 'aligned_confidence_probs', 'distogram'), ('masked_msa', 'distogram')])
+def test_distogram_found_wherever_it_is_in_the_pickle(tmp_path, order):
+    path = tmp_path / 'result_model_1.pkl.gz'
+    logits, edges = _result_pickle(path, order=order)
+    values, got_edges, _ = data.read_distogram(str(path))
+    assert np.array_equal(values, logits) and np.array_equal(got_edges, edges)
+
+
+def test_distogram_stored_as_an_array_is_read_from_the_whole_pickle(tmp_path):
+    path = tmp_path / 'result_model_1.pkl.gz'
+    logits, _ = _result_pickle(path, bare=True)
+    values, edges, _ = data.read_distogram(str(path))
+    assert np.array_equal(values, logits) and len(edges) == 63
+
+
+def test_pickle_without_distogram(tmp_path):
+    import pickle
+    path = tmp_path / 'result_model_1.pkl'
+    path.write_bytes(pickle.dumps({'ptm': 0.5, 'masked_msa': {'logits': np.zeros((2, 3, 22))}}))
+    assert data._load_pickle_distogram(str(path)) is None
+    with pytest.raises(ValueError, match='no distogram'):
+        data.read_distogram(str(path))
+
+
+def test_distogram_peek_is_remembered_until_the_file_changes(tmp_path, monkeypatch):
+    path = tmp_path / 'result_model_1.pkl.gz'
+    _result_pickle(path)
+    opened = []
+    real_open = data._open_maybe_gz
+    monkeypatch.setattr(data, '_open_maybe_gz', lambda *a, **k: opened.append(a[0]) or real_open(*a, **k))
+    assert data.pickle_has_distogram(str(path)) and data.pickle_has_distogram(str(path))
+    assert len(opened) == 1
+    import os
+    import pickle
+    with gzip.open(path, 'wb') as f:
+        pickle.dump({'ptm': 0.5}, f)
+    os.utime(path, ns=(1, 1))                               # A changed file is looked at again
+    assert not data.pickle_has_distogram(str(path))
+    assert len(opened) == 2

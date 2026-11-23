@@ -412,19 +412,32 @@ def _open_maybe_gz(path, progress=None):
     return open(path, 'rb')
 
 
+_has_distogram = {}         # (real path, size, mtime) -> bool: the answer is asked for every model shown
+
+
 def pickle_has_distogram(path, peek_bytes=4 << 20):
     """
     True if an AlphaFold result pickle stores a distogram.
 
     Reads only the start of the (decompressed) stream: AlphaFold writes the result dict with
-    'distogram' as its first key, so the key name appears within the first bytes.
+    'distogram' as its first key, so the key name appears within the first bytes. Remembered
+    per file, as reading those bytes takes a second over a network mount.
     """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    key = (os.path.realpath(path), st.st_size, st.st_mtime_ns)
+    known = _has_distogram.get(key)
+    if known is not None:
+        return known
     try:
         with _open_maybe_gz(path) as f:
             head = f.read(peek_bytes)
     except Exception:
         return False
-    return b'distogram' in head
+    _has_distogram[key] = found = b'distogram' in head
+    return found
 
 
 def distogram_file_ok(path):
@@ -458,6 +471,61 @@ def _load_pickle(path, progress=None):
         progress.bytes_read = 0
     with _open_maybe_gz(path, progress) as f:
         return pickle.load(f)
+
+
+class _DistogramFound(Exception):
+    def __init__(self, distogram):
+        Exception.__init__(self, 'distogram found')
+        self.distogram = distogram
+
+
+class _DistogramUnpickler(pickle._Unpickler):
+    """
+    Stops reading a result pickle once its distogram ({'bin_edges', 'logits' N x N x bins}) has
+    been built. AlphaFold writes it first; most of the rest (aligned_confidence_probs, as large
+    as the distogram, and the MSA logits) is not needed, so reading stops less than half way.
+    The Python unpickler is used for its dispatch table; the large arrays are single reads.
+    """
+    dispatch = dict(pickle._Unpickler.dispatch)
+
+    def _check(self):
+        d = self.stack[-1] if self.stack else None
+        if isinstance(d, dict) and 'bin_edges' in d and 'logits' in d:
+            logits = d['logits']
+            if getattr(logits, 'ndim', 0) == 3 and logits.shape[0] == logits.shape[1]:
+                raise _DistogramFound(d)
+
+    def _load_setitem(self):
+        pickle._Unpickler.load_setitem(self)
+        self._check()
+
+    def _load_setitems(self):
+        pickle._Unpickler.load_setitems(self)
+        self._check()
+
+    dispatch[pickle.SETITEM[0]] = _load_setitem
+    dispatch[pickle.SETITEMS[0]] = _load_setitems
+
+
+def _load_pickle_distogram(path, progress=None):
+    """The 'distogram' entry of a result pickle (None if it has none), read only as far as needed."""
+    def read():
+        with _open_maybe_gz(path, progress) as f:
+            try:
+                p = _DistogramUnpickler(f).load()
+            except _DistogramFound as found:
+                return found.distogram
+        return p.get('distogram') if isinstance(p, dict) else None
+    try:
+        return read()
+    except ModuleNotFoundError as e:
+        if 'jax' not in str(e):
+            raise
+    from chimerax.alphafold.pae import _fix_alphafold_pickle_jax_dependency
+    _fix_alphafold_pickle_jax_dependency()
+    if progress is not None:
+        progress.bytes_read = 0
+    return read()
 
 
 def read_pae(path):
@@ -504,8 +572,7 @@ def read_distogram(path, progress=None):
     progress: a LoadProgress to update while reading.
     """
     if path.endswith(PICKLE_SUFFIXES):
-        p = _load_pickle(path, progress)
-        dg = p.get('distogram') if isinstance(p, dict) else None
+        dg = _load_pickle_distogram(path, progress)
         if dg is None:
             raise ValueError(f'{path} contains no distogram')
         if isinstance(dg, dict):
@@ -514,7 +581,6 @@ def read_distogram(path, progress=None):
         else:
             logits, edges = dg, None
         values = np.asarray(logits)
-        del p
         are_logits = True
     elif path.endswith(NPZ_SUFFIXES):
         with _open_maybe_gz(path, progress) as f, np.load(f, allow_pickle=False) as z:
@@ -612,10 +678,18 @@ def distogram_contact(values, edges, are_logits=True, cutoff=8.0, chunk=32, prog
     return out
 
 
+def file_signature(path):
+    '''(size, modification time) of a file, to tell whether it changed since it was read.'''
+    st = os.stat(path)
+    return st.st_size, st.st_mtime_ns
+
+
 def load_distogram_metrics(path, cutoff=8.0, progress=None):
+    signature = file_signature(path)
     values, edges, are_logits = read_distogram(path, progress)
     m = distogram_metrics(values, edges, are_logits, cutoff=cutoff, progress=progress)
     m['path'] = path
+    m['file_signature'] = signature
     m['nbins'] = values.shape[-1]
     return m
 
