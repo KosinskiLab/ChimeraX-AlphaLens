@@ -12,8 +12,8 @@ pLDDT track. It also shows:
 It exports contacts to CSV. On Apple Silicon Macs and on Linux with an NVIDIA GPU, it can also
 run small predictions locally.
 
-<p align="center"><img src="docs/images/contacts.png" width="640"
-  alt="AlphaLens plot in the contact-probability view, with dots on the inter-chain contacts"></p>
+<p align="center"><a href="docs/images/contacts.png"><img src="docs/images/contacts.png" width="640"
+  alt="AlphaLens plot in the contact-probability view, with dots on the inter-chain contacts"></a></p>
 
 *Contact probabilities for an AlphaFold2 prediction of E. coli SucC–SucD. Dots mark the
 inter-chain pairs with P ≥ 0.5.*
@@ -71,8 +71,8 @@ need missing data are greyed out, and their tooltip says why. To keep distograms
 | Spread | uncertainty of the predicted distance (needs a distogram) |
 | Agreement | in how many AF3 seeds or AF2 models a pair is predicted to be in contact |
 
-<p align="center"><img src="docs/images/views.png" width="760"
-  alt="The PAE, contact-probability, model-contact, spread and agreement views of one prediction, and its contacts drawn on the structure"></p>
+<p align="center"><a href="docs/images/views.png"><img src="docs/images/views.png" width="760"
+  alt="The PAE, contact-probability, model-contact, spread and agreement views of one prediction, and its contacts drawn on the structure"></a></p>
 
 ## Using the plot
 

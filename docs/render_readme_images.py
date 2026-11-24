@@ -11,6 +11,8 @@
 # contacts.png  SucC-SucD, contact-probability view, P >= 0.5, /A D219 - /B P101 clicked
 # views.png     SucC-SucD, the five views and the contacts on the structure, 2 x 3 panels
 # agreement.png AccB-AccC, agreement view, P >= 0.5, /A F148 - /B G52 hovered
+# Widgets are rendered at 2x pixel density, independent of the display's scaling.
+# Keep these full-resolution PNGs; the README sets their display width separately.
 import os
 import sys
 import time
@@ -50,11 +52,36 @@ def structure():
 
 def window(plot, w, h):
     plot.tool_window.ui_area.window().resize(w, h)
+    # The legend is cached as a pixmap; rebuild it at the export density too.
+    # This override is confined to this disposable rendering session.
+    plot._cbar.devicePixelRatioF = lambda: 2.0
+    plot._refresh_colorbar()
     flush()
 
 
 def rows(plot):
     return {(r.chain_id, r.number): k for k, r in enumerate(plot.pae.row_residues_or_atoms())}
+
+
+def snapshot(widget):
+    """Render text, controls and plot graphics directly at Retina resolution."""
+    from Qt.QtGui import QPixmap
+    from Qt.QtWidgets import QWidget
+    pixmap = QPixmap(widget.width() * 2, widget.height() * 2)
+    pixmap.setDevicePixelRatio(2)
+    QWidget.render(widget, pixmap)
+    return pixmap
+
+
+def save_plot(plot, filename):
+    view = plot._view
+    hint_visible = view.hint_visible
+    view.hint_visible = False
+    try:
+        if not snapshot(plot.tool_window.ui_area).save(os.path.join(OUT, filename)):
+            raise OSError(f'Could not save {filename}')
+    finally:
+        view.hint_visible = hint_visible
 
 
 try:
@@ -69,7 +96,7 @@ try:
         plot._pick_contact(idx[('A', 219)], idx[('B', 101)])
         flush()
         note('contacts info: ' + plot._info.text())
-        plot.save_image(os.path.join(OUT, 'contacts.png'))
+        save_plot(plot, 'contacts.png')
 
     # ---- views.png
     plot.clear_picked_contact()
@@ -87,7 +114,7 @@ try:
         plot.set_mode(mode)
         flush()
         flush()
-        panels.append((title, plot._view.grab(), plot._cbar.grab()))
+        panels.append((title, snapshot(plot._view), snapshot(plot._cbar)))
         note(f'grabbed {mode}: view {plot._view.width()}x{plot._view.height()}')
     sizes = {(v.width(), v.height()) for _, v, _ in panels}
     assert len(sizes) == 1, f'view sizes differ: {sizes}'
@@ -140,8 +167,8 @@ try:
         cwl, chl = cbar.width() / cbar.devicePixelRatio(), cbar.height() / cbar.devicePixelRatio()
         p.drawPixmap(QRectF(x0 + (pw - cwl) / 2, y0 + title_h + vh_l, cwl, chl), cbar, QRectF(cbar.rect()))
     p.end()
-    img = img.scaledToWidth(img.width() // 2, Qt.TransformationMode.SmoothTransformation)
-    img.save(os.path.join(OUT, 'views.png'))
+    if not img.save(os.path.join(OUT, 'views.png')):
+        raise OSError('Could not save views.png')
     note(f'views.png {img.width()}x{img.height()}')
     run(session, 'close')
     if 'agreement' not in PARTS:
@@ -158,7 +185,7 @@ try:
     plot._report(idx[('B', 52)], idx[('A', 148)])
     flush()
     note('agreement info: ' + plot._info.text())
-    plot.save_image(os.path.join(OUT, 'agreement.png'))
+    save_plot(plot, 'agreement.png')
     note('DONE')
 except SystemExit:
     note('DONE (parts: ' + ','.join(PARTS) + ')')
