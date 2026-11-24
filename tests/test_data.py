@@ -1,5 +1,6 @@
 import gzip
 import lzma
+import os
 
 import numpy as np
 import pytest
@@ -345,3 +346,25 @@ def test_distogram_peek_is_remembered_until_the_file_changes(tmp_path, monkeypat
     os.utime(path, ns=(1, 1))                               # A changed file is looked at again
     assert not data.pickle_has_distogram(str(path))
     assert len(opened) == 2
+
+
+def test_alphafold_server_download(tmp_path):
+    '''An unzipped AlphaFold Server download: models by rank, PAE from full_data, no agreement.'''
+    from alphalens import data
+    job = 'fold_a_and_b'
+    for n, score in enumerate((0.79, 0.78, 0.76)):
+        (tmp_path / f'{job}_model_{n}.cif').write_text('')
+        (tmp_path / f'{job}_full_data_{n}.json').write_text('{"pae": [[1.0]], "contact_probs": [[0.5]]}')
+        (tmp_path / f'{job}_summary_confidences_{n}.json').write_text(f'{{"ranking_score": {score}}}')
+    (tmp_path / f'{job}_job_request.json').write_text('[{"name": "a and b", "modelSeeds": ["7"]}]')
+    assert data.structure_path_for_directory(str(tmp_path)).endswith(f'{job}_model_0.cif')
+    assert data.structure_path_for_directory(str(tmp_path), 2).endswith(f'{job}_model_2.cif')
+    with pytest.raises(ValueError, match='has 3 models'):
+        data.structure_path_for_directory(str(tmp_path), 3)
+    f = data.find_prediction_files(str(tmp_path / f'{job}_model_1.cif'))
+    assert (f.kind, f.model_name, os.path.basename(f.pae_path)) == ('afserver', 'model 1', f'{job}_full_data_1.json')
+    models = data.prediction_models(str(tmp_path / f'{job}_model_1.cif'))
+    assert [m['label'] for m in models] == ['model_0  ranking score 0.79', 'model_1  ranking score 0.78',
+                                            'model_2  ranking score 0.76']
+    assert data.agreement_runs(str(tmp_path / f'{job}_model_0.cif')) == []
+    assert 'samples of one seed' in data.agreement_shortfall(str(tmp_path / f'{job}_model_0.cif'), [])

@@ -1,4 +1,4 @@
-"""ChimeraX dialog for experimental local AF2 and AF3 prediction."""
+"""ChimeraX dialog for local AF2 and AF3 prediction."""
 from datetime import datetime
 from pathlib import Path
 import signal
@@ -105,24 +105,77 @@ def snapshot(plot, flanks, preview=False):
 
 
 def source_alignment(plot):
-    """Only recognize a source MSA when its query exactly matches the plotted tokens."""
+    """
+    The source prediction's own alignment, in the first of these layouts found beside its
+    structure; None for none. Each is a dict with where (file or folder), origin (text for the
+    job's manifest) and label (for the dialog), and one of:
+      * a3m, query: a merged A3M whose query is exactly the plotted tokens (LocalFold
+        <stem>.a3m or input.a3m, ColabFold <job>.a3m);
+      * merged, query: a native AlphaFold 2 run's features.pkl, whose msas/chain_id_map.json
+        has exactly the plotted chains (its merged MSA is cropped when the prediction runs);
+      * chains={chain ID: request entry}: per-chain MSAs in AlphaFold 3's form, of the protein
+        chains: an AlphaFold Server download's msas folder (for the chains whose query is
+        exactly the plotted sequence), or an AlphaFold 3 <name>_data.json (its chains are
+        checked when the prediction runs);
+      * root, names={chain ID: name}: AlphaPulldown features, as AlphaPulldownSnakemake keeps
+        them for <out>/predictions/<fold> in <out>/features.
+    """
     filename = getattr(plot.pae.structure, 'filename', None)
     if not filename:
         return None
     from chimerax.atomic import Residue
     residues = plot.pae.row_residues_or_atoms()
-    if any(not isinstance(r, Residue) or r.polymer_type != Residue.PT_AMINO for r in residues):
-        return None
-    query = ''.join(r.one_letter_code for r in residues)
     p = Path(filename)
-    for candidate in (p.with_suffix('.a3m'), p.parent / 'input.a3m'):
-        if candidate.is_file():
-            try:
-                predict.validate_a3m(candidate, query)
-                return candidate, query
-            except (ValueError, OSError):
-                pass
+    if all(isinstance(r, Residue) and r.polymer_type == Residue.PT_AMINO for r in residues):
+        query = ''.join(r.one_letter_code for r in residues)
+        try:
+            others = sorted(p.parent.glob('*.a3m'))
+        except OSError:
+            others = []
+        for candidate in dict.fromkeys([p.with_suffix('.a3m'), p.parent / 'input.a3m', *others]):
+            if candidate.is_file():
+                try:
+                    predict.validate_a3m(candidate, query)
+                    return dict(a3m=candidate, query=query, where=str(candidate), label='A3M')
+                except (ValueError, OSError):
+                    pass
+        native = predict_features.af2_complex_features(p)
+        if native is not None and ''.join(native[1]) == query:
+            return dict(merged=str(native[0]), query=query, where=str(native[0]), label='AlphaFold 2',
+                        origin=f'AlphaFold 2 features in {native[0]}')
+    sequences = {}
+    for r in residues:
+        if isinstance(r, Residue) and r.polymer_type == Residue.PT_AMINO:
+            sequences.setdefault(r.chain_id, []).append(r.one_letter_code)
+    try:
+        found = predict_features.server_msas(p)
+    except (OSError, ValueError):
+        found = {}
+    chains = {cid: dict(unpaired=found[cid]['unpaired'], paired=found[cid]['paired'])
+              for cid, seq in sequences.items() if cid in found and found[cid]['sequence'] == ''.join(seq)}
+    if chains:
+        folder = str(p.parent / 'msas')
+        return dict(chains=chains, where=folder, origin=f'AlphaFold Server MSAs in {folder}', label='AlphaFold Server')
+    data_json = predict_features.af3_data_json(p) if sequences else None
+    if data_json is not None:
+        return dict(chains={cid: dict(af3_json=str(data_json), af3_chain=cid) for cid in sequences},
+                    where=str(data_json), origin=f'AlphaFold 3 MSAs in {data_json}', label='AlphaFold 3')
+    snakemake = predict_features.snakemake_features(p, list(sequences)) if sequences else None
+    if snakemake is not None:
+        folder, names = snakemake
+        return dict(root=str(folder), names=names, where=str(folder), label='AlphaPulldown',
+                    origin=f'AlphaPulldown features in {folder}')
     return None
+
+
+def structure_chain_sequences(plot):
+    '''{chain ID: sequence} of the plotted protein chains, in order.'''
+    from chimerax.atomic import Residue
+    sequences = {}
+    for r in plot.pae.row_residues_or_atoms():
+        if isinstance(r, Residue) and r.polymer_type == Residue.PT_AMINO:
+            sequences.setdefault(r.chain_id, []).append(r.one_letter_code)
+    return {cid: ''.join(seq) for cid, seq in sequences.items()}
 
 
 def structure_chain_ids(plot):
@@ -271,10 +324,11 @@ class PredictionDialog(QDialog):
         super().__init__(session.ui.main_window)
         self.plot, self.session = plot, session
         self.source_msa = source_alignment(plot) if plot is not None else None
+        self._source_structure = plot.pae.structure if plot is not None else None
         self.entries = self.lookup_future = None
         self.job = self.output_model = self.output_plot = self.comparison = None
         self.setup_job = self.pending_prediction = None
-        self.setWindowTitle('AlphaLens prediction · experimental')
+        self.setWindowTitle('AlphaLens prediction')
         self.resize(640, 400)
         layout = QVBoxLayout(self)
         title = QLabel('Re-predict the selected interface' if plot is not None else 'Predict a structure')
@@ -349,11 +403,8 @@ class PredictionDialog(QDialog):
         msa_box = QGroupBox('Alignment (MSA)'); layout.addWidget(msa_box)
         msa_layout = QVBoxLayout(msa_box)
         self.reuse = _option('Reuse and crop the MSA of this prediction (no upload)')
-        self.reuse.setEnabled(self.source_msa is not None)
+        self._show_source_msa()
         self.reuse.setChecked(self.source_msa is not None)
-        if self.source_msa is None:
-            self.reuse.setToolTip('No matching .a3m or input.a3m beside this structure. '
-                                  'MSAs embedded in AF3 JSON are not imported automatically.')
         if plot is not None:
             msa_layout.addWidget(self.reuse)
         self.features = _option('Precomputed AlphaPulldown features (no search)',
@@ -392,12 +443,7 @@ class PredictionDialog(QDialog):
         self.msa_hint.setMinimumHeight(self.msa_hint.fontMetrics().lineSpacing()+4)
         self._guessed_names = ''
         if plot is not None:
-            filename = getattr(plot.pae.structure, 'filename', None)
-            guess = predict_features.guess_names(filename, structure_chain_ids(plot)) if filename else {}
-            self._guessed_names = predict_features.format_names(guess)
-            self.features_names.setText(self._guessed_names)
-            if self._guessed_names:
-                self.features.setText(f'Precomputed AlphaPulldown features (no search) · {self._guessed_names}')
+            self._guess_feature_names()
 
         # ---- Settings most predictions never change
         self.advanced = Section('Settings')
@@ -555,6 +601,24 @@ class PredictionDialog(QDialog):
         self.msa_details.setVisible(self.use_a3m.isChecked())
         self.refresh()
         self.fit_height()
+
+    def source_msa_request(self, chains):
+        '''What reusing the source's own MSA asks of the prediction: (msa, msa_crop, features).'''
+        src = self.source_msa
+        columns = [r['source_row'] for c in chains for r in c['residue_map']]
+        if 'a3m' in src:
+            return src['a3m'], dict(source_query=src['query'], columns=columns), None
+        if 'merged' in src:
+            return None, None, dict(merged=src['merged'], msa_crop=dict(source_query=src['query'], columns=columns),
+                                    origin=src['origin'])
+        found = src.get('chains') or src.get('names')
+        missing = [c['source_chain'] for c in chains if c['source_chain'] not in found]
+        if missing:
+            raise ValueError(f'No MSA of chain {", ".join(missing)} in {src["where"]}; choose another alignment.')
+        if 'names' in src:
+            return None, None, dict(root=src['root'], names=[found[c['source_chain']] for c in chains],
+                                    origin=src['origin'])
+        return None, None, dict(msas=[found[c['source_chain']] for c in chains], origin=src['origin'])
 
     def feature_request(self, chains):
         '''dict(root, names) for the chains of this prediction, from the Feature IDs field.'''
@@ -717,8 +781,48 @@ class PredictionDialog(QDialog):
     def source_changed(self):
         '''The plot's box, model or window changed: show what Predict would use now.'''
         self._preview_cache = None
+        plot = self.plot
+        if plot is not None and not plot.closed() and plot.pae is not None \
+                and plot.pae.structure is not self._source_structure:
+            # Another model or prediction in the window: its own MSA and feature IDs
+            self._source_structure = plot.pae.structure
+            chose_reuse = self.reuse.isChecked() or not any(
+                b.isChecked() for b in (self.features, self.use_a3m, self.search))
+            self.source_msa = source_alignment(plot)
+            self._show_source_msa()
+            self.reuse.setChecked(chose_reuse and self.source_msa is not None)
+            self._guess_feature_names()
         if not self.is_busy():
             self.refresh()      # A running job keeps its own input; refreshed when it ends
+
+    def _show_source_msa(self):
+        '''The reuse option for the source's own MSA: where it is, or why it is off.'''
+        src = self.source_msa
+        self.reuse.setEnabled(src is not None and not self.is_busy())
+        if src is None:
+            self.reuse.setText('Reuse and crop the MSA of this prediction (no upload)')
+            self.reuse.setToolTip('None found beside this structure: an A3M of all its chains (LocalFold, '
+                                  'ColabFold), an AlphaFold 2 features.pkl, an AlphaFold Server msas folder, an '
+                                  'AlphaFold 3 *_data.json or AlphaPulldown features in ../../features')
+            return
+        self.reuse.setText('Reuse and crop the MSA of this prediction (no upload)' if 'a3m' in src
+                           else f'Reuse and crop the MSA of this prediction ({src["label"]}, no upload)')
+        self.reuse.setToolTip(
+            f'The unpaired and paired MSA of chain {", ".join(src["chains"])} in {src["where"]}' if 'chains' in src
+            else f'The MSA of the whole complex, as AlphaFold 2 used it, in {src["where"]}' if 'merged' in src
+            else f'The AlphaPulldown features of {predict_features.format_names(src["names"])} in {src["where"]}'
+            if 'names' in src else f'The MSA of all chains in {src["where"]}')
+
+    def _guess_feature_names(self):
+        '''Feature IDs from the shown model's path, unless the field holds IDs typed in.'''
+        filename = getattr(self.plot.pae.structure, 'filename', None)
+        sequences = structure_chain_sequences(self.plot)
+        guess = predict_features.guess_names(filename, list(sequences), list(sequences.values())) if filename else {}
+        names = predict_features.format_names(guess)
+        if self.features_names.text() in ('', self._guessed_names):
+            self.features_names.setText(names)
+        self._guessed_names = names
+        self.features.setText('Precomputed AlphaPulldown features (no search)' + (f' · {names}' if names else ''))
 
     def is_busy(self):
         return any(job is not None and job.state == 'running' for job in (self.job, self.setup_job))
@@ -794,6 +898,11 @@ class PredictionDialog(QDialog):
             return 'Choose an alignment (MSA) to enable Predict.'
         if self.use_a3m.isChecked() and not self.msa.text().strip():
             return 'Enter the A3M file of the chosen alignment, or Browse… for it.'
+        if self.reuse.isChecked() and self.source_msa:
+            try:
+                self.source_msa_request(chains)
+            except ValueError as e:
+                return str(e)
         if self.features.isChecked():
             try:
                 self.feature_request(chains)
@@ -836,11 +945,11 @@ class PredictionDialog(QDialog):
             chains, source = self.prediction_input()
             name = datetime.now().strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:6]
             msa = (self.msa.text().strip() or None) if self.use_a3m.isChecked() else None
-            crop = None
-            if self.reuse.isChecked():
-                msa, query = self.source_msa
-                crop = dict(source_query=query, columns=[r['source_row'] for c in chains for r in c['residue_map']])
-            features = self.feature_request(chains) if self.features.isChecked() else None
+            crop = features = None
+            if self.reuse.isChecked() and self.source_msa:
+                msa, crop, features = self.source_msa_request(chains)
+            if self.features.isChecked():
+                features = self.feature_request(chains)
             request = dict(directory=Path(self.output.text()).expanduser() / name, chains=chains,
                            features=features,
                            executable=self.executable.text(), search=self.search.isChecked(),

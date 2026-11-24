@@ -4,9 +4,12 @@
         ChimeraX --cmd "open tests/chimerax_predict_button_check.py"
 
 Walks the prediction dialog through every condition that turns Predict off (no box, a box in one
-chain, no alignment, no A3M file, missing feature IDs, AF3 terms, a missing engine, a running job,
-unread or unreadable input, a residue LocalFold cannot fold) and the ones that must not (ligand
-rows in the box, X, an engine being rebuilt). Each time Predict is off, the button's tooltip -
+chain, a box beyond the matrix, a modified residue, a box over non-protein rows only, one protein
+chain, no alignment, no A3M file, missing feature IDs, a source MSA without a chain of the box, AF3
+terms, no or a missing engine, a platform without LocalFold, a running job, unread or unreadable
+input, a residue LocalFold cannot fold) and the ones that must not (ligand rows in the box, X, an
+engine being rebuilt). Rows no prediction at hand has (a modified residue, non-protein rows) are
+made by editing the rows the crop gets (predict_ui.source_rows). Each time Predict is off, the button's tooltip -
 shown by a real hover event on the disabled button - and the line above the buttons give the
 same reason. Clicking the chosen alignment again keeps it chosen.
 
@@ -140,6 +143,52 @@ def main():
         expect('region: a prediction running', d, True, 'is running')
         del d.is_busy
         expect('region: ready again', d, False)
+        total = len(plot.pae.row_residues_or_atoms())
+        plot._set_prediction_region((5, 40, total + 5, total + 20))
+        expect('region: a box beyond the matrix', d, True, 'structure changed since the box was drawn')
+        plot._set_prediction_region((5, 40, n_a + 5, n_a + 40))
+        real_rows = ui.source_rows
+
+        def edited(change):
+            def rows(pae):
+                r = list(real_rows(pae))
+                change(r)
+                return r
+            return rows
+
+        def none(r, lo, hi):
+            r[lo:hi] = [None] * (hi - lo)
+
+        for name, change, says in (
+                ('a modified residue inside the box', lambda r: none(r, 20, 21), 'modified or non-protein residue'),
+                ('a box over non-protein rows only', lambda r: (none(r, 5, 41), none(r, n_a + 5, n_a + 41)),
+                 'covers no protein residues'),
+                ('one protein chain', lambda r: none(r, n_a, len(r)), 'one protein chain')):
+            ui.source_rows = edited(change)
+            d.source_changed()
+            expect(f'region: {name}', d, True, says)
+        ui.source_rows = real_rows
+        d.source_changed()
+        expect('region: the rows restored', d, False)
+        saved = d.source_msa
+        d.source_msa = dict(chains={'A': dict(unpaired=str(OUT / 'A.a3m'), paired=None)}, where='msas',
+                            origin='test', label='AlphaFold Server')
+        d.reuse.setEnabled(True)
+        d.reuse.setChecked(True)
+        expect('region: the source MSA has no chain B of the box', d, True, 'No MSA of chain B in msas')
+        d.source_msa = saved
+        d._show_source_msa()
+        d.search.click()
+        d.executable.setText('')
+        expect('region: no engine given', d, True, 'Enter the LocalFold engine')
+        d.executable.setText(engine)
+        real_platform = ui.native_platform
+        ui.native_platform = lambda: None
+        d.needs_setup = lambda: True
+        expect('region: a platform LocalFold does not run on', d, True, 'cannot be installed here')
+        ui.native_platform = real_platform
+        del d.needs_setup
+        expect('region: ready at the end', d, False)
         d.close()
         pump(0.3)
 

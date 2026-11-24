@@ -41,7 +41,10 @@ switching. It tests this checkout without installing it (`ALPHALENS_SOURCE=insta
 installed bundle) and exits with status 1 if any check fails; the script header lists the options.
 `tests/chimerax_gui_check.py` checks the menus, Help, zoom and the pLDDT slider's label, and
 `tests/chimerax_model_switch_check.py` checks that choosing another model in the Model menu
-updates everything that belongs to a model; their headers say what they need. The release
+updates everything that belongs to a model, `tests/chimerax_source_msa_check.py` re-predicts
+a box from the source's own MSA in each layout AlphaLens reads it from, and
+`tests/chimerax_greyed_check.py` checks, for any predictions given, that every control that can
+be greyed out is off exactly when it should be and says why; their headers say what they need. The release
 procedure for maintainers is `.claude/skills/alphalens-release/SKILL.md`.
 
 The images in the README and the reference are rendered from the installed bundle by

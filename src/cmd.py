@@ -457,7 +457,7 @@ def prepare_prediction(session, structure, pae_file=None, distogram=None, cutoff
 
     pae._distogram_file = dpath
 
-    kind = {'af2': 'AlphaFold2', 'af3': 'AlphaFold3', 'colabfold': 'ColabFold',
+    kind = {'af2': 'AlphaFold2', 'af3': 'AlphaFold3', 'afserver': 'AlphaFold Server', 'colabfold': 'ColabFold',
             'localfold': 'LocalFold'}.get(files.kind, '')
     model = f' {files.model_name}' if files.model_name else ''
     msg = f'AlphaLens {structure}: {kind}{model}, PAE from {pae_path}'
@@ -653,7 +653,9 @@ def _open_structure(session, spath, log=True, log_info=True, files=None):
             stem = files.model_name
         else:
             stem = 'top'
-    kind = {'af2': 'AF2', 'af3': 'AF3', 'localfold': 'LocalFold'}.get(files.kind, '')
+    elif files.kind == 'afserver':
+        stem = files.model_name.replace(' ', '_')
+    kind = {'af2': 'AF2', 'af3': 'AF3', 'afserver': 'AF Server', 'localfold': 'LocalFold'}.get(files.kind, '')
     s.name = ' '.join(x for x in (os.path.basename(pred_dir), kind, stem) if x)
     return s
 

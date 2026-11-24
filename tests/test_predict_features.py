@@ -161,6 +161,15 @@ def test_names_from_paths_and_text():
         {'A': 'Q15014', 'B': 'Q9NV56'}
     assert pf.guess_names('/x/P61626_homo/ranked_0.pdb', ['A', 'B']) == {'A': 'P61626', 'B': 'P61626'}
     assert pf.guess_names('/x/fold/model.cif', ['A', 'B']) == {}
+    # AlphaPulldown's AF3 names: every ID is in the file name, not only the one before its first dot
+    af3 = '/x/P11111+P22222+P33333/P11111_af3_input.json_and_P22222_af3_input.json_and_P33333_af3_input.json_model.cif'
+    assert pf.guess_names(af3, ['A', 'B', 'C']) == {'A': 'P11111', 'B': 'P22222', 'C': 'P33333'}
+    assert pf.guess_names('/x/agreement_test/P11111+P22222/P11111_af3_input.json_and_P22222_af3_input.json_model.cif',
+                          ['A', 'B'], ['MKV', 'GGH']) == {'A': 'P11111', 'B': 'P22222'}
+    # One ID for all chains only when they are one protein
+    server = '/x/fold_complex7_and_p69905/fold_complex7_and_p69905_model_0.cif'
+    assert pf.guess_names(server, ['A', 'B'], ['MKV', 'GGH']) == {}
+    assert pf.guess_names(server, ['A', 'B'], ['MKV', 'MKV']) == {'A': 'P69905', 'B': 'P69905'}
     assert pf.parse_chain_accessions('A: P0A836, B: P0AGE9', ['A', 'B']) == {'A': 'P0A836', 'B': 'P0AGE9'}
     assert pf.parse_chain_accessions('P0A836 P0AGE9', ['A', 'B']) == {'A': 'P0A836', 'B': 'P0AGE9'}
     assert pf.parse_chain_accessions('P61626', ['A', 'B']) == {'A': 'P61626', 'B': 'P61626'}
@@ -316,3 +325,266 @@ def test_gapped_chain_takes_the_columns_of_each_segment(tmp_path):
     with pytest.raises(ValueError, match='not in order'):
         pf.prepare(dict(spec, directory=str(tmp_path / 'bad'), chains=[
             dict(chain_id='A', name='P11111', sequence='AWMK', segments=[['AW', 4], ['MK', 0]])]))
+
+
+# ---- A3M files in AlphaFold 3's form (AlphaFold Server downloads)
+
+def server_download(tmp_path, job='fold_x'):
+    '''A download's model and msas folder: heteromer chains a (KVLAW) and b (GGHHS).'''
+    d = tmp_path / job
+    (d / 'msas').mkdir(parents=True)
+    (d / f'{job}_model_0.cif').write_text('')
+    msas = {
+        'unpaired_msa_chains_a': '>query\nKVLAW\n>UniRef90_A\nKVxxLAW\n>UniRef90_B\n--LA-\n',
+        'paired_msa_chains_a': ('>query\nKVLAW\n>tr|A0A001|A0A001_YEAST/1-5 x OS=Yeast\nKILAW\n'
+                                '>sp|P11111|NAME_HUMAN/1-5\nRVLAW\n>tr|A0A002|A0A002_ECOLI/1-5\nKVLAF\n'),
+        'unpaired_msa_chains_b': '>query\nGGHHS\n>UniRef90_C\nGAHHS\n',
+        'paired_msa_chains_b': ('>query\nGGHHS\n>tr|A0A003|A0A003_HUMAN/1-5\nGAHHT\n'
+                                '>tr|A0A004|A0A004_YEAST/1-5\nGAHHS\n'),
+    }
+    for name, text in msas.items():
+        (d / 'msas' / f'{job}_{name}.a3m').write_text(text)
+    (d / 'msas' / 'other_job_unpaired_msa_chains_a.a3m').write_text('>query\nWWW\n')
+    return d
+
+
+def test_server_msas_found_beside_the_model(tmp_path):
+    d = server_download(tmp_path)
+    found = pf.server_msas(d / 'fold_x_model_0.cif')
+    assert sorted(found) == ['A', 'B']
+    assert found['A']['sequence'] == 'KVLAW' and found['A']['paired'].endswith('fold_x_paired_msa_chains_a.a3m')
+    assert pf.server_msas(tmp_path / 'nothing' / 'model.cif') == {}
+    # Identical chains share one pair of files (assumed naming chains_a_b)
+    (d / 'msas' / 'fold_x_unpaired_msa_chains_c_d.a3m').write_text('>query\nMMM\n')
+    found = pf.server_msas(d / 'fold_x_model_0.cif')
+    assert found['C'] is found['D'] and found['C']['paired'] is None
+
+
+def test_a3m_arrays_and_species():
+    msa, dels, headers = pf.a3m_arrays('>q\nKVLA\n>h1\nKvvV-Xa\n>h2\nUBZX\n')
+    assert pf.decode(msa) == ['KVLA', 'KV-X', 'CDEX'] and headers == ['q', 'h1', 'h2']
+    assert dels.tolist() == [[0, 0, 0, 0], [0, 2, 0, 0], [0, 0, 0, 0]]       # Trailing insertion dropped
+    assert pf.species_of('tr|A0A080I4K2|A0A080I4K2_ECOLX/1-103 [subseq from] Protein') == 'ECOLX'
+    assert pf.species_of('>sp|P69905|HBA_HUMAN/1-142 x') == 'HUMAN'
+    assert pf.species_of('UniRef90_Q6SJ25/1-103 n=392') == '' and pf.species_of('query') == ''
+
+
+def test_prepare_server_msas_for_af2_and_af3(tmp_path):
+    d = server_download(tmp_path)
+    found = pf.server_msas(d / 'fold_x_model_0.cif')
+    chains = [dict(chain_id='A', name='chain A', sequence='VLA', start_hint=1, **{k: found['A'][k] for k in ('unpaired', 'paired')}),
+              dict(chain_id='B', name='chain B', sequence='GGHHS', start_hint=0, **{k: found['B'][k] for k in ('unpaired', 'paired')})]
+    out = tmp_path / 'af2'
+    args = pf.prepare(dict(directory=str(out), root='', backend='af2', job=None, chains=chains))
+    assert args == [f'--a3m={out}/chain_A.a3m,{out}/chain_B.a3m', f'--paired-a3m={out}/paired_A.a3m,{out}/paired_B.a3m']
+    # Columns 2-4; the insertion before a kept column inside the crop is kept, the row with no
+    # residue left is dropped
+    assert (out / 'chain_A.a3m').read_text() == '>A\nVLA\n>A_1\nVxxLA\n>A_2\n-LA\n'
+    # Paired by species as AlphaFold-Multimer does: HUMAN and YEAST in both chains, ECOLI in one
+    assert (out / 'paired_A.a3m').read_text() == '>A\nVLA\n>A_paired_1\nVLA\n>A_paired_2\nILA\n'
+    assert (out / 'paired_B.a3m').read_text() == '>B\nGGHHS\n>B_paired_1\nGAHHT\n>B_paired_2\nGAHHS\n'
+    prov = json.loads((out / 'features.json').read_text())
+    assert prov[0]['kind'] == 'a3m' and prov[0]['residues'] == [2, 4] and prov[0]['paired_rows'] == 2
+    assert prov[0]['paired'] == found['A']['paired'] and len(prov[0]['paired_sha256']) == 64
+    job = tmp_path / 'input.json'
+    job.write_text(json.dumps(dict(dialect='alphafold3', version=1, sequences=[
+        dict(protein=dict(id='A', sequence='VLA')), dict(protein=dict(id='B', sequence='GGHHS'))])))
+    assert pf.prepare(dict(directory=str(tmp_path / 'af3'), root='', backend='af3', job=str(job), chains=chains)) == []
+    a, b = (s['protein'] for s in json.loads(job.read_text())['sequences'])
+    assert a['unpairedMsa'] == '>query\nVLA\n>UniRef90_A\nVxxLA\n>UniRef90_B\n-LA\n'
+    assert a['pairedMsa'].startswith('>query\nVLA\n>tr|A0A001|A0A001_YEAST/1-5 x OS=Yeast\nILA\n')
+    assert b['pairedMsa'] == (d / 'msas' / 'fold_x_paired_msa_chains_b.a3m').read_text() and a['templates'] == []
+    bad = dict(chains[1], sequence='WWW')
+    with pytest.raises(ValueError, match='not part'):
+        pf.prepare(dict(directory=str(tmp_path / 'bad'), root='', backend='af2', job=None, chains=[chains[0], bad]))
+
+
+def test_prediction_job_takes_server_msas(tmp_path):
+    d = server_download(tmp_path)
+    found = pf.server_msas(d / 'fold_x_model_0.cif')
+    engine = tmp_path / 'engine'
+    engine.write_text(f'#!{sys.executable}\nimport sys; print("ENGINE", sys.argv[1:]); sys.exit(3)\n')
+    engine.chmod(0o755)
+    chains = [dict(sequence='VLA', source_chain='A', residue_map=[dict(number=n) for n in (2, 3, 4)]),
+              dict(sequence='GGHHS', source_chain='B', residue_map=[dict(number=n) for n in range(1, 6)])]
+    msas = [dict(unpaired=found[c]['unpaired'], paired=found[c]['paired']) for c in 'AB']
+    with pytest.raises(ValueError, match='unpaired A3M'):
+        PredictionJob(tmp_path / 'x', chains, executable=engine, features=dict(msas=msas[:1], origin='o'))
+    job = PredictionJob(tmp_path / 'job', chains, executable=engine, cache=tmp_path / 'cache',
+                        features=dict(msas=msas, origin=f'AlphaFold Server MSAs in {d / "msas"}')).start()
+    end = time.monotonic() + 20
+    while job.poll() == 'running' and time.monotonic() < end:
+        time.sleep(0.05)
+    log = (job.directory / 'prediction.log').read_text()
+    assert f'--paired-a3m={job.directory}/features/paired_A.a3m' in log, log
+    assert job.manifest['msa_source'] == f'AlphaFold Server MSAs in {d / "msas"}'
+    spec = json.loads((job.directory / 'features_spec.json').read_text())
+    assert [c['name'] for c in spec['chains']] == ['chain A', 'chain B'] and spec['chains'][0]['paired'] == msas[0]['paired']
+    (d / 'msas' / 'fold_x_unpaired_msa_chains_b.a3m').write_text('>query\nGGHHS\n')
+    (d / 'msas' / 'fold_x_paired_msa_chains_b.a3m').write_text('>query\nGGHHW\n')
+    bad = PredictionJob(tmp_path / 'bad', chains, executable=engine, cache=tmp_path / 'cache',
+                        features=dict(msas=msas, origin='o')).start()
+    end = time.monotonic() + 20
+    while bad.poll() == 'running' and time.monotonic() < end:
+        time.sleep(0.05)
+    assert bad.state == 'failed' and bad.error.startswith('source alignments: The first sequences of'), bad.error
+
+
+def af3_output(tmp_path, compress=False):
+    '''An AlphaFold 3 output folder: <name>_data.json with each chain's MSAs, a top model and a sample.'''
+    d = tmp_path / 'Q1_and_Q2'
+    (d / 'seed-7_sample-0').mkdir(parents=True)
+    job = dict(dialect='alphafold3', version=4, name='Q1_and_Q2', sequences=[
+        dict(ligand=dict(id='L', ccdCodes=['ATP'])),
+        dict(protein=dict(id=['A', 'C'], sequence='KVLAW', unpairedMsa='>query\nKVLAW\n>u1\nKVxLAW\n',
+                          pairedMsa='>query\nKVLAW\n>tr|A0A001|A0A001_YEAST/1-5\nKILAW\n', templates=[])),
+        dict(protein=dict(id='B', sequence='GGHHS', unpairedMsa='>query\nGGHHS\n', pairedMsa='',
+                          templates=[]))])
+    text = json.dumps(job, indent=2)
+    path = d / ('Q1_and_Q2_data.json.xz' if compress else 'Q1_and_Q2_data.json')
+    path.write_bytes(lzma.compress(text.encode()) if compress else text.encode())
+    for model in (d / 'Q1_and_Q2_model.cif', d / 'seed-7_sample-0' / 'model.cif'):
+        model.write_text('')
+    return d, path
+
+
+def test_af3_data_json_beside_the_model_or_above_a_sample(tmp_path):
+    for compress in (False, True):
+        d, path = af3_output(tmp_path / str(compress), compress)
+        assert pf.af3_data_json(d / 'Q1_and_Q2_model.cif') == path
+        assert pf.af3_data_json(d / 'seed-7_sample-0' / 'model.cif') == path
+        chains = pf.load_af3_chains(path)
+        assert sorted(chains) == ['A', 'B', 'C'] and chains['C']['unpaired'] == chains['A']['unpaired']
+        assert chains['B']['sequence'] == 'GGHHS' and chains['B']['paired'] == ''
+    # An input JSON without MSAs (a job not run yet) is not taken
+    d = tmp_path / 'input'
+    d.mkdir()
+    (d / 'x_data.json').write_text(json.dumps(dict(sequences=[dict(protein=dict(id='A', sequence='KV'))])))
+    (d / 'x_model.cif').write_text('')
+    assert pf.af3_data_json(d / 'x_model.cif') is None
+    assert pf.af3_data_json(tmp_path / 'nothing' / 'model.cif') is None
+
+
+def test_prepare_af3_data_json_chains_for_af2_and_af3(tmp_path):
+    d, path = af3_output(tmp_path)
+    chains = [dict(chain_id='A', name='chain C', sequence='VLA', start_hint=1, af3_json=str(path), af3_chain='C'),
+              dict(chain_id='B', name='chain B', sequence='GGHHS', start_hint=0, af3_json=str(path), af3_chain='B')]
+    out = tmp_path / 'af2'
+    args = pf.prepare(dict(directory=str(out), root='', backend='af2', job=None, chains=chains))
+    assert args[0] == f'--a3m={out}/chain_A.a3m,{out}/chain_B.a3m'
+    assert (out / 'chain_A.a3m').read_text() == '>A\nVLA\n>A_1\nVxLA\n'
+    assert (out / 'paired_B.a3m').read_text() == '>B\nGGHHS\n'           # B has no paired MSA: query only
+    prov = json.loads((out / 'features.json').read_text())
+    assert prov[0]['af3_chain'] == 'C' and prov[0]['path'] == str(path) and 'paired_sha256' not in prov[0]
+    job = tmp_path / 'input.json'
+    job.write_text(json.dumps(dict(dialect='alphafold3', version=1, sequences=[
+        dict(protein=dict(id='A', sequence='VLA')), dict(protein=dict(id='B', sequence='GGHHS'))])))
+    assert pf.prepare(dict(directory=str(tmp_path / 'af3'), root='', backend='af3', job=str(job), chains=chains)) == []
+    a, b = (s['protein'] for s in json.loads(job.read_text())['sequences'])
+    assert a['unpairedMsa'] == '>query\nVLA\n>u1\nVxLA\n' and a['pairedMsa'] == '>query\nVLA\n>tr|A0A001|A0A001_YEAST/1-5\nILA\n'
+    assert b['pairedMsa'] == ''
+    with pytest.raises(ValueError, match='no protein chain L'):
+        pf.prepare(dict(directory=str(tmp_path / 'bad'), root='', backend='af2', job=None,
+                        chains=[chains[0], dict(chains[1], af3_chain='L')]))
+
+
+# ---- A native AlphaFold 2 run (features.pkl of the whole complex) and AlphaPulldownSnakemake layout
+
+RT = {c: i for i, c in enumerate(pf.RESTYPES)}
+
+
+def native_af2_output(tmp_path, chain_map=None):
+    '''A native AlphaFold 2 multimer output: features.pkl (processed: residue_constants order, a
+    deletion before the second column of the paired row, padded to 6 rows) and msas/chain_id_map.json.'''
+    d = tmp_path / 'native'
+    (d / 'msas').mkdir(parents=True)
+    rows = ['KVLAGGH', 'RVLAGAH',        # query; a paired row
+            'KILA---', '----GAN']        # unpaired rows of A and of B
+    msa = np.array([[RT[c] for c in r] for r in rows] + [[0] * 7] * 2, np.int32)
+    dels = np.zeros(msa.shape, np.float32)
+    dels[1, 1] = 2
+    mask = np.ones(msa.shape, np.float32)
+    mask[4:] = 0
+    fd = dict(msa=msa, deletion_matrix=dels, msa_mask=mask, num_alignments=np.array(4, np.int32),
+              asym_id=np.array([1.] * 4 + [2.] * 3))
+    (d / 'features.pkl').write_bytes(pickle.dumps(fd))
+    (d / 'msas' / 'chain_id_map.json').write_text(json.dumps(chain_map or {
+        'B': dict(description='b', sequence='GGH'), 'A': dict(description='a', sequence='KVLA')}))
+    (d / 'ranked_0.pdb').write_text('')
+    return d
+
+
+def test_native_af2_features_found_by_chain_map(tmp_path):
+    d = native_af2_output(tmp_path)
+    path, sequences = pf.af2_complex_features(d / 'ranked_0.pdb')
+    assert path == d / 'features.pkl' and sequences == ['KVLA', 'GGH']      # In chain order, not file order
+    (d / 'msas' / 'chain_id_map.json').unlink()
+    assert pf.af2_complex_features(d / 'ranked_0.pdb') is None
+    assert pf.af2_complex_features(tmp_path / 'nothing' / 'ranked_0.pdb') is None
+
+
+def test_prepare_merged_crops_the_whole_complex_msa(tmp_path):
+    d = native_af2_output(tmp_path)
+    chains = [dict(chain_id='A', sequence='VLA'), dict(chain_id='B', sequence='GH')]
+    spec = dict(directory=str(tmp_path / 'out'), merged=str(d / 'features.pkl'), source_query='KVLAGGH',
+                columns=[1, 2, 3, 5, 6], chains=chains)
+    assert pf.prepare_merged(spec) == [f'--a3m={tmp_path}/out/merged.a3m']
+    # The insertion before column 1 is at the crop's edge and dropped; padded rows left out; the
+    # unpaired rows keep their gaps in the other chain's columns
+    assert (tmp_path / 'out' / 'merged.a3m').read_text() == \
+        '>query\nVLAGH\n>row_1\nVLAAH\n>row_2\nILA--\n>row_3\n---AN\n'
+    prov = json.loads((tmp_path / 'out' / 'features.json').read_text())
+    assert prov[0]['kind'] == 'af2_complex' and prov[0]['rows'] == 4 and prov[0]['source_rows'] == 4
+    inside = dict(spec, directory=str(tmp_path / 'inside'), columns=[0, 1, 2, 3, 4, 5, 6],
+                  chains=[dict(sequence='KVLA'), dict(sequence='GGH')])
+    pf.prepare_merged(inside)
+    assert '>row_1\nRxxVLAGAH\n' in (tmp_path / 'inside' / 'merged.a3m').read_text()   # Kept inside the crop
+    with pytest.raises(ValueError, match='not those columns'):
+        pf.prepare_merged(dict(spec, chains=[dict(sequence='KVL'), dict(sequence='GH')]))
+    with pytest.raises(ValueError, match='not the sequence'):
+        pf.prepare_merged(dict(spec, source_query='KVLAGGW', chains=[dict(sequence='VLA'), dict(sequence='GW')]))
+
+
+def test_prepare_dispatches_merged_and_job_records_it(tmp_path):
+    d = native_af2_output(tmp_path)
+    engine = tmp_path / 'engine'
+    engine.write_text(f'#!{sys.executable}\nimport sys; print("ENGINE", sys.argv[1:]); sys.exit(3)\n')
+    engine.chmod(0o755)
+    chains = [dict(sequence='VLA', source_chain='A', residue_map=[dict(number=n, source_row=n - 1) for n in (2, 3, 4)]),
+              dict(sequence='GH', source_chain='B', residue_map=[dict(number=2, source_row=5), dict(number=3, source_row=6)])]
+    crop = dict(source_query='KVLAGGH', columns=[1, 2, 3, 5, 6])
+    with pytest.raises(ValueError, match='source sequence and the columns'):
+        PredictionJob(tmp_path / 'x', chains, executable=engine, features=dict(merged=str(d / 'features.pkl')))
+    job = PredictionJob(tmp_path / 'job', chains, executable=engine, cache=tmp_path / 'cache',
+                        features=dict(merged=str(d / 'features.pkl'), msa_crop=crop,
+                                      origin=f'AlphaFold 2 features in {d / "features.pkl"}')).start()
+    end = time.monotonic() + 20
+    while job.poll() == 'running' and time.monotonic() < end:
+        time.sleep(0.05)
+    log = (job.directory / 'prediction.log').read_text()
+    assert f"'--a3m={job.directory}/features/merged.a3m'" in log, log
+    assert job.manifest['msa_source'].startswith('AlphaFold 2 features in') and job.manifest['msa_crop'] == crop
+
+
+def test_snakemake_layout_features(tmp_path):
+    out = tmp_path / 'out'
+    (out / 'features').mkdir(parents=True)
+    fold = out / 'predictions' / 'P00648+P11540:5-80'
+    fold.mkdir(parents=True)
+    (fold / 'ranked_0.pdb').write_text('')
+    (out / 'features' / 'P00648.pkl').write_bytes(b'')
+    assert pf.snakemake_features(fold / 'ranked_0.pdb', ['A', 'B']) is None       # P11540's file missing
+    (out / 'features' / 'P11540.pkl.xz').write_bytes(b'')
+    assert pf.snakemake_features(fold / 'ranked_0.pdb', ['A', 'B']) == \
+        (out / 'features', {'A': 'P00648', 'B': 'P11540'})                       # The range left out
+    assert pf.snakemake_features(fold / 'ranked_0.pdb', ['A', 'B', 'C']) is None
+    other = tmp_path / 'elsewhere' / 'P00648+P11540'
+    other.mkdir(parents=True)
+    assert pf.snakemake_features(other / 'ranked_0.pdb', ['A', 'B']) is None
+    # AlphaPulldown's own names: "_and_", homo-oligomers, chopped regions
+    for name, ids, expect in (('P00648_and_P11540', 'AB', ['P00648', 'P11540']),
+                              ('P00648_homo_3er', 'ABC', ['P00648'] * 3),
+                              ('P00648_and_P11540_1-10_20-30', 'AB', ['P00648', 'P11540'])):
+        f = out / 'predictions' / name
+        f.mkdir()
+        assert pf.snakemake_features(f / 'ranked_0.pdb', list(ids)) == (out / 'features', dict(zip(ids, expect)))

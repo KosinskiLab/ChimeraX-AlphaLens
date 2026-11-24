@@ -17,6 +17,11 @@ AlphaFold3 directory
     seed-<s>_sample-<k>/model.cif + confidences.json,
     seed-<s>_distogram/<name>_seed-<s>_distogram.npz with key ``distogram`` holding
     logits (L, L, 64), present only if AF3 was run with distogram saving enabled.
+
+AlphaFold Server download (unzipped)
+    <job>_model_<n>.cif + <job>_full_data_<n>.json (PAE and contact_probs), n = 0 the best,
+    <job>_summary_confidences_<n>.json (ranking_score), <job>_job_request.json, msas/.
+    No distogram; the models are samples of the job's one seed.
 """
 
 import contextlib
@@ -46,7 +51,7 @@ class PredictionFiles:
     def __init__(self, structure_path, kind='unknown', model_name=None,
                  pae_path=None, distogram_path=None):
         self.structure_path = structure_path
-        self.kind = kind                    # 'af2', 'af3', 'colabfold', 'localfold' or 'unknown'
+        self.kind = kind                    # 'af2', 'af3', 'afserver', 'colabfold', 'localfold' or 'unknown'
         self.model_name = model_name        # e.g. 'model_3_multimer_v3_pred_0' or 'seed-1_sample-0'
         self.pae_path = pae_path
         self.distogram_path = distogram_path
@@ -94,6 +99,13 @@ def structure_path_for_directory(directory, rank=0):
                 if os.path.exists(p):
                     return p
 
+    # AlphaFold Server
+    server = _afserver_models(d)
+    if server:
+        if rank >= len(server):
+            raise ValueError(f'AlphaFold Server prediction {d} has {len(server)} models, rank {rank} requested')
+        return server[rank]['path']
+
     # ColabFold
     hits = sorted(glob.glob(os.path.join(d, f'*_relaxed_rank_{rank+1:03d}_*.pdb')) +
                   glob.glob(os.path.join(d, f'*_unrelaxed_rank_{rank+1:03d}_*.pdb')))
@@ -116,8 +128,8 @@ def structure_path_for_directory(directory, rank=0):
         return p
 
     raise ValueError(f'Could not find a rank {rank} model in {d} '
-                     '(expected AlphaFold2 ranked_N.pdb/cif, AlphaFold3 *_model.cif or an '
-                     'AlphaLens local prediction with fold.pdb)')
+                     '(expected AlphaFold2 ranked_N.pdb/cif, AlphaFold3 *_model.cif, an AlphaFold Server '
+                     'download with *_model_N.cif, or an AlphaLens local prediction with fold.pdb)')
 
 
 def _localfold_top(d):
@@ -191,6 +203,13 @@ def find_prediction_files(structure_path):
         disto = allp if (allp and pickle_has_distogram(allp)) else None
         return PredictionFiles(path, 'colabfold', tag, pae, disto)
 
+    # ---- AlphaFold Server: <job>_model_<n>.cif + <job>_full_data_<n>.json
+    m = re.match(r'(.+)_model_(\d+)\.cif$', base)
+    if m:
+        full = _first_existing(os.path.join(d, f'{m.group(1)}_full_data_{m.group(2)}{s}') for s in JSON_SUFFIXES)
+        if full:
+            return PredictionFiles(path, 'afserver', f'model {m.group(2)}', full, None)
+
     # ---- LocalFold (AlphaLens local prediction): fold.pdb + fold_confidences.json, further
     #      samples fold_sample<k>.pdb + fold_sample<k>_confidences.json. No distogram is kept.
     stem, ext = os.path.splitext(base)
@@ -215,6 +234,45 @@ def _first_existing(paths):
         if p and os.path.exists(p):
             return p
     return None
+
+
+def _afserver_models(d):
+    '''
+    The models of an AlphaFold Server download in folder d, best first (the server numbers them
+    so): [{'path', 'n', 'job', 'score' (ranking_score or None)}]; [] when d is none. A folder of
+    several jobs lists the first one's.
+    '''
+    found = {}
+    for path in glob.glob(os.path.join(d, '*_model_*.cif')):
+        m = re.match(r'(.+)_model_(\d+)\.cif$', os.path.basename(path))
+        if m and _first_existing(os.path.join(d, f'{m.group(1)}_full_data_{m.group(2)}{s}') for s in JSON_SUFFIXES):
+            found.setdefault(m.group(1), []).append((int(m.group(2)), path))
+    if not found:
+        return []
+    job = sorted(found)[0]
+    models = []
+    for n, path in sorted(found[job]):
+        score = None
+        try:
+            with open(os.path.join(d, f'{job}_summary_confidences_{n}.json')) as f:
+                score = float(json.load(f)['ranking_score'])
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        models.append({'path': path, 'n': n, 'job': job, 'score': score})
+    return models
+
+
+def _afserver_seeds(d):
+    '''The seeds an AlphaFold Server job asked for (its job request), [] if unknown.'''
+    for path in glob.glob(os.path.join(d, '*_job_request.json')):
+        try:
+            with open(path) as f:
+                request = json.load(f)
+            request = request[0] if isinstance(request, list) else request
+            return [str(x) for x in request.get('modelSeeds') or []]
+        except (OSError, ValueError, AttributeError, IndexError):
+            pass
+    return []
 
 
 def _af2_ranking_order(d):
@@ -726,6 +784,11 @@ def prediction_models(structure_path):
             models.append({'label': label, 'path': p, 'score': sc})
         return models
 
+    server = _afserver_models(d)                                      # AlphaFold Server
+    if server:
+        return [{'label': f'model_{m["n"]}' + (f'  ranking score {m["score"]:.2f}' if m['score'] is not None else ''),
+                 'path': m['path'], 'score': m['score']} for m in server]
+
     ranked = _af3_ranked_samples(d)                                   # AlphaFold3
     tops = sorted(glob.glob(os.path.join(d, '*_model.cif')))
     if ranked or tops:
@@ -810,6 +873,10 @@ def agreement_shortfall(structure_path, runs):
         d = os.path.dirname(os.path.abspath(structure_path))
         if re.match(r'seed-(-?\d+)_sample-(\d+)$', os.path.basename(d)):
             d = os.path.dirname(d)
+        if _afserver_models(d):
+            seeds = _afserver_seeds(d)
+            return (f'an AlphaFold Server prediction: its models are samples of {"one seed" if len(seeds) <= 1 else "its seeds"}, '
+                    'and the server keeps no distogram')
         seeds = {r[0] for r in _af3_ranked_samples(d)}
         if len(seeds) > n:
             return (f'{n} of the {len(seeds)} seeds have files here; copy the seed-*_sample-* '

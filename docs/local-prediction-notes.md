@@ -130,14 +130,61 @@ an alignment (and its A3M file or feature IDs), acceptance of the AF3 terms, an 
 given path, or the end of a running job. The reason is shown above the buttons, and again when
 the pointer rests on Predict.
 
-For a re-predicted region, **Reuse and crop the source MSA** is selected automatically when a
-matching `<structure-stem>.a3m` or `input.a3m` is found beside the source. Embedded MSAs in AF3
-`*_data.json` files are not imported automatically. Its first query must exactly match the
-plotted protein tokens. Cropping preserves existing paired/unpaired rows and their insertion
-encoding. Alternatively, a merged A3M for exactly the cropped sequences, in the displayed order,
-or **Precomputed AlphaPulldown features**: the chain IDs are taken from the prediction's folder
-name (`Q15014+Q9NV56`, `q15014_and_q9nv56`), and the region is cropped from the full-length
-features.
+For a re-predicted region, **Reuse and crop the source MSA** is selected automatically when the
+source's own alignment is found beside its structure (`predict_ui.source_alignment`), in this
+order:
+
+1. A merged A3M of the whole complex whose first query is exactly the plotted tokens (all of
+   them protein): `<structure-stem>.a3m`, `input.a3m`, then any other `*.a3m` in the folder
+   (ColabFold's `<job>.a3m`, whose `#lengths` line is skipped). Its columns are cropped;
+   existing paired/unpaired rows and their insertion encoding are kept.
+2. A native AlphaFold 2 run's `features.pkl` (also `.xz`, `.gz`) beside the model, when the
+   chains of `msas/chain_id_map.json` (written by AlphaFold-Multimer; read in the window,
+   ordered by AlphaFold's chain IDs) are exactly the plotted sequence. Its `msa` is the merged
+   MSA AlphaFold-Multimer used (paired rows first, then each chain's rows with gaps elsewhere;
+   residue_constants order; rows padded to 512 are left out by `msa_mask`). The job's process
+   crops its columns into `features/merged.a3m` (`--a3m`), as for a merged A3M.
+3. An AlphaFold Server download's `msas/` folder: `<job>_unpaired_msa_chains_<id>.a3m` and
+   `<job>_paired_msa_chains_<id>.a3m`, one pair a chain, each with the chain's sequence as its
+   query (`<job>` is the model's name without `_model_<n>`; identical chains are assumed to
+   share one pair, named `chains_a_b`; no such download has been seen yet). A chain's files are
+   used when their query is exactly its plotted sequence.
+4. An AlphaFold 3 data-pipeline JSON, `<name>_data.json` (or `.json.xz`, `.json.gz`) beside
+   `<name>_model.cif`, or in the folder above a sample's `seed-<S>_sample-<K>/model.cif`
+   (AlphaFold 3 and AlphaPulldown's AF3 runs). Only its first 64 KB are read in the window, to
+   see that it holds MSAs; each chain's `unpairedMsa`/`pairedMsa` (or `...Path`) is read, by
+   chain ID, and its sequence checked in the job's process.
+5. AlphaPulldown features laid out as AlphaPulldownSnakemake writes them: the model in
+   `<out>/predictions/<fold>/`, each protein's feature file (`<name>.pkl[.xz]`,
+   `<name>_af3_input.json[.xz]`) in `<out>/features/`. The names come from the fold's name
+   (`A+B`, `A_and_B`, `A_homo_2er`; ranges `A:1-50` or `A_1-50` are left out, the features
+   being of the whole protein), one a protein chain. This is the precomputed-features route with
+   that folder (`msa_source` `AlphaPulldown features in <folder>`). AlphaPulldown's own test data
+   (`test/test_data/predictions` beside `features`) has the same layout.
+
+Non-protein chains stop only 1 and 2. In 3 and 4 the paired MSA is the chain's UniProt
+hits, not row-aligned with the other chains: AF3 pairs them by species itself, so for AF3 both
+are cropped to the predicted columns and sent inline (templates off). For AF2 they are cropped
+first, then converted as precomputed features are: the unpaired MSA becomes the chain's
+`--a3m`, and the paired one is paired by species (from the UniProt entry names, as AlphaFold's
+`msa_identifiers`) into row-aligned `--paired-a3m` files. This runs in the job's process
+(`predict_features.py`), so the window does not wait on large MSAs (cropping a 118 MB A3M takes
+about 3 s). The manifest's `msa_source` is `AlphaFold Server MSAs in <folder>` or `AlphaFold 3
+MSAs in <file>`, and `features` records each chain's files and their SHA-256.
+
+Tested on real predictions of each layout (`tests/chimerax_source_msa_check.py`): barnase–barstar
+(1BRS chains, the LocalFold pilot's sequences) folded on the EMBL cluster by AlphaFold 2.3.2
+(native, `run_alphafold.py`) and by AlphaPulldown's AF2 backend from the same MSAs
+(kept in the cluster's scratch space), AlphaPulldown's test predictions, lab AF3 runs,
+two AlphaFold Server downloads, and the LocalFold pilot. AlphaPulldown runs kept elsewhere than
+beside their features fall back to **Precomputed AlphaPulldown features**.
+
+Alternatively, a merged A3M for exactly the cropped sequences, in the displayed order, or
+**Precomputed AlphaPulldown features**: the chain IDs are guessed from the model's path
+(`Q15014+Q9NV56`, `q15014_and_q9nv56`, AlphaPulldown's `Q15014_af3_input.json_and_..._model.cif`;
+one ID for all chains only when they are one protein), and the region is cropped from the
+full-length features. When the window shows another model or prediction, the dialog looks for
+its MSA again and re-guesses the IDs (unless typed in).
 
 **Search remotely if uncached** sends the selected sequences to `https://api.colabfold.com`, unless
 the exact query already exists in the local MSA cache. `LOCALFOLD_MMSEQS_API` can select a

@@ -215,7 +215,7 @@ plot. The plot's zoom and window position are not saved.
 | `palette`, `range` | PAE color map, as in `alphafold pae` |
 | `dividerLines` | chain divider lines on the plot |
 | `wait` | finish the distogram and requested agreement loading before the command returns, including reads already running in the background; use `wait true` before consuming a GUI command's CSV output |
-| `rank` | 0 = top model; AF2 `ranked_N`, AF3 N-th best sample |
+| `rank` | 0 = top model; AF2 `ranked_N`, AF3 N-th best sample, AlphaFold Server `model_N` |
 
 To open one AF3 sample, give its file: `alphalens open /path/to/seed-1_sample-0/model.cif`.
 
@@ -232,6 +232,9 @@ contacts reached in any seed, with P per seed:
 * **AlphaFold3:** `<name>_model.cif` + `<name>_confidences.json`, or `seed-S_sample-K/model.cif` +
   `confidences.json`. The distogram is `seed-S_distogram/*.npz` (key `distogram`; logits or
   probabilities are detected automatically).
+* **AlphaFold Server** (an unzipped download): `<job>_model_N.cif` + `<job>_full_data_N.json` (PAE
+  and contact probabilities), `model_0` the best by `ranking_score`. The server keeps no
+  distogram, and its five models are samples of one seed, so Spread and Agreement are off.
 * **ColabFold** (untested): `*_unrelaxed_rank_NNN_*.pdb` + `*_scores_rank_NNN_*.json`, and
   `*_all_rank_NNN_*.pickle` with `--save-all`.
 * PAE JSON and result pickle files, and NPZ distograms, can be `.gz` or `.xz` compressed.

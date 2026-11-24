@@ -1,4 +1,4 @@
-# Local prediction (experimental)
+# Local prediction
 
 AlphaLens can predict a protein complex from sequences or UniProt IDs, or re-predict an
 interface you select on the plot, with AlphaFold 2 or AlphaFold 3 on your own computer: an Apple
@@ -69,9 +69,17 @@ an unknown residue. U, O, B, Z and J are refused, with what to write instead.
 2. Right-click the plot and choose **Re-predict selected interface…**.
 3. Choose the flanks, the residues added on each side of the box (10 by default; they stop at the
    ends of chains and at gaps).
-4. Choose the alignment. **Reuse and crop the source MSA** is chosen for you when the prediction
-   folder has a matching A3M file. You can also give an A3M for exactly the cropped sequences,
-   use precomputed AlphaPulldown features (the protein IDs come from the folder name, such as
+4. Choose the alignment. **Reuse and crop the source MSA** is chosen for you when the MSA the
+   prediction was made with is at hand:
+   * an A3M of all its chains beside the model (LocalFold, ColabFold);
+   * the `features.pkl` of an AlphaFold 2 run;
+   * the `msas` folder of an AlphaFold Server download;
+   * the `<name>_data.json` of an AlphaFold 3 run (also compressed, `.json.xz`);
+   * for AlphaPulldown, the proteins' features in the `features` folder beside `predictions`, as
+     AlphaPulldownSnakemake writes them.
+
+   You can also give an A3M for exactly the cropped sequences, use precomputed AlphaPulldown
+   features from elsewhere (the protein IDs come from the folder name, such as
    `Q15014+Q9NV56`), or search remotely.
 5. Click **Predict**. When Predict is greyed out, the line above the buttons says what is missing.
 
