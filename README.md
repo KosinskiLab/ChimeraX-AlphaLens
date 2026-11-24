@@ -10,7 +10,7 @@ pLDDT track. It also shows:
 * how many AF3 seeds or AF2 models agree on each contact.
 
 It exports contacts to CSV. On Apple Silicon Macs and on Linux with an NVIDIA GPU, it can also
-run small predictions locally (experimental).
+run small predictions locally.
 
 <p align="center"><img src="docs/images/contacts.png" width="640"
   alt="AlphaLens plot in the contact-probability view, with dots on the inter-chain contacts"></p>
@@ -34,7 +34,7 @@ to the newest release.
 To install a wheel from the [Releases](https://github.com/KosinskiLab/ChimeraX-AlphaLens/releases)
 page instead, keep its file name and give its path:
 
-    toolshed install ~/Downloads/chimerax_alphalens-1.6.0-py3-none-any.whl
+    toolshed install ~/Downloads/chimerax_alphalens-1.6.1-py3-none-any.whl
 
 To remove AlphaLens, run `toolshed uninstall AlphaLens`.
 
@@ -96,7 +96,7 @@ need missing data are greyed out, and their tooltip says why. To keep distograms
 * The **right-click menu** has more options, such as color scales and Save image.
 * `save mysession.cxs` saves the plot with the session.
 
-## Local prediction (experimental)
+## Local prediction
 
 1. Run `alphalens predict`.
 2. Paste sequences, FASTA, UniProt IDs or AlphaPulldown notation, such as

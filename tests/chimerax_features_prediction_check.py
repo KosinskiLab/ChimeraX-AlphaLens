@@ -100,7 +100,7 @@ def main():
             dialog.backend.setCurrentIndex(dialog.backend.findData('af3'))
             dialog.af3_terms.setChecked(True)
             dialog.af3_samples.setValue(1)
-        assert not dialog.reuse.isChecked() and not dialog.search.isChecked() and not dialog.msa.isEnabled()
+        assert not dialog.reuse.isChecked() and not dialog.search.isChecked() and not dialog.use_a3m.isChecked()
         if ROOT:
             dialog.features_root.setText(ROOT)
         dialog.flanks.setValue(5)

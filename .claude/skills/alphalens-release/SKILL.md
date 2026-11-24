@@ -45,6 +45,11 @@ All three must pass before building:
    When menus, Help or zoom changed, also run `tests/chimerax_gui_check.py` with two predictions
    (`ALPHALENS_GUI_DIRS="<prediction>;<another>"`; the AF2 and AF3 folders of one complex are
    the hard case); with `ALPHALENS_SOURCE=installed` it also opens the installed help pages.
+   When what turns a control on or off changed (tabs, Show Contacts, Export, the Model menu,
+   the context menu, the dialog's alignment options), run `tests/chimerax_greyed_check.py` with
+   predictions of several kinds, the first two different (`ALPHALENS_GREYED_DIRS="a;b;..."`: one
+   with a source MSA and one without, one without contact probabilities such as the LocalFold
+   pilot, an AF3 sample `model.cif`, an AlphaFold Server download).
    When model switching or what the window draws on the structure changed (contact lines,
    clicked contact, dragged box, hiding, coloring), also run `tests/chimerax_model_switch_check.py`
    with an AF2 prediction whose pickles kept the distogram and an AF3 one with samples
@@ -69,6 +74,16 @@ without rebuilding the managed ones; exit status 0):
 ```bash
 ALPHALENS_PILOT="<barnase-barstar LocalFold folder>" ALPHALENS_TEST_OUTPUT="<new folder>" \
     $CX --cmd "open tests/chimerax_gapped_prediction_check.py"
+```
+
+and, when where the source MSA is found or how it is cropped changed, the source-MSA check (real
+AF2 and AF3 runs, under a minute a layout; exit status 0). Give it one prediction per layout
+the header lists (merged A3M, AlphaFold Server download, AF3 `_data.json` plain and `.xz`, an AF3
+sample's `model.cif`) and an AlphaPulldown AF2 run as `ALPHALENS_NO_MSA_FOLDS`:
+
+```bash
+ALPHALENS_MSA_FOLDS="<prediction>;<prediction>;..." ALPHALENS_TEST_OUTPUT="<new folder>" \
+    $CX --cmd "open tests/chimerax_source_msa_check.py"
 ```
 
 `tests/test_alphapulldown_parity.py` mirrors AlphaPulldown's region and numbering tests; when
