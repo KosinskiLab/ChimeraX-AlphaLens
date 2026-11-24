@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.6.1
+
+* **Re-predict selected interface reuses the MSA that comes with more kinds of prediction**, after
+  a report from Tom Goddard: the `msas` folder of an AlphaFold Server download, the
+  `<name>_data.json` of an AlphaFold 3 run (also compressed, and for a sample's
+  `seed-*_sample-*/model.cif`), the `features.pkl` of an AlphaFold 2 run, an AlphaPulldown run's
+  features in the `features` folder beside `predictions` (as AlphaPulldownSnakemake writes them),
+  and an A3M of a ColabFold run. Before, **Reuse and crop the MSA of this prediction** was greyed
+  out unless a LocalFold A3M lay beside the structure. AlphaFold 2 and AlphaFold 3 both take these
+  MSAs; AlphaFold 2 pairs the chains' UniProt hits by species, as AlphaFold-Multimer does. A
+  prediction with ligands or nucleic acids no longer prevents it.
+* Local prediction is no longer called experimental (the dialog's title, the README, the help).
+* **AlphaFold Server downloads open as prediction folders** (`alphalens open <folder>`, Open a
+  prediction folder…), and the Model menu lists their five models with ranking scores. Before,
+  only a `*_model_N.cif` opened, alone, and the folder was refused ("Could not find a rank 0 model").
+* **The prediction dialog follows its window to another prediction.** With the dialog open, showing
+  another prediction in the window (Model menu) kept the first one's MSA to reuse and its feature
+  IDs: Predict then failed, or reused the other prediction's MSA.
+* **Feature IDs are guessed for every chain of a heteromer.** AlphaPulldown's AlphaFold 3 names
+  (`Q15650_af3_input.json_and_A0MZ66_af3_input.json_model.cif`) gave the first protein's ID to all
+  chains, as did a name with only one recognisable ID; a single ID now applies to all chains only
+  when they are one protein.
+
 ## 1.6.0
 
 Easier to find your way around, after feedback from Tom Goddard (ChimeraX):

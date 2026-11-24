@@ -4,10 +4,10 @@ build-backend = "chimerax.bundle_builder.cx_pep517"
 
 [project]
 name = "ChimeraX-AlphaLens"
-version = "1.6.0"
+version = "1.6.1"
 license = { text = "MIT" }
 authors = [{ name = "Dima Molodenskiy" }, { name = "Kosinski Group, EMBL Hamburg" }]
-description = "Interactive PAE, contact-probability, model-contact, spread and agreement plots for AlphaFold2 and AlphaFold3 predictions, with experimental local prediction"
+description = "Interactive PAE, contact-probability, model-contact, spread and agreement plots for AlphaFold2 and AlphaFold3 predictions, with local prediction"
 dependencies = ["ChimeraX-Core~=1.10", "ChimeraX-AlphaFold~=1.0"]
 dynamic = ["classifiers", "requires-python"]
 
@@ -23,10 +23,10 @@ structure. Besides the PAE matrix with a pLDDT track, it shows:
 - how many AF3 seeds or AF2 models agree on each contact.
 
 Predicted contacts can be drawn on the structure and exported to CSV, and the plot is saved in
-ChimeraX sessions. AlphaLens opens output folders from AlphaFold2, AlphaPulldown, AlphaFold3 and
-ColabFold.
+ChimeraX sessions. AlphaLens opens output folders from AlphaFold2, AlphaPulldown, AlphaFold3, the
+AlphaFold Server and ColabFold.
 
-Local prediction (experimental, `alphalens predict`) runs AlphaFold2 or AlphaFold3 through
+Local prediction (`alphalens predict`) runs AlphaFold2 or AlphaFold3 through
 LocalFold by Sergey Ovchinnikov on Apple Silicon Macs and on Linux with an NVIDIA GPU, only when
 you start it. The first prediction downloads and compiles the LocalFold engine from GitHub and
 downloads the model parameters. UniProt IDs are looked up at UniProt, and the optional remote alignment search sends

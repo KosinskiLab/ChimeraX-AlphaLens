@@ -1,4 +1,4 @@
-"""Experimental local AF2/AF3 jobs. No ChimeraX imports or shell commands."""
+"""Local AF2/AF3 jobs. No ChimeraX imports or shell commands."""
 import hashlib
 import json
 import math
@@ -546,9 +546,21 @@ class PredictionJob:
             recycles = 10 if backend == 'af3' else 3
         if seed is None:
             seed = random_seed()
-        # features: dict(root=folder or URL, names=[feature name (UniProt ID) of each chain])
-        if features is not None and (not features.get('root') or len(features.get('names') or ()) != len(chains)
-                                     or not all(features['names'])):
+        # features: dict(root=folder or URL, names=[feature name (UniProt ID) of each chain]), or
+        # dict(msas=[dict(unpaired=A3M, paired=A3M or None), or dict(af3_json=AF3 data JSON,
+        # af3_chain=its chain ID), of each chain], origin=where they are from): the source's own
+        # alignments in AlphaFold 3's form; or dict(merged=a whole complex's AlphaFold 2 features
+        # (features.pkl), msa_crop=dict(source_query, columns), origin): its merged MSA, cropped
+        if features is not None and 'merged' in features:
+            crop = features.get('msa_crop') or {}
+            if not crop.get('source_query') or not crop.get('columns'):
+                raise ValueError('A merged MSA needs the source sequence and the columns to crop.')
+        elif features is not None and 'msas' in features:
+            if len(features['msas']) != len(chains) or not all(m.get('unpaired') or m.get('af3_json')
+                                                               for m in features['msas']):
+                raise ValueError('Give the unpaired A3M file of every chain.')
+        elif features is not None and (not features.get('root') or len(features.get('names') or ()) != len(chains)
+                                       or not all(features['names'])):
             raise ValueError('Give the feature folder or URL and a UniProt ID for every chain.')
         if sum(map(bool, (search, msa, features))) > 1:
             raise ValueError('Choose one alignment source: remote search, an existing merged MSA or '
@@ -650,9 +662,10 @@ class PredictionJob:
                                           if self.backend == 'af3' else f'LocalFold AF2 {self.model} int5 bundle (CC BY 4.0)'),
                                  source=self.source, options=self.options, args=args,
                                  timeout_seconds=self.timeout,
-                                 msa_crop=self.msa_crop,
+                                 msa_crop=self.msa_crop or (self.features or {}).get('msa_crop'),
                                  source_msa_sha256=digest(alignment) if alignment else None,
-                                 msa_source=(f'precomputed features from {self.features["root"]}' if self.features
+                                 msa_source=(self.features.get('origin') or f'precomputed features from {self.features["root"]}'
+                                             if self.features
                                              else ('supplied' if self.msa else 'cache') if alignment else self.api),
                                  input_sha256=digest(self.directory / 'input.json'))
             self.log = (self.directory / 'prediction.log').open('w')
@@ -681,16 +694,20 @@ class PredictionJob:
                 # Find, read (network mounts, downloads) and convert the features in the job's own
                 # process, which then becomes LocalFold: the window never waits on them.
                 spec = self.directory / 'features_spec.json'
-                write_json(spec, dict(directory=str(self.directory / 'features'), root=str(self.features['root']),
-                                      backend=self.backend, job=str(self.directory / 'input.json'),
+                ids = chain_ids(len(self.chains))
+                merged = (dict(merged=str(self.features['merged']), **self.features['msa_crop'])
+                          if 'merged' in self.features else {})
+                msas = self.features.get('msas') or [{}] * len(self.chains)
+                names = self.features.get('names') or [f'chain {c.get("source_chain", cid)}' for cid, c in zip(ids, self.chains)]
+                write_json(spec, dict(directory=str(self.directory / 'features'), root=str(self.features.get('root', '')),
+                                      backend=self.backend, job=str(self.directory / 'input.json'), **merged,
                                       chains=[dict(chain_id=cid, name=name, sequence=c['sequence'],
                                                    start_hint=int(c['residue_map'][0].get('number', 1)) - 1,
-                                                   segments=feature_segments(c))
-                                              for cid, name, c in zip(chain_ids(len(self.chains)),
-                                                                      self.features['names'], self.chains)]))
+                                                   segments=feature_segments(c), **msa)
+                                              for cid, name, c, msa in zip(ids, names, self.chains, msas)]))
                 launch = [str(chimerax_python()), '-B', str(Path(__file__).with_name('predict_features.py')),
                           str(spec), '--', *launch]
-                self.manifest['features_root'] = str(self.features['root'])
+                self.manifest['features_root'] = str(self.features.get('root') or self.features.get('origin'))
             self.process = subprocess.Popen(launch, stdout=self.log, stderr=subprocess.STDOUT,
                                             stdin=subprocess.DEVNULL, start_new_session=True, env=env)
             self.state = 'running'
@@ -762,6 +779,8 @@ class PredictionJob:
                 failed = [line for line in text.splitlines() if line.startswith(ERROR_PREFIX)]
                 self.error = (failed[-1][len('Error: '):] if self.features and failed
                               else f'LocalFold exited with status {code}. ' + text[-700:])
+                if self.features and failed and ('msas' in self.features or 'merged' in self.features):
+                    self.error = 'source alignments: ' + failed[-1][len(ERROR_PREFIX):]
             else:
                 self.result = validate_result(self.directory, self.chains)
                 self.manifest['numbering'] = renumber_outputs(self.directory, self.chains)
